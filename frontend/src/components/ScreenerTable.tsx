@@ -214,6 +214,7 @@ export function ScreenerTable({ data }: Props) {
           for (const [expIdx, exp] of r.expirations.entries()) {
             const key = `${r.symbol}-${exp.expiration}`
             const showAlts = strikeExpanded.has(key)
+            if (!exp.strikes?.length) continue
             const bestStrike = exp.strikes.find(s => s.is_best) ?? exp.strikes[0]
             const altStrikes = exp.strikes.filter(s => !s.is_best)
             const dteCellRows = 1 + (showAlts ? altStrikes.length : 0)
