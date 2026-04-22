@@ -302,7 +302,72 @@ body {
 .vol-support-level { display: flex; gap: 5px; align-items: baseline; font-size: 12px; }
 .vol-support-pct { font-size: 11px; color: #475569; }
 
-/* ── Loading ──────────────────────────────────────────────────────────────── */
+/* ── Ticker group rows ────────────────────────────────────────────────────── */
+/* Each ticker is a separate <tbody>; border-top separates groups */
+.ticker-group + .ticker-group > tr:first-child > td {
+  border-top: 2px solid #2d3148;
+}
+.group-earnings-warn > tr > td { background: #1e1700 !important; }
+
+/* First DTE row of a ticker gets slightly elevated background */
+.first-exp-row > td { background: #111827; }
+/* Subsequent DTE rows are indented visually with a dashed separator */
+.sub-exp-row > td {
+  background: #0f1117;
+  border-top: 1px dashed #1e2235;
+}
+
+/* Ticker symbol cell — vertically centered, prominent */
+.ticker-cell {
+  vertical-align: middle;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+/* DTE cell */
+.dte-cell { white-space: nowrap; }
+.dte-num { font-size: 14px; font-weight: 700; color: #e2e8f0; }
+
+/* Strike cell */
+.strike-cell { white-space: nowrap; }
+.strike-primary { display: block; }
+/* Alt strike row (BB Mid) — revealed by toggle */
+.strike-alt {
+  display: block;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed #334155;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+/* Alt data rows for delta / spread / ann.return / score */
+.alt-row {
+  display: block;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed #334155;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+/* Alt toggle button */
+.alt-toggle {
+  display: inline-block;
+  margin-top: 5px;
+  background: none;
+  border: 1px solid #2d3148;
+  border-radius: 3px;
+  color: #475569;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 1px 5px;
+  line-height: 1.5;
+  transition: all 0.1s;
+}
+.alt-toggle:hover { border-color: #4f5a8a; color: #94a3b8; }
+
+
 .loading-state {
   display: flex;
   flex-direction: column;

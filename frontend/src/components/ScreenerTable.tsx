@@ -15,10 +15,6 @@ function fmt2(n: number | null | undefined): string {
   if (n == null) return '—'
   return n.toFixed(2)
 }
-function fmt4(n: number | null | undefined): string {
-  if (n == null) return '—'
-  return n.toFixed(4)
-}
 function fmtAnn(n: number | null | undefined): string {
   if (n == null) return '—'
   return n.toFixed(1) + '%'
@@ -28,51 +24,22 @@ function fmtDelta(n: number | null | undefined): string {
   return n.toFixed(3)
 }
 
+// Ticker-level columns — for header rendering + sorting only.
+// Cells are rendered manually in the tbody via rowSpan.
 const COLUMNS = [
-  col.accessor('symbol', {
-    header: 'Symbol',
-    cell: info => <strong>{info.getValue()}</strong>,
-  }),
-  col.accessor('price', {
-    header: 'Price',
-    cell: info => fmt2(info.getValue()),
-  }),
+  col.accessor('symbol', { header: 'Symbol', cell: () => null }),
+  col.accessor('price', { header: 'Price', cell: () => null }),
   col.accessor('bb_lower', {
     header: () => (
       <span className="col-tip" title="Bollinger Bands (20, 2σ)  ·  Upper / Middle / Lower">
         BB Bands ⓘ
       </span>
     ),
-    cell: info => {
-      const row = info.row.original
-      return (
-        <span className="bb-bands">
-          <span className="bb-upper">{fmt2(row.bb_upper)}</span>
-          <span className="bb-middle">{fmt2(row.bb_middle)}</span>
-          <span className="bb-lower">{fmt2(row.bb_lower)}</span>
-        </span>
-      )
-    },
+    cell: () => null,
   }),
   col.accessor('vol_support_1', {
     header: 'Vol Support',
-    cell: info => {
-      const row = info.row.original
-      const levels = [row.vol_support_1, row.vol_support_2, row.vol_support_3].filter(v => v != null) as number[]
-      if (levels.length === 0) return <span className="dim">—</span>
-      return (
-        <span className="vol-support">
-          {levels.map((lvl, i) => {
-            const fallPct = ((lvl - row.price) / row.price) * 100
-            return (
-              <span key={i} className="vol-support-level">
-                {fmt2(lvl)}<span className="vol-support-pct">{fallPct.toFixed(1)}%</span>
-              </span>
-            )
-          })}
-        </span>
-      )
-    },
+    cell: () => null,
     enableSorting: false,
   }),
   col.accessor('sma_ratio', {
@@ -81,12 +48,7 @@ const COLUMNS = [
         SMA50/200 ⓘ
       </span>
     ),
-    cell: info => {
-      const v = info.getValue()
-      if (v == null || isNaN(v)) return <span className="dim">—</span>
-      const cls = v >= 1 ? 'positive' : 'negative'
-      return <span className={cls}>{v.toFixed(4)}</span>
-    },
+    cell: () => null,
   }),
   col.accessor('rsi', {
     header: () => (
@@ -94,12 +56,7 @@ const COLUMNS = [
         RSI(14) ⓘ
       </span>
     ),
-    cell: info => {
-      const v = info.getValue()
-      if (v == null || isNaN(v)) return <span className="dim">—</span>
-      const cls = v >= 70 ? 'rsi-high' : v <= 30 ? 'rsi-low' : 'rsi-ok'
-      return <span className={cls}>{v.toFixed(1)}</span>
-    },
+    cell: () => null,
   }),
   col.accessor('iv_rank', {
     header: () => (
@@ -107,186 +64,11 @@ const COLUMNS = [
         IV Rank ⓘ
       </span>
     ),
-    cell: info => {
-      const v = info.getValue()
-      const pct = info.row.original.iv_percentile
-      if (v == null) return <span className="dim">N/A</span>
-      const cls = v >= 50 ? 'badge badge-green' : v >= 30 ? 'badge badge-yellow' : 'badge badge-red'
-      return (
-        <span>
-          <span className={cls}>{v.toFixed(0)}</span><br />
-          <span className="expiry-date">P:{pct != null ? pct.toFixed(0) : '—'}</span>
-        </span>
-      )
-    },
+    cell: () => null,
   }),
-  col.accessor('earnings_date', {
-    header: 'Earnings',
-    cell: info => {
-      const row = info.row.original
-      if (!row.earnings_date) return <span className="dim">—</span>
-      return (
-        <span className={row.earnings_within_dte ? 'earnings-warn' : ''}>
-          {row.earnings_date}
-          {row.earnings_within_dte && ' ⚠'}
-        </span>
-      )
-    },
-  }),
-  col.display({
-    id: 'dte',
-    header: 'DTE',
-    cell: info => {
-      const exps = info.row.original.expirations
-      return (
-        <span className="exp-col">
-          {exps.map((exp, i) => (
-            <span key={i} className={i > 0 ? 'exp-block' : ''}>
-              {exp.dte}<br />
-              <span className="expiry-date">{exp.expiration}</span>
-              {exp.earnings_within_dte && <span className="earnings-warn"> ⚠</span>}
-            </span>
-          ))}
-        </span>
-      )
-    },
-  }),
-  col.display({
-    id: 'strike',
-    header: () => (
-      <span className="col-tip" title="Top: BB Low strike (≤ BB Lower)  ·  Bottom: BB Mid strike (≤ BB Middle)">
-        Strike ⓘ
-      </span>
-    ),
-    cell: info => {
-      const { price, expirations } = info.row.original
-      return (
-        <span className="exp-col">
-          {expirations.map((exp, i) => {
-            const fallPct = ((exp.strike - price) / price) * 100
-            const midFallPct = ((exp.strike_mid - price) / price) * 100
-            return (
-              <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
-                <span className={exp.strike_is_fallback ? 'fallback' : ''}>
-                  {fmt2(exp.strike)}{exp.strike_is_fallback && ' *'}
-                  <span className="strike-fall"> {fallPct.toFixed(1)}%</span>
-                </span>
-                <span className={`mid-row${exp.strike_mid_is_fallback ? ' fallback' : ''}`}>
-                  {fmt2(exp.strike_mid)}{exp.strike_mid_is_fallback && ' *'}
-                  <span className="strike-fall"> {midFallPct.toFixed(1)}%</span>
-                </span>
-              </span>
-            )
-          })}
-        </span>
-      )
-    },
-  }),
-  col.display({
-    id: 'delta',
-    header: 'Delta',
-    cell: info => {
-      const { expirations } = info.row.original
-      return (
-        <span className="exp-col">
-          {expirations.map((exp, i) => {
-            const inRange = exp.delta >= -0.30 && exp.delta <= -0.15
-            const midInRange = exp.delta_mid >= -0.30 && exp.delta_mid <= -0.15
-            return (
-              <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
-                <span className={inRange ? 'delta-ok' : 'delta-warn'}>{fmtDelta(exp.delta)}</span>
-                <span className={`mid-row ${midInRange ? 'delta-ok' : 'delta-warn'}`}>{fmtDelta(exp.delta_mid)}</span>
-              </span>
-            )
-          })}
-        </span>
-      )
-    },
-  }),
-  col.display({
-    id: 'bid_ask_spread_pct',
-    header: () => (
-      <span className="col-tip" title="(Ask − Bid) / Mid × 100  ·  Lower = tighter market  ·  >10% = illiquid">
-        Spread% ⓘ
-      </span>
-    ),
-    cell: info => {
-      const { expirations } = info.row.original
-      const fmtSpread = (v: number | null) => {
-        if (v == null) return <span>—</span>
-        const cls = v > 10 ? 'spread-wide' : v > 5 ? 'spread-ok' : 'spread-tight'
-        return <span className={cls}>{v.toFixed(1)}%</span>
-      }
-      return (
-        <span className="exp-col">
-          {expirations.map((exp, i) => (
-            <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
-              <span>{fmtSpread(exp.bid_ask_spread_pct)}</span>
-              <span className="mid-row">{fmtSpread(exp.bid_ask_spread_pct_mid)}</span>
-            </span>
-          ))}
-        </span>
-      )
-    },
-  }),
-  col.display({
-    id: 'premium',
-    header: 'Premium',
-    cell: info => {
-      const { expirations } = info.row.original
-      return (
-        <span className="exp-col">
-          {expirations.map((exp, i) => (
-            <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
-              <span>{fmt2(exp.premium)}</span>
-              <span className="mid-row">{fmt2(exp.premium_mid)}</span>
-            </span>
-          ))}
-        </span>
-      )
-    },
-  }),
-  col.display({
-    id: 'annualized_return',
-    header: 'Ann. Return',
-    cell: info => {
-      const { expirations } = info.row.original
-      return (
-        <span className="exp-col">
-          {expirations.map((exp, i) => (
-            <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
-              <span>{fmtAnn(exp.annualized_return)}</span>
-              <span className="mid-row">{fmtAnn(exp.annualized_return_mid)}</span>
-            </span>
-          ))}
-        </span>
-      )
-    },
-  }),
-  col.accessor('best_score', {
-    header: () => (
-      <span className="col-tip" title="CSP score 0-100: IV Rank(25) + Ann.Return(20) + SMA trend(20) + RSI zone(15) + Delta(10) + Spread%(10) − Earnings(−15)">
-        Score ⓘ
-      </span>
-    ),
-    cell: info => {
-      const { expirations } = info.row.original
-      const scoreFmt = (v: number) => {
-        const cls = v >= 70 ? 'score-good' : v >= 45 ? 'score-caution' : 'score-bad'
-        return <span className={cls}>{v.toFixed(0)}</span>
-      }
-      return (
-        <span className="exp-col">
-          {expirations.map((exp, i) => (
-            <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
-              <span>{scoreFmt(exp.csp_score)}</span>
-              <span className="mid-row">{scoreFmt(exp.csp_score_mid)}</span>
-            </span>
-          ))}
-        </span>
-      )
-    },
-  }),
+  col.accessor('earnings_date', { header: 'Earnings', cell: () => null }),
+  // Hidden sort key — excluded from visible headers via columnVisibility
+  col.accessor('best_score', { header: () => null, cell: () => null }),
 ]
 
 function groupResults(results: ScreenerResult[]): GroupedScreenerResult[] {
@@ -351,20 +133,40 @@ interface Props {
 
 export function ScreenerTable({ data }: Props) {
   const groupedData = useMemo(() => groupResults(data), [data])
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: 'best_score', desc: true },
-  ])
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'best_score', desc: true }])
+  const [altExpanded, setAltExpanded] = useState<Set<string>>(new Set())
+
+  const toggleAlt = (key: string) => {
+    setAltExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
 
   const table = useReactTable({
     data: groupedData,
     columns: COLUMNS,
-    state: { sorting },
+    state: { sorting, columnVisibility: { best_score: false } },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   })
 
   if (groupedData.length === 0) return null
+
+  const scoreCol = table.getColumn('best_score')
+  const scoreSorted = scoreCol?.getIsSorted()
+
+  const fmtSpread = (v: number | null) => {
+    if (v == null) return <span>—</span>
+    const cls = v > 10 ? 'spread-wide' : v > 5 ? 'spread-ok' : 'spread-tight'
+    return <span className={cls}>{v.toFixed(1)}%</span>
+  }
+  const scoreFmt = (v: number) => {
+    const cls = v >= 70 ? 'score-good' : v >= 45 ? 'score-caution' : 'score-bad'
+    return <span className={cls}>{v.toFixed(0)}</span>
+  }
 
   return (
     <div className="table-wrapper">
@@ -383,26 +185,173 @@ export function ScreenerTable({ data }: Props) {
                   {header.column.getIsSorted() === 'desc' && ' ↓'}
                 </th>
               ))}
+              {/* DTE-section headers */}
+              <th>DTE</th>
+              <th>
+                <span className="col-tip" title="BB Low strike (≤ BB Lower)  ·  ▼ alt reveals BB Mid strike (≤ BB Middle)">
+                  Strike ⓘ
+                </span>
+              </th>
+              <th>Delta</th>
+              <th>
+                <span className="col-tip" title="(Ask − Bid) / Mid × 100  ·  Lower = tighter market  ·  >10% = illiquid">
+                  Spread% ⓘ
+                </span>
+              </th>
+              <th>Ann. Return</th>
+              <th
+                className="sortable"
+                onClick={() => scoreCol?.toggleSorting(scoreSorted === 'asc')}
+              >
+                <span className="col-tip" title="CSP score 0-100: IV Rank(25) + Ann.Return(20) + SMA trend(20) + RSI zone(15) + Delta(10) + Spread%(10) − Earnings(−15)">
+                  Score ⓘ
+                </span>
+                {scoreSorted === 'asc' && ' ↑'}
+                {scoreSorted === 'desc' && ' ↓'}
+              </th>
             </tr>
           ))}
         </thead>
-        <tbody>
-          {table.getRowModel().rows.map(row => {
-            const r = row.original
-            const rowClass = r.earnings_within_dte
-              ? 'row-earnings-warn'
-              : ''
-            return (
-              <tr key={row.id} className={rowClass}>
-                {row.getVisibleCells().map(cell => (
-                  <td key={cell.id}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            )
-          })}
-        </tbody>
+
+        {table.getRowModel().rows.map(row => {
+          const r = row.original
+          const nExp = r.expirations.length
+          return (
+            <tbody
+              key={r.symbol}
+              className={`ticker-group${r.earnings_within_dte ? ' group-earnings-warn' : ''}`}
+            >
+              {r.expirations.map((exp, expIdx) => {
+                const altKey = `${r.symbol}-${exp.expiration}`
+                const showAlt = altExpanded.has(altKey)
+                const isFirst = expIdx === 0
+                return (
+                  <tr key={expIdx} className={isFirst ? 'first-exp-row' : 'sub-exp-row'}>
+
+                    {/* ── Ticker-level cells (rowSpan covers all DTE rows) ── */}
+                    {isFirst && <>
+                      <td rowSpan={nExp} className="ticker-cell">
+                        <strong>{r.symbol}</strong>
+                      </td>
+                      <td rowSpan={nExp}>{fmt2(r.price)}</td>
+                      <td rowSpan={nExp}>
+                        <span className="bb-bands">
+                          <span className="bb-upper">{fmt2(r.bb_upper)}</span>
+                          <span className="bb-middle">{fmt2(r.bb_middle)}</span>
+                          <span className="bb-lower">{fmt2(r.bb_lower)}</span>
+                        </span>
+                      </td>
+                      <td rowSpan={nExp}>
+                        {(() => {
+                          const levels = [r.vol_support_1, r.vol_support_2, r.vol_support_3]
+                            .filter((v): v is number => v != null)
+                          if (levels.length === 0) return <span className="dim">—</span>
+                          return (
+                            <span className="vol-support">
+                              {levels.map((lvl, i) => (
+                                <span key={i} className="vol-support-level">
+                                  {fmt2(lvl)}
+                                  <span className="vol-support-pct"> {((lvl - r.price) / r.price * 100).toFixed(1)}%</span>
+                                </span>
+                              ))}
+                            </span>
+                          )
+                        })()}
+                      </td>
+                      <td rowSpan={nExp}>
+                        {r.sma_ratio == null || isNaN(r.sma_ratio)
+                          ? <span className="dim">—</span>
+                          : <span className={r.sma_ratio >= 1 ? 'positive' : 'negative'}>{r.sma_ratio.toFixed(4)}</span>
+                        }
+                      </td>
+                      <td rowSpan={nExp}>
+                        {r.rsi == null || isNaN(r.rsi)
+                          ? <span className="dim">—</span>
+                          : <span className={r.rsi >= 70 ? 'rsi-high' : r.rsi <= 30 ? 'rsi-low' : 'rsi-ok'}>{r.rsi.toFixed(1)}</span>
+                        }
+                      </td>
+                      <td rowSpan={nExp}>
+                        {r.iv_rank == null
+                          ? <span className="dim">N/A</span>
+                          : <>
+                              <span className={r.iv_rank >= 50 ? 'badge badge-green' : r.iv_rank >= 30 ? 'badge badge-yellow' : 'badge badge-red'}>
+                                {r.iv_rank.toFixed(0)}
+                              </span><br />
+                              <span className="expiry-date">P:{r.iv_percentile != null ? r.iv_percentile.toFixed(0) : '—'}</span>
+                            </>
+                        }
+                      </td>
+                      <td rowSpan={nExp}>
+                        {r.earnings_date
+                          ? <span className={r.earnings_within_dte ? 'earnings-warn' : ''}>{r.earnings_date}{r.earnings_within_dte && ' ⚠'}</span>
+                          : <span className="dim">—</span>
+                        }
+                      </td>
+                    </>}
+
+                    {/* ── DTE-level cells (one row per expiration) ── */}
+                    <td className="dte-cell">
+                      <span className="dte-num">{exp.dte}</span><br />
+                      <span className="expiry-date">{exp.expiration}</span>
+                      {exp.earnings_within_dte && <span className="earnings-warn"> ⚠</span>}
+                    </td>
+
+                    <td className="strike-cell">
+                      <span className="strike-primary">
+                        <span className={exp.strike_is_fallback ? 'fallback' : ''}>
+                          {fmt2(exp.strike)}{exp.strike_is_fallback && ' *'}
+                        </span>
+                        <span className="strike-fall"> {((exp.strike - r.price) / r.price * 100).toFixed(1)}%</span>
+                      </span>
+                      {showAlt && (
+                        <span className="strike-alt">
+                          <span className={exp.strike_mid_is_fallback ? 'fallback' : ''}>
+                            {fmt2(exp.strike_mid)}{exp.strike_mid_is_fallback && ' *'}
+                          </span>
+                          <span className="strike-fall"> {((exp.strike_mid - r.price) / r.price * 100).toFixed(1)}%</span>
+                        </span>
+                      )}
+                      <button
+                        className="alt-toggle"
+                        onClick={() => toggleAlt(altKey)}
+                        title={showAlt ? 'Hide BB Mid strike' : 'Show BB Mid alt strike (≤ BB Middle)'}
+                      >
+                        {showAlt ? '▲ hide' : '▼ alt'}
+                      </button>
+                    </td>
+
+                    <td>
+                      <span className={exp.delta >= -0.30 && exp.delta <= -0.15 ? 'delta-ok' : 'delta-warn'}>
+                        {fmtDelta(exp.delta)}
+                      </span>
+                      {showAlt && (
+                        <span className={`alt-row ${exp.delta_mid >= -0.30 && exp.delta_mid <= -0.15 ? 'delta-ok' : 'delta-warn'}`}>
+                          {fmtDelta(exp.delta_mid)}
+                        </span>
+                      )}
+                    </td>
+
+                    <td>
+                      {fmtSpread(exp.bid_ask_spread_pct)}
+                      {showAlt && <span className="alt-row">{fmtSpread(exp.bid_ask_spread_pct_mid)}</span>}
+                    </td>
+
+                    <td>
+                      {fmtAnn(exp.annualized_return)}
+                      {showAlt && <span className="alt-row">{fmtAnn(exp.annualized_return_mid)}</span>}
+                    </td>
+
+                    <td>
+                      {scoreFmt(exp.csp_score)}
+                      {showAlt && <span className="alt-row">{scoreFmt(exp.csp_score_mid)}</span>}
+                    </td>
+
+                  </tr>
+                )
+              })}
+            </tbody>
+          )
+        })}
       </table>
       <p className="table-note">
         * Strike is a fallback (no put ≤ BB Lower). IV Rank/Percentile = HV-based proxy (252-day window). P: = IV Percentile.
