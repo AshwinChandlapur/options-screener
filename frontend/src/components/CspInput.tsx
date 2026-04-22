@@ -16,7 +16,7 @@ const SCORE_LEGEND = [
   { factor: 'RSI(14)',          weight: 10,  detail: '42–62=10 · 35–42 or 62–70 linear→6 · <35 or >70=2.',
     formula: 'Wilder-smoothed RSI(14)\n  delta = Close.diff()\n  avg_gain = EWM(alpha=1/14) of gains\n  avg_loss = EWM(alpha=1/14) of losses\n  RSI = 100 − 100 / (1 + avg_gain / avg_loss)' },
   { factor: 'Chain Median OI', weight: 15,  detail: '≥2000=15 · ≥800→11 · ≥300→7 · ≥100→3 · <100=0.',
-    formula: 'chain_median_oi = median(puts_df["openInterest"])\n  Stock-level signal — median OI across all put strikes\n  for this expiration. Measures chain liquidity, not per-strike.' },
+    formula: 'Filters candidates to 0.1 < |delta| < 0.4 first,\n  then takes median OI across those strikes.\n  chain_median_oi = np.median([oi for (strike, delta, ..., oi, ...) in candidates\n                               if 0.1 < abs(delta) < 0.4])\n  Stock-level signal — reflects liquidity in the CSP-relevant\n  delta band only, ignoring deep ITM and far OTM strikes.' },
   { factor: 'Earnings in DTE', weight: -15, detail: 'Hard penalty if earnings fall within the expiry window.',
     formula: 'earnings_within_dte = True if:\n  0 ≤ (earnings_date − today).days ≤ DTE\n  Source: yfinance calendarEvents.earnings' },
   { factor: '— STRIKE SCORE (×0.6) —', weight: null, detail: '', formula: '' },
