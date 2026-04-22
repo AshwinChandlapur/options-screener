@@ -124,21 +124,35 @@ def process_symbol(
 
                 # 4. Compute metrics for all OTM liquid strikes
                 T = dte / 365.0
+                _IDEAL_DELTA = -0.225  # midpoint of -0.10 to -0.35 target
                 all_strikes_sorted = sorted(puts_df["strike"].unique(), reverse=True)  # ATM-first
                 otm_strikes = [s for s in all_strikes_sorted if s < current_price * 1.02]
 
-                strike_results: list[StrikeResult] = []
+                # Pre-compute (strike, delta, premium) for every OTM liquid strike
+                candidates: list[tuple[float, float, float]] = []  # (strike, delta, premium)
                 for sp in otm_strikes:
                     try:
                         prem = get_premium(puts_df, sp)
                         if prem <= 0:
-                            continue  # no tradeable premium
+                            continue
                         sig = get_implied_volatility(puts_df, sp)
                         if math.isnan(sig) or sig <= 0:
                             sig = hv_sigma
                         d = black_scholes_put_delta(current_price, sp, rf_rate, T, sig)
-                        if not (-0.35 <= d <= -0.10):
-                            continue  # keep only 10-35 delta range
+                        candidates.append((sp, d, prem))
+                    except Exception:
+                        continue
+
+                # Primary filter: -0.35 to -0.10 delta
+                in_range = [(sp, d, prem) for sp, d, prem in candidates if -0.35 <= d <= -0.10]
+
+                # Fallback: if nothing in range, take up to 5 strikes nearest to ideal delta
+                if not in_range and candidates:
+                    in_range = sorted(candidates, key=lambda x: abs(x[1] - _IDEAL_DELTA))[:5]
+
+                strike_results: list[StrikeResult] = []
+                for sp, d, prem in in_range:
+                    try:
                         spread_raw = get_bid_ask_spread_pct(puts_df, sp)
                         spread_s: Optional[float] = None if math.isnan(spread_raw) else spread_raw
                         collateral_s = round(sp * 100.0, 2)
