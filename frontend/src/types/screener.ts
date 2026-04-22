@@ -90,4 +90,5 @@ export interface FilterState {
   maxDelta: number
   maxSpreadPct: number          // 0 = no filter
   excludeEarningsWithinDte: boolean
+  maxCollateral: number         // 0 = no filter; strike × 100 per contract
 }

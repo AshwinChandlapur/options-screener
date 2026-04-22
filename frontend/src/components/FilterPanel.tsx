@@ -65,6 +65,13 @@ export function FilterPanel({ filters, onChange }: Props) {
           onChange={e => set('excludeEarningsWithinDte', e.target.checked)} />
         Exclude earnings in DTE
       </label>
+
+      <label className="filter-item">
+        Collateral ≤ $
+        <input type="number" className="filter-number filter-number-wide" value={filters.maxCollateral}
+          min={0} step={1000} onChange={e => set('maxCollateral', Number(e.target.value))} />
+        <span className="filter-hint">(0 = off; strike × 100)</span>
+      </label>
     </div>
   )
 }

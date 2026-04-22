@@ -191,6 +191,7 @@ body {
   padding: 3px 6px;
   font-size: 13px;
 }
+.filter-number-wide { width: 88px; }
 .filter-toggle { cursor: pointer; }
 .filter-toggle input { cursor: pointer; accent-color: #4f6ef7; }
 .filter-hint { font-size: 11px; color: #475569; }

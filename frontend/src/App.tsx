@@ -24,6 +24,7 @@ const DEFAULT_FILTERS: FilterState = {
   maxDelta: 0.0,
   maxSpreadPct: 0,
   excludeEarningsWithinDte: false,
+  maxCollateral: 0,
 }
 
 const DEFAULT_DITM_FILTERS: DitmFilterState = {
@@ -81,6 +82,7 @@ function applyFilters(results: ScreenerResult[], filters: FilterState): Screener
     if (best && (best.delta < filters.minDelta || best.delta > filters.maxDelta)) return false
     if (filters.maxSpreadPct > 0 && (best == null || best.bid_ask_spread_pct == null || best.bid_ask_spread_pct > filters.maxSpreadPct)) return false
     if (filters.excludeEarningsWithinDte && r.earnings_within_dte) return false
+    if (filters.maxCollateral > 0 && best != null && best.strike * 100 > filters.maxCollateral) return false
     return true
   })
 }
