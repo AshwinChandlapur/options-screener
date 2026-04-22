@@ -155,18 +155,21 @@ export function ScreenerTable({ data }: Props) {
     const cls = v > 10 ? 'spread-wide' : v > 5 ? 'spread-ok' : 'spread-tight'
     return <span className={cls}>{v.toFixed(1)}%</span>
   }
-  const scoreFmt = (env: number, strike: number, final: number, highlight = false) => {
+  const scoreFmt = (env: number | undefined, strike: number | undefined, final: number | undefined, highlight = false) => {
+    if (final == null || isNaN(final)) return <span className="dim">—</span>
     const cls = final >= 70 ? 'score-good' : final >= 45 ? 'score-caution' : 'score-bad'
     return (
       <span
         className={cls}
         style={highlight ? { fontWeight: 800, fontSize: '15px' } : {}}
-        title={`Env: ${env.toFixed(0)}  ·  Strike: ${strike.toFixed(0)}  ·  Final: ${final.toFixed(0)}`}
+        title={`Env: ${env?.toFixed(0) ?? '—'}  ·  Strike: ${strike?.toFixed(0) ?? '—'}  ·  Final: ${final.toFixed(0)}`}
       >
         {final.toFixed(0)}
-        <span style={{ fontSize: '10px', opacity: 0.7, display: 'block' }}>
-          E{env.toFixed(0)} S{strike.toFixed(0)}
-        </span>
+        {env != null && strike != null && (
+          <span style={{ fontSize: '10px', opacity: 0.7, display: 'block' }}>
+            E{env.toFixed(0)} S{strike.toFixed(0)}
+          </span>
+        )}
       </span>
     )
   }
