@@ -282,6 +282,11 @@ body {
 .score-factor-detail  { font-size: 12px; color: #64748b; }
 .expiry-date { font-size: 11px; color: #64748b; }
 
+/* ── Dual-row cells (BB Low top / BB Mid bottom) ─────────────────────────── */
+.dual-cell { display: flex; flex-direction: column; gap: 3px; }
+.dual-cell > span:first-child { font-size: 13px; }
+.dual-cell > span.dim { font-size: 12px; opacity: 0.55; }
+
 /* ── Bollinger Bands stacked column ─────────────────────────────────────── */
 .bb-bands   { display: flex; flex-direction: column; gap: 1px; font-size: 12px; line-height: 1.4; }
 .bb-upper   { color: #f87171; }

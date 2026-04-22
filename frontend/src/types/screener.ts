@@ -20,12 +20,14 @@ export interface ScreenerResult {
   delta: number
   delta_mid: number
   bid_ask_spread_pct: number | null
+  bid_ask_spread_pct_mid: number | null
   csp_score: number
   dte: number
   expiration: string
   premium: number
   premium_mid: number
   collateral: number
+  collateral_mid: number
   return_pct: number
   annualized_return: number
   return_pct_mid: number

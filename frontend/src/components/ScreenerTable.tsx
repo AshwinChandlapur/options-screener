@@ -74,6 +74,27 @@ const COLUMNS = [
       )
     },
   }),
+  col.accessor('vol_support_1', {
+    header: 'Vol Support',
+    cell: info => {
+      const row = info.row.original
+      const levels = [row.vol_support_1, row.vol_support_2, row.vol_support_3].filter(v => v != null) as number[]
+      if (levels.length === 0) return <span className="dim">—</span>
+      return (
+        <span className="vol-support">
+          {levels.map((lvl, i) => {
+            const fallPct = ((lvl - row.price) / row.price) * 100
+            return (
+              <span key={i} className="vol-support-level">
+                {fmt2(lvl)}<span className="vol-support-pct">{fallPct.toFixed(1)}%</span>
+              </span>
+            )
+          })}
+        </span>
+      )
+    },
+    enableSorting: false,
+  }),
   col.accessor('sma_ratio', {
     header: () => (
       <span className="col-tip" title="SMA50 / SMA200  ·  >1.0 = bullish (50 above 200)  ·  <1.0 = bearish">
@@ -134,7 +155,7 @@ const COLUMNS = [
   }),
   col.accessor('strike', {
     header: () => (
-      <span className="col-tip" title="Top: strike ≤ BB Lower  ·  Bottom (dim): strike ≤ BB Middle">
+      <span className="col-tip" title="Top: BB Low strike (≤ BB Lower)  ·  Bottom: BB Mid strike (≤ BB Middle)">
         Strike ⓘ
       </span>
     ),
@@ -143,41 +164,18 @@ const COLUMNS = [
       const fallPct = ((row.strike - row.price) / row.price) * 100
       const midFallPct = ((row.strike_mid - row.price) / row.price) * 100
       return (
-        <span>
+        <span className="dual-cell">
           <span className={row.strike_is_fallback ? 'fallback' : ''}>
             {fmt2(row.strike)}{row.strike_is_fallback && ' *'}
-            <br />
-            <span className="strike-fall">{fallPct.toFixed(1)}%</span>
+            <span className="strike-fall"> {fallPct.toFixed(1)}%</span>
           </span>
-          <br />
-          <span className={`dim${row.strike_mid_is_fallback ? ' fallback' : ''}`} title="BB Middle strike">
+          <span className={`dim${row.strike_mid_is_fallback ? ' fallback' : ''}`}>
             {fmt2(row.strike_mid)}{row.strike_mid_is_fallback && ' *'}
             <span className="strike-fall"> {midFallPct.toFixed(1)}%</span>
           </span>
         </span>
       )
     },
-  }),
-  col.accessor('vol_support_1', {
-    header: 'Vol Support',
-    cell: info => {
-      const row = info.row.original
-      const levels = [row.vol_support_1, row.vol_support_2, row.vol_support_3].filter(v => v != null) as number[]
-      if (levels.length === 0) return <span className="dim">—</span>
-      return (
-        <span className="vol-support">
-          {levels.map((lvl, i) => {
-            const fallPct = ((lvl - row.price) / row.price) * 100
-            return (
-              <span key={i} className="vol-support-level">
-                {fmt2(lvl)}<span className="vol-support-pct">{fallPct.toFixed(1)}%</span>
-              </span>
-            )
-          })}
-        </span>
-      )
-    },
-    enableSorting: false,
   }),
   col.accessor('delta', {
     header: 'Delta',
@@ -186,9 +184,8 @@ const COLUMNS = [
       const inRange = row.delta >= -0.30 && row.delta <= -0.15
       const midInRange = row.delta_mid >= -0.30 && row.delta_mid <= -0.15
       return (
-        <span>
+        <span className="dual-cell">
           <span className={inRange ? 'delta-ok' : 'delta-warn'}>{fmtDelta(row.delta)}</span>
-          <br />
           <span className={`dim ${midInRange ? 'delta-ok' : 'delta-warn'}`}>{fmtDelta(row.delta_mid)}</span>
         </span>
       )
@@ -201,10 +198,18 @@ const COLUMNS = [
       </span>
     ),
     cell: info => {
-      const v = info.getValue()
-      if (v == null) return <span className="dim">—</span>
-      const cls = v > 10 ? 'spread-wide' : v > 5 ? 'spread-ok' : 'spread-tight'
-      return <span className={cls}>{v.toFixed(1)}%</span>
+      const row = info.row.original
+      const fmtSpread = (v: number | null) => {
+        if (v == null) return <span className="dim">—</span>
+        const cls = v > 10 ? 'spread-wide' : v > 5 ? 'spread-ok' : 'spread-tight'
+        return <span className={cls}>{v.toFixed(1)}%</span>
+      }
+      return (
+        <span className="dual-cell">
+          {fmtSpread(row.bid_ask_spread_pct)}
+          <span className="dim">{fmtSpread(row.bid_ask_spread_pct_mid)}</span>
+        </span>
+      )
     },
   }),
   col.accessor('dte', {
@@ -212,9 +217,9 @@ const COLUMNS = [
     cell: info => {
       const row = info.row.original
       return (
-        <span>
-          {info.getValue()}<br />
-          <span className="expiry-date">{row.expiration}</span>
+        <span className="dual-cell">
+          <span>{info.getValue()}</span>
+          <span className="expiry-date dim">{row.expiration}</span>
         </span>
       )
     },
@@ -224,8 +229,8 @@ const COLUMNS = [
     cell: info => {
       const row = info.row.original
       return (
-        <span>
-          {fmt2(row.premium)}<br />
+        <span className="dual-cell">
+          <span>{fmt2(row.premium)}</span>
           <span className="dim">{fmt2(row.premium_mid)}</span>
         </span>
       )
@@ -233,19 +238,35 @@ const COLUMNS = [
   }),
   col.accessor('collateral', {
     header: 'Collateral',
-    cell: info => fmtMoney(info.getValue()),
+    cell: info => {
+      const row = info.row.original
+      return (
+        <span className="dual-cell">
+          <span>{fmtMoney(row.collateral)}</span>
+          <span className="dim">{fmtMoney(row.collateral_mid)}</span>
+        </span>
+      )
+    },
   }),
   col.accessor('return_pct', {
     header: 'Return %',
-    cell: info => fmtPct(info.getValue()),
+    cell: info => {
+      const row = info.row.original
+      return (
+        <span className="dual-cell">
+          <span>{fmtPct(row.return_pct)}</span>
+          <span className="dim">{fmtPct(row.return_pct_mid)}</span>
+        </span>
+      )
+    },
   }),
   col.accessor('annualized_return', {
     header: 'Ann. Return',
     cell: info => {
       const row = info.row.original
       return (
-        <span>
-          {fmtAnn(row.annualized_return)}<br />
+        <span className="dual-cell">
+          <span>{fmtAnn(row.annualized_return)}</span>
           <span className="dim">{fmtAnn(row.annualized_return_mid)}</span>
         </span>
       )

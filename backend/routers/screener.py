@@ -87,12 +87,14 @@ class ScreenerResultOut(BaseModel):
     delta: float
     delta_mid: float
     bid_ask_spread_pct: Optional[float]
+    bid_ask_spread_pct_mid: Optional[float]
     csp_score: float
     dte: int
     expiration: str
     premium: float
     premium_mid: float
     collateral: float
+    collateral_mid: float
     return_pct: float
     annualized_return: float
     return_pct_mid: float
@@ -221,12 +223,14 @@ def _to_out(r: ScreenerResult) -> ScreenerResultOut:
         delta=r.delta,
         delta_mid=r.delta_mid,
         bid_ask_spread_pct=r.bid_ask_spread_pct,
+        bid_ask_spread_pct_mid=r.bid_ask_spread_pct_mid,
         csp_score=r.csp_score,
         dte=r.dte,
         expiration=r.expiration,
         premium=r.premium,
         premium_mid=r.premium_mid,
         collateral=r.collateral,
+        collateral_mid=r.collateral_mid,
         return_pct=r.return_pct,
         annualized_return=r.annualized_return,
         return_pct_mid=r.return_pct_mid,

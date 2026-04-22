@@ -53,13 +53,15 @@ class ScreenerResult:
     vol_support_3: Optional[float]
     delta: float
     delta_mid: float
-    bid_ask_spread_pct: Optional[float]  # (ask-bid)/mid * 100
-    csp_score: float                     # composite quality score 0-100
+    bid_ask_spread_pct: Optional[float]      # (ask-bid)/mid * 100 for BB Lower strike
+    bid_ask_spread_pct_mid: Optional[float]  # (ask-bid)/mid * 100 for BB Middle strike
+    csp_score: float                         # composite quality score 0-100
     dte: int
     expiration: str
     premium: float
     premium_mid: float
     collateral: float
+    collateral_mid: float
     return_pct: float
     annualized_return: float
     return_pct_mid: float
@@ -127,6 +129,8 @@ def process_symbol(
         # 5a. Bid-ask spread quality
         spread_pct = get_bid_ask_spread_pct(puts_df, strike)
         bid_ask_spread_pct: Optional[float] = None if math.isnan(spread_pct) else spread_pct
+        spread_pct_mid = get_bid_ask_spread_pct(puts_df, strike_mid)
+        bid_ask_spread_pct_mid: Optional[float] = None if math.isnan(spread_pct_mid) else spread_pct_mid
 
         # 6. Implied volatility for delta calculation
         sigma = get_implied_volatility(puts_df, strike)
@@ -187,12 +191,14 @@ def process_symbol(
             delta=delta,
             delta_mid=delta_mid,
             bid_ask_spread_pct=bid_ask_spread_pct,
+            bid_ask_spread_pct_mid=bid_ask_spread_pct_mid,
             csp_score=csp_score,
             dte=dte,
             expiration=expiration,
             premium=round(premium, 4),
             premium_mid=round(premium_mid, 4),
             collateral=collateral,
+            collateral_mid=collateral_mid,
             return_pct=return_pct,
             annualized_return=annualized_return,
             return_pct_mid=return_pct_mid,
