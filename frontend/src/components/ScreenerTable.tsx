@@ -19,10 +19,6 @@ function fmt4(n: number | null | undefined): string {
   if (n == null) return '—'
   return n.toFixed(4)
 }
-function fmtPct(n: number | null | undefined): string {
-  if (n == null) return '—'
-  return n.toFixed(2) + '%'
-}
 function fmtAnn(n: number | null | undefined): string {
   if (n == null) return '—'
   return n.toFixed(1) + '%'
@@ -30,10 +26,6 @@ function fmtAnn(n: number | null | undefined): string {
 function fmtDelta(n: number | null | undefined): string {
   if (n == null) return '—'
   return n.toFixed(3)
-}
-function fmtMoney(n: number | null | undefined): string {
-  if (n == null) return '—'
-  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 }
 
 const COLUMNS = [
@@ -248,40 +240,6 @@ const COLUMNS = [
             <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
               <span>{fmt2(exp.premium)}</span>
               <span className="mid-row">{fmt2(exp.premium_mid)}</span>
-            </span>
-          ))}
-        </span>
-      )
-    },
-  }),
-  col.display({
-    id: 'collateral',
-    header: 'Collateral',
-    cell: info => {
-      const { expirations } = info.row.original
-      return (
-        <span className="exp-col">
-          {expirations.map((exp, i) => (
-            <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
-              <span>{fmtMoney(exp.collateral)}</span>
-              <span className="mid-row">{fmtMoney(exp.collateral_mid)}</span>
-            </span>
-          ))}
-        </span>
-      )
-    },
-  }),
-  col.display({
-    id: 'return_pct',
-    header: 'Return %',
-    cell: info => {
-      const { expirations } = info.row.original
-      return (
-        <span className="exp-col">
-          {expirations.map((exp, i) => (
-            <span key={i} className={`dual-cell${i > 0 ? ' exp-block' : ''}`}>
-              <span>{fmtPct(exp.return_pct)}</span>
-              <span className="mid-row">{fmtPct(exp.return_pct_mid)}</span>
             </span>
           ))}
         </span>
