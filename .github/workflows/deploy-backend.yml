@@ -32,12 +32,10 @@ jobs:
 
       - name: Deploy zip to App Service
         run: |
-          az webapp deploy \
+          az webapp deployment source config-zip \
             --name optionsapi \
             --resource-group options-rg \
-            --src-path backend.zip \
-            --type zip \
-            --timeout 600
+            --src backend.zip
 
       - name: Set startup command
         run: |
