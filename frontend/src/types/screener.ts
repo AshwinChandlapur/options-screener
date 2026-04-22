@@ -4,6 +4,8 @@ export interface StrikeInfo {
   premium: number
   annualized_return: number
   bid_ask_spread_pct: number | null
+  env_score: number
+  strike_score: number
   csp_score: number
   is_best: boolean
   iv_fallback: boolean

@@ -327,154 +327,213 @@ def compute_momentum_score(
     return round(score, 1)
 
 
-def compute_csp_score(
+def compute_env_score(
     *,
     iv_rank: float | None,
     iv_hv_ratio: float | None,
-    annualized_return: float,
-    premium: float,
-    current_price: float,
-    strike: float,
-    dte: int,
-    iv_used: float,
     price_above_sma50: bool,
     sma50_above_sma200: bool,
     dist_from_52w_high_pct: float,
     rsi: float,
-    delta: float,
-    bid_ask_spread_pct: float | None,
-    open_interest: int,
-    market_open: bool,
-    volume: int,
+    chain_median_oi: float,
     earnings_within_dte: bool,
 ) -> float:
     """
-    Composite CSP score 0-100 (plus -15 earnings penalty).
+    Environment Score 0–100 (+penalty).
+    Measures whether *now* is a good time to sell puts on this stock.
 
-    Volatility (25):  IV Rank (15) + IV/HV Ratio (10)
-    Return (15):      Ann. Return/day (10) + Premium Efficiency (5)
-    Trend (20):       SMA Alignment (10) + Distance from 52W High (10)
-    Risk Pos. (20):   Delta bell-curve (15) + Expected Move (5)
-    Momentum (8):     RSI (8)
-    Execution (12):   Spread % (8) + Open Interest / Volume (4)
-    Earnings in DTE: -15 pts penalty
+    Volatility Edge (45):  IV Rank (25) + IV/HV Ratio (20)
+    Trend Structure (30):  SMA Alignment (15) + 52W High Distance (15)
+    Momentum (10):         RSI(14) (10)
+    Liquidity (15):        Chain Median OI (15)  [stock-level, not per-strike]
+    Earnings in DTE:       −15 penalty
     """
     import math as _math
     score = 0.0
 
-    # --- IV Rank (15 pts) ---
+    # --- IV Rank (25 pts) ---
+    # <20=0, 20–40 linear to 8, 40–60 linear 8→15, 60–80 linear 15→21, ≥80=25
     if iv_rank is not None and not _math.isnan(iv_rank):
-        if iv_rank >= 50:
-            score += 15.0
-        elif iv_rank >= 30:
-            score += 7.5 + (iv_rank - 30) / 20.0 * 7.5
-        else:
-            score += max(0.0, iv_rank / 30.0) * 7.5
+        if iv_rank >= 80:
+            score += 25.0
+        elif iv_rank >= 60:
+            score += 15.0 + (iv_rank - 60) / 20.0 * 6.0
+        elif iv_rank >= 40:
+            score += 8.0 + (iv_rank - 40) / 20.0 * 7.0
+        elif iv_rank >= 20:
+            score += (iv_rank - 20) / 20.0 * 8.0
 
-    # --- IV / HV Ratio (10 pts) ---
+    # --- IV / HV Ratio (20 pts) ---
+    # <0.9=0, 0.9–1.1 linear 0→5, 1.1–1.4 linear 5→10, 1.4–1.7 linear 10→16, ≥1.7=20
     if iv_hv_ratio is not None and not _math.isnan(iv_hv_ratio):
-        if iv_hv_ratio >= 1.5:
-            score += 10.0
-        elif iv_hv_ratio >= 1.2:
-            score += 6.0 + (iv_hv_ratio - 1.2) / 0.3 * 4.0
-        elif iv_hv_ratio >= 1.0:
-            score += 3.0 + (iv_hv_ratio - 1.0) / 0.2 * 3.0
-        else:
-            score += max(0.0, iv_hv_ratio) * 3.0
+        if iv_hv_ratio >= 1.7:
+            score += 20.0
+        elif iv_hv_ratio >= 1.4:
+            score += 10.0 + (iv_hv_ratio - 1.4) / 0.3 * 6.0
+        elif iv_hv_ratio >= 1.1:
+            score += 5.0 + (iv_hv_ratio - 1.1) / 0.3 * 5.0
+        elif iv_hv_ratio >= 0.9:
+            score += (iv_hv_ratio - 0.9) / 0.2 * 5.0
 
-    # --- Ann. Return/day (10 pts) ---
-    if not _math.isnan(annualized_return):
-        if annualized_return >= 25:
-            score += 10.0
-        elif annualized_return >= 15:
-            score += 5.0 + (annualized_return - 15) / 10.0 * 5.0
-        elif annualized_return >= 8:
-            score += (annualized_return - 8) / 7.0 * 5.0
-
-    # --- Premium Efficiency (5 pts): premium as % of distance to strike ---
-    distance = current_price - strike
-    if distance > 0 and premium > 0:
-        prem_dist_pct = premium / distance * 100.0
-        if prem_dist_pct >= 15:
-            score += 5.0
-        elif prem_dist_pct >= 8:
-            score += 2.5 + (prem_dist_pct - 8) / 7.0 * 2.5
-        elif prem_dist_pct >= 3:
-            score += (prem_dist_pct - 3) / 5.0 * 2.5
-
-    # --- SMA Alignment (10 pts): Price > SMA50 > SMA200 ---
+    # --- SMA Alignment (15 pts): categorical — not graduated ---
     if price_above_sma50 and sma50_above_sma200:
-        score += 10.0
+        score += 15.0
+    elif price_above_sma50:
+        score += 9.0
     elif sma50_above_sma200:
-        score += 4.0
+        score += 5.0
 
-    # --- Distance from 52W High (10 pts) ---
-    # dist_from_52w_high_pct is negative when below high (e.g. -10 = 10% below)
+    # --- 52W High Distance (15 pts) ---
+    # ≤5%=15, ≤10%=11, ≤20%=7, ≤30%=3, >30%=0
     if not _math.isnan(dist_from_52w_high_pct):
         pct_below = abs(min(dist_from_52w_high_pct, 0.0))
         if pct_below <= 5:
-            score += 10.0          # near or at 52W high
+            score += 15.0
         elif pct_below <= 10:
-            score += 7.0
+            score += 11.0 - (pct_below - 5) / 5.0 * 4.0
         elif pct_below <= 20:
-            score += 4.0
+            score += 7.0 - (pct_below - 10) / 10.0 * 4.0
         elif pct_below <= 30:
-            score += 1.0
+            score += 3.0 - (pct_below - 20) / 10.0 * 3.0
 
-    # --- RSI (8 pts) ---
+    # --- RSI(14) (10 pts) ---
+    # 42–62=10, 35–42 or 62–70 = linear decay to 6, <35 or >70 = 2
     if not _math.isnan(rsi):
-        if 40 <= rsi <= 65:
-            score += 8.0
-        elif (35 <= rsi < 40) or (65 < rsi <= 70):
-            score += 5.0
-        elif (30 <= rsi < 35) or (70 < rsi <= 75):
+        if 42 <= rsi <= 62:
+            score += 10.0
+        elif 35 <= rsi < 42:
+            score += 6.0 + (rsi - 35) / 7.0 * 4.0
+        elif 62 < rsi <= 70:
+            score += 6.0 + (70 - rsi) / 8.0 * 4.0
+        elif 30 <= rsi < 35 or 70 < rsi <= 75:
             score += 2.0
 
-    # --- Delta bell-curve (15 pts): peak at -0.225 ---
-    if not _math.isnan(delta):
-        if -0.25 <= delta <= -0.20:
-            score += 15.0          # peak zone
-        elif (-0.30 <= delta < -0.25) or (-0.20 < delta <= -0.15):
-            score += 10.0          # good, slightly off-center
-        elif -0.10 <= delta < -0.15 or delta == -0.10:
-            score += 5.0           # low yield, far OTM
-        elif delta < -0.30:
-            score += 6.0           # aggressive (closer to ATM)
-
-    # --- Expected Move (5 pts) ---
-    if not _math.isnan(iv_used) and iv_used > 0 and dte > 0:
-        T = dte / 365.0
-        em = current_price * iv_used * _math.sqrt(T)
-        em_lower = current_price - em
-        boundary_band = em * 0.05
-        if strike <= em_lower:
-            score += 5.0
-        elif strike <= em_lower + boundary_band:
-            score += 2.5
-
-    # --- Spread % (8 pts) ---
-    if bid_ask_spread_pct is not None and not _math.isnan(bid_ask_spread_pct):
-        if bid_ask_spread_pct <= 3.0:
-            score += 8.0
-        elif bid_ask_spread_pct <= 5.0:
-            score += 5.0
-        elif bid_ask_spread_pct <= 10.0:
-            score += 2.0
-
-    # --- Open Interest / Volume (4 pts) ---
-    # Use volume when market is open (today's activity), OI otherwise (yesterday's count)
-    liquidity_count = volume if (market_open and volume > 0) else open_interest
-    if liquidity_count >= 1000:
-        score += 4.0
-    elif liquidity_count >= 500:
-        score += 3.0
-    elif liquidity_count >= 200:
-        score += 2.0
-    elif liquidity_count >= 100:
-        score += 1.0
+    # --- Chain Median OI (15 pts) ---
+    # ≥2000=15, ≥800=11, ≥300=7, ≥100=3, <100=0
+    if not _math.isnan(chain_median_oi) and chain_median_oi >= 0:
+        if chain_median_oi >= 2000:
+            score += 15.0
+        elif chain_median_oi >= 800:
+            score += 7.0 + (chain_median_oi - 800) / 1200.0 * 8.0
+        elif chain_median_oi >= 300:
+            score += 3.0 + (chain_median_oi - 300) / 500.0 * 4.0
+        elif chain_median_oi >= 100:
+            score += (chain_median_oi - 100) / 200.0 * 3.0
 
     # --- Earnings penalty ---
     if earnings_within_dte:
         score -= 15.0
 
+    return round(score, 1)
+
+
+def compute_strike_score(
+    *,
+    delta: float,
+    current_price: float,
+    strike: float,
+    iv_used: float,
+    dte: int,
+    vol_support_1: float | None,
+    vol_support_2: float | None,
+    vol_support_3: float | None,
+    bid_ask_spread_pct: float | None,
+    open_interest: int,
+    market_open: bool,
+    volume: int,
+) -> float:
+    """
+    Strike Safety Score 0–100.
+    Measures how safe *this specific strike* is at *this expiration*.
+
+    Delta (20):              Bell-curve peak at −0.20→−0.25
+    Distance vs Support (20): Nearest vol-support level below strike
+    Expected Move Buffer (20): How far strike is outside 1σ move
+    % OTM from Spot (15):    Raw distance cushion from current price
+    Bid-Ask Spread % (15):   Execution quality at this strike
+    OI / Volume (10):        Liquidity at this specific strike
+    """
+    import math as _math
+    score = 0.0
+
+    # --- Delta bell-curve (20 pts) ---
+    if not _math.isnan(delta):
+        if -0.25 <= delta <= -0.20:
+            score += 20.0
+        elif (-0.30 <= delta < -0.25) or (-0.20 < delta <= -0.15):
+            score += 13.0
+        elif -0.15 < delta <= -0.10:
+            score += 7.0
+        elif delta < -0.30:
+            score += 8.0
+
+    # --- Distance vs Nearest Support Below Strike (20 pts) ---
+    supports = [s for s in [vol_support_1, vol_support_2, vol_support_3] if s is not None]
+    supports_below = [s for s in supports if s < strike]
+    if supports_below:
+        nearest = max(supports_below)  # closest support below strike
+        gap_pct = (strike - nearest) / strike * 100.0
+        # strike ≤ support (at/below) = 20; 0–5% above = linear 20→12;
+        # 5–10% above = 12→5; 10%+ above = 0
+        if gap_pct <= 0:
+            score += 20.0
+        elif gap_pct <= 5:
+            score += 20.0 - gap_pct / 5.0 * 8.0
+        elif gap_pct <= 10:
+            score += 12.0 - (gap_pct - 5) / 5.0 * 7.0
+        # else 0
+
+    # --- Expected Move Buffer (20 pts) ---
+    if not _math.isnan(iv_used) and iv_used > 0 and dte > 0:
+        T = dte / 365.0
+        em = current_price * iv_used * _math.sqrt(T)
+        em_lower = current_price - em
+        sigmas_outside = (em_lower - strike) / em  # positive = outside, negative = inside
+        if sigmas_outside >= 0.20:
+            score += 20.0
+        elif sigmas_outside >= 0.0:
+            score += 14.0 + sigmas_outside / 0.20 * 6.0
+        elif sigmas_outside >= -0.10:
+            score += 6.0 + (sigmas_outside + 0.10) / 0.10 * 8.0
+        # else 0 (well inside 1σ)
+
+    # --- % OTM from Spot (15 pts) ---
+    otm_pct = (current_price - strike) / current_price * 100.0
+    if otm_pct >= 15:
+        score += 15.0
+    elif otm_pct >= 10:
+        score += 11.0 + (otm_pct - 10) / 5.0 * 4.0
+    elif otm_pct >= 5:
+        score += 7.0 + (otm_pct - 5) / 5.0 * 4.0
+    elif otm_pct >= 2:
+        score += 3.0 + (otm_pct - 2) / 3.0 * 4.0
+
+    # --- Bid-Ask Spread % (15 pts) ---
+    if bid_ask_spread_pct is not None and not _math.isnan(bid_ask_spread_pct):
+        if bid_ask_spread_pct <= 1.0:
+            score += 15.0
+        elif bid_ask_spread_pct <= 3.0:
+            score += 10.0 + (3.0 - bid_ask_spread_pct) / 2.0 * 5.0
+        elif bid_ask_spread_pct <= 5.0:
+            score += 6.0 + (5.0 - bid_ask_spread_pct) / 2.0 * 4.0
+        elif bid_ask_spread_pct <= 8.0:
+            score += 2.0 + (8.0 - bid_ask_spread_pct) / 3.0 * 4.0
+        # >8% = 0
+
+    # --- OI / Volume at this strike (10 pts) ---
+    liquidity_count = volume if (market_open and volume > 0) else open_interest
+    if liquidity_count >= 1000:
+        score += 10.0
+    elif liquidity_count >= 500:
+        score += 7.0 + (liquidity_count - 500) / 500.0 * 3.0
+    elif liquidity_count >= 200:
+        score += 4.0 + (liquidity_count - 200) / 300.0 * 3.0
+    elif liquidity_count >= 100:
+        score += (liquidity_count - 100) / 100.0 * 4.0
+
     return round(max(0.0, min(100.0, score)), 1)
+
+
+def compute_csp_final_score(env_score: float, strike_score: float) -> float:
+    """Final Score = 0.4 × Env Score + 0.6 × Strike Score."""
+    return round(0.4 * env_score + 0.6 * strike_score, 1)

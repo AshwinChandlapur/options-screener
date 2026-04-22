@@ -155,9 +155,20 @@ export function ScreenerTable({ data }: Props) {
     const cls = v > 10 ? 'spread-wide' : v > 5 ? 'spread-ok' : 'spread-tight'
     return <span className={cls}>{v.toFixed(1)}%</span>
   }
-  const scoreFmt = (v: number, highlight = false) => {
-    const cls = v >= 70 ? 'score-good' : v >= 45 ? 'score-caution' : 'score-bad'
-    return <span className={cls} style={highlight ? { fontWeight: 800, fontSize: '15px' } : {}}>{v.toFixed(0)}</span>
+  const scoreFmt = (env: number, strike: number, final: number, highlight = false) => {
+    const cls = final >= 70 ? 'score-good' : final >= 45 ? 'score-caution' : 'score-bad'
+    return (
+      <span
+        className={cls}
+        style={highlight ? { fontWeight: 800, fontSize: '15px' } : {}}
+        title={`Env: ${env.toFixed(0)}  ·  Strike: ${strike.toFixed(0)}  ·  Final: ${final.toFixed(0)}`}
+      >
+        {final.toFixed(0)}
+        <span style={{ fontSize: '10px', opacity: 0.7, display: 'block' }}>
+          E{env.toFixed(0)} S{strike.toFixed(0)}
+        </span>
+      </span>
+    )
   }
 
   return (
@@ -206,7 +217,7 @@ export function ScreenerTable({ data }: Props) {
                 className="sortable"
                 onClick={() => scoreCol?.toggleSorting(scoreSorted === 'asc')}
               >
-                <span className="col-tip" title="CSP Score 0–100&#10;&#10;VOLATILITY (25)&#10;  IV Rank         15 pts  ≥50 = full&#10;  IV / HV Ratio   10 pts  ≥1.5× = full&#10;&#10;RETURN (15)&#10;  Ann. Return     10 pts  ≥25% = full&#10;  Prem Efficiency  5 pts  premium ÷ distance to strike&#10;&#10;TREND (20)&#10;  SMA Alignment   10 pts  Price>SMA50>SMA200&#10;  52W High Dist.  10 pts  ≤5% below high = full&#10;&#10;RISK POSITIONING (20)&#10;  Delta           15 pts  peak at −0.225; aggressive 6; low-yield 5&#10;  Expected Move    5 pts  strike outside 1σ move&#10;&#10;MOMENTUM (8)&#10;  RSI(14)          8 pts  40–65 = full&#10;&#10;EXECUTION (12)&#10;  Spread %         8 pts  ≤3% = full&#10;  Open Interest    4 pts  ≥1000 OI/vol = full&#10;&#10;Earnings in DTE −15 pts penalty">
+                <span className="col-tip" title="Final Score = 0.4×Env + 0.6×Strike&#10;&#10;ENV SCORE (100 pts)&#10;  IV Rank         25 pts  ≥20=linear, ≥80=full&#10;  IV / HV Ratio   20 pts  ≥1.7×=full&#10;  SMA Alignment   15 pts  Price>SMA50>SMA200&#10;  52W High Dist.  15 pts  ≤5% below=full&#10;  RSI(14)         10 pts  42–62=full&#10;  Chain Median OI 15 pts  ≥2000=full&#10;  Earnings in DTE −15 pts  penalty&#10;&#10;STRIKE SCORE (100 pts)&#10;  Delta           20 pts  peak −0.20→−0.25&#10;  Dist vs Support 20 pts  strike ≤ support=full&#10;  Exp Move Buffer 20 pts  ≥1.2σ outside=full&#10;  % OTM from Spot 15 pts  ≥15%=full&#10;  Bid-Ask Spread  15 pts  ≤1%=full&#10;  OI / Volume     10 pts  ≥1000=full">
                   Score ⓘ
                 </span>
                 {scoreSorted === 'asc' && ' ↑'}
@@ -340,7 +351,7 @@ export function ScreenerTable({ data }: Props) {
                 </td>
                 <td>{fmtSpread(bestStrike.bid_ask_spread_pct)}</td>
                 <td>{fmtAnn(bestStrike.annualized_return)}</td>
-                <td>{scoreFmt(bestStrike.csp_score, true)}</td>
+                <td>{scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.csp_score, true)}</td>
               </tr>
             )
             absRowIdx++
@@ -363,7 +374,7 @@ export function ScreenerTable({ data }: Props) {
                     </td>
                     <td>{fmtSpread(s.bid_ask_spread_pct)}</td>
                     <td>{fmtAnn(s.annualized_return)}</td>
-                    <td>{scoreFmt(s.csp_score)}</td>
+                    <td>{scoreFmt(s.env_score, s.strike_score, s.csp_score)}</td>
                   </tr>
                 )
                 absRowIdx++

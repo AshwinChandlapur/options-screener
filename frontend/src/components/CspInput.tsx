@@ -4,18 +4,21 @@ const UNIVERSE_SIZE = 75  // keep in sync with backend/services/universe.py
 const PRESET_BASKET = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL', 'SPY', 'QQQ', 'AMD']
 
 const SCORE_LEGEND = [
-  { factor: 'IV Rank',          weight: 15, detail: '≥ 50 = full. Reward selling expensive premium.' },
-  { factor: 'IV / HV Ratio',    weight: 10, detail: '≥ 1.5× = full. IV above realized vol = premium-selling edge.' },
-  { factor: 'Ann. Return',      weight: 10, detail: '≥ 25% ann = full. Yield quality.' },
-  { factor: 'Prem Efficiency',   weight:  5, detail: 'Premium as % of gap to strike. Higher = better compensated.' },
-  { factor: 'SMA Alignment',    weight: 10, detail: 'Price > SMA50 > SMA200 = full. Only sell puts in uptrends.' },
-  { factor: '52W High Dist.',   weight: 10, detail: '≤5% below 52W high = full. Penalises broken downtrends.' },
-  { factor: 'Delta',             weight: 15, detail: 'Peak at −0.225 (15 pts). Aggressive <−0.30 (6). Low-yield >−0.15 (5).' },
-  { factor: 'Expected Move',    weight:  5, detail: 'Strike outside 1σ move window = full.' },
-  { factor: 'RSI(14)',           weight:  8, detail: '40–65 = full. Avoid overbought/oversold.' },
-  { factor: 'Spread %',          weight:  8, detail: '≤ 3% = full. Tight bid-ask = liquid market.' },
-  { factor: 'Open Interest',    weight:  4, detail: '≥ 1000 OI/vol = full. Uses volume during market hours.' },
+  { factor: '— ENV SCORE (×0.4) —', weight: null, detail: '' },
+  { factor: 'IV Rank',          weight: 25, detail: '<20=0 · 20–40 linear→8 · 40–60→15 · 60–80→21 · ≥80=25.' },
+  { factor: 'IV / HV Ratio',    weight: 20, detail: '<0.9=0 · 0.9–1.1→5 · 1.1–1.4→10 · 1.4–1.7→16 · ≥1.7=20.' },
+  { factor: 'SMA Alignment',    weight: 15, detail: 'Price>SMA50>SMA200=15 · Price>SMA50=9 · SMA50>SMA200=5.' },
+  { factor: '52W High Dist.',   weight: 15, detail: '≤5%=15 · ≤10%→11 · ≤20%→7 · ≤30%→3 · >30%=0.' },
+  { factor: 'RSI(14)',           weight: 10, detail: '42–62=10 · 35–42 or 62–70 linear→6 · <35 or >70=2.' },
+  { factor: 'Chain Median OI',  weight: 15, detail: '≥2000=15 · ≥800→11 · ≥300→7 · ≥100→3 · <100=0.' },
   { factor: 'Earnings in DTE',  weight: -15, detail: 'Hard penalty if earnings fall within the expiry window.' },
+  { factor: '— STRIKE SCORE (×0.6) —', weight: null, detail: '' },
+  { factor: 'Delta',             weight: 20, detail: '−0.20→−0.25=20 · ±1 band=13 · −0.10→−0.15=7 · <−0.30=8.' },
+  { factor: 'Dist vs Support',  weight: 20, detail: 'Strike ≤ support=20 · 0–5% above→12 · 5–10%→5 · >10%=0.' },
+  { factor: 'Exp Move Buffer',  weight: 20, detail: '>1.2σ outside=20 · 1.0–1.2σ→14 · 0.9–1.0σ→6 · inside=0.' },
+  { factor: '% OTM from Spot',  weight: 15, detail: '≥15%=15 · ≥10%→11 · ≥5%→7 · ≥2%→3 · <2%=0.' },
+  { factor: 'Bid-Ask Spread',   weight: 15, detail: '≤1%=15 · ≤3%→10 · ≤5%→6 · ≤8%→2 · >8%=0.' },
+  { factor: 'OI / Volume',       weight: 10, detail: '≥1000=10 · ≥500→7 · ≥200→4 · ≥100→1 · <100=0.' },
 ]
 
 const SCORE_TIERS = [
@@ -135,18 +138,20 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
             ))}
           </div>
           <div className="score-legend-factors">
-            <div className="score-legend-header">Score breakdown (total 100 pts)</div>
+            <div className="score-legend-header">Score breakdown — Final = 0.4 × Env + 0.6 × Strike</div>
             {SCORE_LEGEND.map(f => (
-              <div key={f.factor} className="score-factor-row">
-                <span className="score-factor-name">{f.factor}</span>
-                <span
-                  className="score-factor-weight"
-                  style={{ color: f.weight < 0 ? '#f87171' : '#4ade80' }}
-                >
-                  {f.weight > 0 ? `+${f.weight}` : f.weight} pts
-                </span>
-                <span className="score-factor-detail">{f.detail}</span>
-              </div>
+              f.weight === null
+                ? <div key={f.factor} className="score-factor-section">{f.factor}</div>
+                : <div key={f.factor} className="score-factor-row">
+                    <span className="score-factor-name">{f.factor}</span>
+                    <span
+                      className="score-factor-weight"
+                      style={{ color: f.weight < 0 ? '#f87171' : '#4ade80' }}
+                    >
+                      {f.weight > 0 ? `+${f.weight}` : f.weight} pts
+                    </span>
+                    <span className="score-factor-detail">{f.detail}</span>
+                  </div>
             ))}
           </div>
         </div>

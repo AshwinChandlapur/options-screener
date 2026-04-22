@@ -20,7 +20,9 @@ from services.options_service import (
 )
 from services.technical_service import (
     compute_bollinger,
-    compute_csp_score,
+    compute_env_score,
+    compute_strike_score,
+    compute_csp_final_score,
     compute_iv_rank_percentile,
     compute_price_vs_52w_high,
     compute_rsi,
@@ -39,7 +41,9 @@ class StrikeResult:
     premium: float
     annualized_return: float
     bid_ask_spread_pct: Optional[float]
-    csp_score: float
+    env_score: float
+    strike_score: float
+    csp_score: float            # final = 0.4×env + 0.6×strike
     is_best: bool = False
     iv_fallback: bool = False   # True when hv_sigma was used instead of yfinance IV
     stale_premium: bool = False # True when lastPrice was used instead of (bid+ask)/2
@@ -148,6 +152,13 @@ def process_symbol(
                 # 4. Compute metrics for all OTM liquid strikes
                 T = dte / 365.0
                 _IDEAL_DELTA = -0.225  # midpoint of -0.10 to -0.35 target
+
+                # Chain-level median OI for env score (stock-level liquidity signal)
+                import pandas as _pd
+                chain_median_oi = float(puts_df["openInterest"].median()) if not puts_df.empty else 0.0
+                if _pd.isna(chain_median_oi):
+                    chain_median_oi = 0.0
+
                 all_strikes_sorted = sorted(puts_df["strike"].unique(), reverse=True)  # ATM-first
                 otm_strikes = [s for s in all_strikes_sorted if s < current_price * 1.02]
 
@@ -177,15 +188,15 @@ def process_symbol(
                         # bid/ask are 0 (market closed) — stale and unreliable.
                         # Use hv_sigma if IV looks suspiciously low (< 15%).
                         used_hv = False
-                        iv_hv_ratio: Optional[float] = None
+                        iv_hv_ratio_val: Optional[float] = None
                         if math.isnan(sig) or sig < 0.15:
                             sig = hv_sigma
                             used_hv = True
                         else:
                             if hv_sigma > 0:
-                                iv_hv_ratio = round(sig / hv_sigma, 4)
+                                iv_hv_ratio_val = round(sig / hv_sigma, 4)
                         d = black_scholes_put_delta(current_price, sp, rf_rate, T, sig)
-                        candidates.append((sp, d, prem, used_hv, stale_prem, iv_hv_ratio, sig, oi_val, vol_val))
+                        candidates.append((sp, d, prem, used_hv, stale_prem, iv_hv_ratio_val, sig, oi_val, vol_val))
                     except Exception:
                         continue
 
@@ -197,40 +208,49 @@ def process_symbol(
                     in_range = sorted(candidates, key=lambda x: abs(x[1] - _IDEAL_DELTA))[:5]
 
                 strike_results: list[StrikeResult] = []
-                for sp, d, prem, used_hv, stale_prem, iv_hv_ratio, sig_used, oi_val, vol_val in in_range:
+                for sp, d, prem, used_hv, stale_prem, iv_hv_ratio_val, sig_used, oi_val, vol_val in in_range:
                     try:
                         spread_raw = get_bid_ask_spread_pct(puts_df, sp)
                         spread_s: Optional[float] = None if math.isnan(spread_raw) else spread_raw
                         collateral_s = round(sp * 100.0, 2)
                         ret_s = round((prem * 100) / collateral_s * 100.0, 4) if collateral_s > 0 else 0.0
                         ann_ret_s = round(ret_s * (365.0 / dte), 4) if dte > 0 else 0.0
-                        score_s = compute_csp_score(
+
+                        # Env score uses iv_hv_ratio from the best-available sig for this strike
+                        env_s_strike = compute_env_score(
                             iv_rank=iv_rank,
-                            iv_hv_ratio=iv_hv_ratio,
-                            annualized_return=ann_ret_s,
-                            premium=prem,
-                            current_price=current_price,
-                            strike=sp,
-                            dte=dte,
-                            iv_used=sig_used,
+                            iv_hv_ratio=iv_hv_ratio_val,
                             price_above_sma50=trend["price_above_sma50"],
                             sma50_above_sma200=trend["sma50_above_sma200"],
                             dist_from_52w_high_pct=dist_52w,
                             rsi=rsi,
+                            chain_median_oi=chain_median_oi,
+                            earnings_within_dte=earnings_within_dte,
+                        )
+                        strike_s = compute_strike_score(
                             delta=d,
+                            current_price=current_price,
+                            strike=sp,
+                            iv_used=sig_used,
+                            dte=dte,
+                            vol_support_1=vol_supports[0] if len(vol_supports) > 0 else None,
+                            vol_support_2=vol_supports[1] if len(vol_supports) > 1 else None,
+                            vol_support_3=vol_supports[2] if len(vol_supports) > 2 else None,
                             bid_ask_spread_pct=spread_s,
                             open_interest=oi_val,
                             market_open=_market_open,
                             volume=vol_val,
-                            earnings_within_dte=earnings_within_dte,
                         )
+                        final_s = compute_csp_final_score(env_s_strike, strike_s)
                         strike_results.append(StrikeResult(
                             strike=sp,
                             delta=d,
                             premium=round(prem, 4),
                             annualized_return=ann_ret_s,
                             bid_ask_spread_pct=spread_s,
-                            csp_score=score_s,
+                            env_score=env_s_strike,
+                            strike_score=strike_s,
+                            csp_score=final_s,
                             iv_fallback=used_hv,
                             stale_premium=stale_prem,
                         ))

@@ -71,6 +71,8 @@ class StrikeResultOut(BaseModel):
     premium: float
     annualized_return: float
     bid_ask_spread_pct: Optional[float]
+    env_score: float
+    strike_score: float
     csp_score: float
     is_best: bool
     iv_fallback: bool
@@ -224,6 +226,8 @@ def _to_out(r: ScreenerResult) -> ScreenerResultOut:
                 premium=s.premium,
                 annualized_return=s.annualized_return,
                 bid_ask_spread_pct=s.bid_ask_spread_pct,
+                env_score=s.env_score,
+                strike_score=s.strike_score,
                 csp_score=s.csp_score,
                 is_best=s.is_best,
                 iv_fallback=s.iv_fallback,
