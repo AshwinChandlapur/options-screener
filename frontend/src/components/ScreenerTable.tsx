@@ -41,18 +41,6 @@ const COLUMNS = [
     header: 'Symbol',
     cell: info => <strong>{info.getValue()}</strong>,
   }),
-  col.accessor('csp_score', {
-    header: () => (
-      <span className="col-tip" title="CSP score 0-100: IV Rank(25) + Ann.Return(20) + SMA trend(20) + RSI zone(15) + Delta(10) + Spread%(10) − Earnings(−15)">
-        Score ⓘ
-      </span>
-    ),
-    cell: info => {
-      const v = info.getValue()
-      const cls = v >= 70 ? 'positive' : v >= 45 ? 'rsi-ok' : 'negative'
-      return <span className={cls} style={{ fontWeight: 700, fontSize: '15px' }}>{v.toFixed(0)}</span>
-    },
-  }),
   col.accessor('price', {
     header: 'Price',
     cell: info => fmt2(info.getValue()),
@@ -268,6 +256,26 @@ const COLUMNS = [
         <span className="dual-cell">
           <span>{fmtAnn(row.annualized_return)}</span>
           <span className="mid-row">{fmtAnn(row.annualized_return_mid)}</span>
+        </span>
+      )
+    },
+  }),
+  col.accessor('csp_score', {
+    header: () => (
+      <span className="col-tip" title="CSP score 0-100: IV Rank(25) + Ann.Return(20) + SMA trend(20) + RSI zone(15) + Delta(10) + Spread%(10) − Earnings(−15)">
+        Score ⓘ
+      </span>
+    ),
+    cell: info => {
+      const row = info.row.original
+      const scoreFmt = (v: number) => {
+        const cls = v >= 70 ? 'positive' : v >= 45 ? 'rsi-ok' : 'negative'
+        return <span className={cls} style={{ fontWeight: 700, fontSize: '14px' }}>{v.toFixed(0)}</span>
+      }
+      return (
+        <span className="dual-cell">
+          <span>{scoreFmt(row.csp_score)}</span>
+          <span className="mid-row">{scoreFmt(row.csp_score_mid)}</span>
         </span>
       )
     },

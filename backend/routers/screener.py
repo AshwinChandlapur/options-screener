@@ -89,6 +89,7 @@ class ScreenerResultOut(BaseModel):
     bid_ask_spread_pct: Optional[float]
     bid_ask_spread_pct_mid: Optional[float]
     csp_score: float
+    csp_score_mid: float
     dte: int
     expiration: str
     premium: float
@@ -225,6 +226,7 @@ def _to_out(r: ScreenerResult) -> ScreenerResultOut:
         bid_ask_spread_pct=r.bid_ask_spread_pct,
         bid_ask_spread_pct_mid=r.bid_ask_spread_pct_mid,
         csp_score=r.csp_score,
+        csp_score_mid=r.csp_score_mid,
         dte=r.dte,
         expiration=r.expiration,
         premium=r.premium,

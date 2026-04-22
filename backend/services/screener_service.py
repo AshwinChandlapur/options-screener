@@ -56,6 +56,7 @@ class ScreenerResult:
     bid_ask_spread_pct: Optional[float]      # (ask-bid)/mid * 100 for BB Lower strike
     bid_ask_spread_pct_mid: Optional[float]  # (ask-bid)/mid * 100 for BB Middle strike
     csp_score: float                         # composite quality score 0-100
+    csp_score_mid: float                     # composite quality score for BB Middle strike
     dte: int
     expiration: str
     premium: float
@@ -168,6 +169,15 @@ def process_symbol(
             bid_ask_spread_pct=bid_ask_spread_pct,
             earnings_within_dte=earnings_within_dte,
         )
+        csp_score_mid = compute_csp_score(
+            iv_rank=iv_rank,
+            annualized_return=annualized_return_mid,
+            sma_ratio=sma_ratio,
+            rsi=rsi,
+            delta=delta_mid,
+            bid_ask_spread_pct=bid_ask_spread_pct_mid,
+            earnings_within_dte=earnings_within_dte,
+        )
 
         result = ScreenerResult(
             symbol=sym,
@@ -193,6 +203,7 @@ def process_symbol(
             bid_ask_spread_pct=bid_ask_spread_pct,
             bid_ask_spread_pct_mid=bid_ask_spread_pct_mid,
             csp_score=csp_score,
+            csp_score_mid=csp_score_mid,
             dte=dte,
             expiration=expiration,
             premium=round(premium, 4),

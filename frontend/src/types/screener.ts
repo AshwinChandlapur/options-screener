@@ -22,6 +22,7 @@ export interface ScreenerResult {
   bid_ask_spread_pct: number | null
   bid_ask_spread_pct_mid: number | null
   csp_score: number
+  csp_score_mid: number
   dte: number
   expiration: string
   premium: number
