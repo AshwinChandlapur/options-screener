@@ -197,12 +197,13 @@ body {
 .col-tip { cursor: help; border-bottom: 1px dashed #475569; }
 .slope-n { font-size: 11px; color: #64748b; }
 /* RSI */
+/* RSI: green = ideal (40-70), yellow = overbought caution (>70), red = oversold/bad (<30) */
 .rsi-ok   { color: #4ade80; }
-.rsi-high { color: #f87171; }
-.rsi-low  { color: #fbbf24; }
-/* Spread */
+.rsi-high { color: #fbbf24; }
+.rsi-low  { color: #f87171; }
+/* Spread: green = tight (<5%), yellow = borderline (5-10%), red = wide/illiquid (>10%) */
 .spread-tight { color: #4ade80; }
-.spread-ok    { color: #94a3b8; }
+.spread-ok    { color: #fbbf24; }
 .spread-wide  { color: #f87171; font-weight: 600; }
 
 /* ── Momentum Input ───────────────────────────────────────────────────────── */
@@ -296,10 +297,10 @@ body {
 .bb-upper   { color: #f87171; }
 .bb-middle  { color: #94a3b8; }
 .bb-lower   { color: #4ade80; }
-.strike-fall { font-size: 11px; color: #f87171; }
+.strike-fall { font-size: 11px; color: #475569; }
 .vol-support { display: flex; flex-direction: column; gap: 2px; }
 .vol-support-level { display: flex; gap: 5px; align-items: baseline; font-size: 12px; }
-.vol-support-pct { font-size: 11px; color: #f87171; }
+.vol-support-pct { font-size: 11px; color: #475569; }
 
 /* ── Loading ──────────────────────────────────────────────────────────────── */
 .loading-state {
@@ -397,6 +398,11 @@ body {
 .fallback { color: #fbbf24; }
 .earnings-warn { color: #fbbf24; font-weight: 600; }
 
+/* Score tiers */
+.score-good   { color: #4ade80; font-weight: 700; font-size: 14px; }
+.score-caution { color: #fbbf24; font-weight: 700; font-size: 14px; }
+.score-bad    { color: #f87171; font-weight: 700; font-size: 14px; }
+
 /* Delta */
 .delta-ok { color: #4ade80; }
 .delta-warn { color: #fbbf24; }
@@ -409,9 +415,10 @@ body {
   font-size: 11px;
   font-weight: 700;
 }
+/* IV Rank: green ≥50 (expensive vol = good), yellow 30-49 (moderate), red <30 (cheap vol = bad for selling) */
 .badge-green { background: #14532d; color: #4ade80; }
 .badge-yellow { background: #422006; color: #fbbf24; }
-.badge-gray { background: #1e293b; color: #94a3b8; }
+.badge-red { background: #2d1212; color: #f87171; }
 
 .table-note {
   font-size: 11px;

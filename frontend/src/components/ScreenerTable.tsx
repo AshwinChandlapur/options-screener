@@ -119,7 +119,7 @@ const COLUMNS = [
       const v = info.getValue()
       const pct = info.row.original.iv_percentile
       if (v == null) return <span className="dim">N/A</span>
-      const cls = v >= 50 ? 'badge badge-green' : v >= 30 ? 'badge badge-yellow' : 'badge badge-gray'
+      const cls = v >= 50 ? 'badge badge-green' : v >= 30 ? 'badge badge-yellow' : 'badge badge-red'
       return (
         <span>
           <span className={cls}>{v.toFixed(0)}</span><br />
@@ -314,8 +314,8 @@ const COLUMNS = [
     cell: info => {
       const { expirations } = info.row.original
       const scoreFmt = (v: number) => {
-        const cls = v >= 70 ? 'positive' : v >= 45 ? 'rsi-ok' : 'negative'
-        return <span className={cls} style={{ fontWeight: 700, fontSize: '14px' }}>{v.toFixed(0)}</span>
+        const cls = v >= 70 ? 'score-good' : v >= 45 ? 'score-caution' : 'score-bad'
+        return <span className={cls}>{v.toFixed(0)}</span>
       }
       return (
         <span className="exp-col">
