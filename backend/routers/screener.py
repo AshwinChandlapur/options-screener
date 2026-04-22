@@ -97,6 +97,7 @@ class ScreenerResultOut(BaseModel):
     strikes: List[StrikeResultOut]
     best_csp_score: float
     using_hv_fallback: bool
+    expected_move: float
 
 
 class ScreenerErrorOut(BaseModel):
@@ -232,4 +233,5 @@ def _to_out(r: ScreenerResult) -> ScreenerResultOut:
         ],
         best_csp_score=r.best_csp_score,
         using_hv_fallback=r.using_hv_fallback,
+        expected_move=r.expected_move,
     )

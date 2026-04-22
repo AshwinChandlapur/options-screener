@@ -106,6 +106,7 @@ function groupResults(results: ScreenerResult[]): GroupedScreenerResult[] {
       strikes: r.strikes,
       best_score: r.best_csp_score,
       using_hv_fallback: r.using_hv_fallback,
+      expected_move: r.expected_move,
     })
   }
   for (const g of map.values()) {
@@ -183,6 +184,11 @@ export function ScreenerTable({ data }: Props) {
                 </th>
               ))}
               <th>DTE</th>
+              <th>
+                <span className="col-tip" title="Expected Move = price × HV(30d) × √(DTE/365)  ·  1σ dollar range by expiry  ·  Floor = price − EM">
+                  Exp. Move ⓘ
+                </span>
+              </th>
               <th>
                 <span className="col-tip" title="Strike price with OTM% and premium  ·  Best score highlighted  ·  ▼ N more reveals all strikes">
                   Strike ⓘ
@@ -303,6 +309,11 @@ export function ScreenerTable({ data }: Props) {
                   <span className="dte-num">{exp.dte}</span><br />
                   <span className="expiry-date">{exp.expiration}</span>
                   {exp.earnings_within_dte && <span className="earnings-warn"> ⚠</span>}
+                </td>
+                {/* Expected Move cell — same rowSpan as DTE */}
+                <td className="em-cell" rowSpan={dteCellRows}>
+                  <span className="em-range">±${exp.expected_move.toFixed(2)}</span><br />
+                  <span className="em-floor" title="Lower bound of 1σ expected range">↓ {(r.price - exp.expected_move).toFixed(2)}</span>
                 </td>
 
                 {/* Best strike */}

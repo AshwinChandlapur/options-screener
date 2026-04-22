@@ -66,6 +66,7 @@ class ScreenerResult:
     strikes: list[StrikeResult] = field(default_factory=list)
     best_csp_score: float = 0.0
     using_hv_fallback: bool = False  # True when any strike in this row used hv_sigma
+    expected_move: float = 0.0       # price × hv_sigma × √(dte/365)
 
 
 @dataclass
@@ -264,6 +265,7 @@ def process_symbol(
                     strikes=strike_results,
                     best_csp_score=best_score_val,
                     using_hv_fallback=any(sr.iv_fallback for sr in strike_results),
+                    expected_move=round(current_price * hv_sigma * math.sqrt(dte / 365.0), 2),
                 ))
             except Exception as exc:
                 logger.debug("Skipping expiration %s for %s: %s", opts.get("expiration"), sym, exc)

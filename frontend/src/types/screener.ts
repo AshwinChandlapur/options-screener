@@ -30,6 +30,7 @@ export interface ScreenerResult {
   strikes: StrikeInfo[]
   best_csp_score: number
   using_hv_fallback: boolean
+  expected_move: number
 }
 
 export interface ExpirationRow {
@@ -39,6 +40,7 @@ export interface ExpirationRow {
   strikes: StrikeInfo[]
   best_score: number
   using_hv_fallback: boolean
+  expected_move: number
 }
 
 export interface GroupedScreenerResult {
