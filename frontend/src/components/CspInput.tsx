@@ -4,33 +4,46 @@ const UNIVERSE_SIZE = 75  // keep in sync with backend/services/universe.py
 const PRESET_BASKET = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL', 'SPY', 'QQQ', 'AMD']
 
 const SCORE_LEGEND = [
-  { factor: '— ENV SCORE (×0.4) —', weight: null, detail: '', formula: '' },
+  { factor: '— ENV SCORE (×0.4) —', weight: null, detail: '', why: '', formula: '' },
   { factor: 'IV Rank',         weight: 25,  detail: '<20=0 · 20–40 linear→8 · 40–60→15 · 60–80→21 · ≥80=25.',
+    why: 'Sell premium when options are historically expensive. High IV rank = inflated put prices → more premium collected for the same risk. This is the primary edge in premium selling.',
     formula: 'Uses 30-day rolling HV as IV proxy.\n  iv_rank = (HV_today − HV_min_252) / (HV_max_252 − HV_min_252) × 100\n  HV = std(log(Closeₜ / Closeₜ₋₁), 30d) × √252' },
   { factor: 'IV / HV Ratio',   weight: 20,  detail: '<0.9=0 · 0.9–1.1→5 · 1.1–1.4→10 · 1.4–1.7→16 · ≥1.7=20.',
+    why: "IV > HV means the market is pricing in more movement than the stock actually makes — the seller's edge. IV < HV = options are cheap; you'd be giving away premium below fair value.",
     formula: 'iv_hv_ratio = yfinance_IV / HV_30d\n  yfinance IV = impliedVolatility from options chain\n  Falls back to HV if IV < 15% (stale market-closed data)' },
   { factor: 'SMA Alignment',   weight: 15,  detail: 'Price>SMA50>SMA200=15 · Price>SMA50=9 · SMA50>SMA200=5.',
+    why: 'A bullish trend reduces the chance the stock sells off through your strike. Price > SMA50 > SMA200 = sustained uptrend with institutional support — the lowest assignment-risk environment for a CSP.',
     formula: 'SMA50  = rolling mean of Close over last 50 days\n  SMA200 = rolling mean of Close over last 200 days\n  Categorical: checks price > SMA50 and SMA50 > SMA200' },
   { factor: '52W High Dist.',  weight: 15,  detail: '≤5%=15 · ≤10%→11 · ≤20%→7 · ≤30%→3 · >30%=0.',
+    why: 'Stocks near their highs have upward momentum and are less likely to gap down through your strike. Far below the 52W high signals a downtrend — puts sold there carry much higher assignment risk.',
     formula: 'dist = (Closeₜ − max(Close, 252d)) / max(Close, 252d) × 100\n  Negative value = below 52W high (e.g. −10 = 10% below)\n  pct_below = abs(min(dist, 0))' },
   { factor: 'RSI(14)',          weight: 10,  detail: '42–62=10 · 35–42 linear→6 · 62–75 linear→0 · 30–35=2 · <30 or >75=0.',
+    why: 'Mid-range RSI = healthy trend, neither overheated nor breaking down. Overbought (>75) risks a near-term reversal into your strike; deeply oversold (<30) stocks rarely recover meaningfully within the DTE window.',
     formula: 'Wilder-smoothed RSI(14)\n  delta = Close.diff()\n  avg_gain = EWM(alpha=1/14) of gains\n  avg_loss = EWM(alpha=1/14) of losses\n  RSI = 100 − 100 / (1 + avg_gain / avg_loss)\n  Smooth decay 62→75: pts = 10 × (75 − RSI) / 13' },
   { factor: 'Chain Median OI', weight: 15,  detail: 'log₁₀ scale · log₁₀(OI)/log₁₀(5000) × 15 · capped at 15.',
+    why: 'Thin chains mean wide spreads on entry and difficulty rolling if the trade moves against you. Liquid chains = trade near fair value, clean exits, and rolling to a new expiry without hunting for a counterparty.',
     formula: 'Filters candidates to 0.1 < |delta| < 0.4 first,\n  then takes median OI across those strikes.\n  chain_median_oi = np.median([oi for (strike, delta, ..., oi, ...) in candidates\n                               if 0.1 < abs(delta) < 0.4])\n  pts = min(log10(OI) / log10(5000), 1.0) × 15\n  Log scale gives partial credit for smaller-cap chains.' },
   { factor: 'Earnings in DTE', weight: -15, detail: 'Hard penalty if earnings fall within the expiry window.',
+    why: 'Earnings create overnight gap risk that can blow through your strike regardless of technicals. This is the most common cause of unexpected assignment on otherwise sound CSP setups — avoid unless intentional.',
     formula: 'earnings_within_dte = True if:\n  0 ≤ (earnings_date − today).days ≤ DTE\n  Source: yfinance calendarEvents.earnings' },
-  { factor: '— STRIKE SCORE (×0.6) —', weight: null, detail: '', formula: '' },
+  { factor: '— STRIKE SCORE (×0.6) —', weight: null, detail: '', why: '', formula: '' },
   { factor: 'Delta',            weight: 18,  detail: '−0.20→−0.25=18 · ±1 band=12 · −0.10→−0.15=6 · <−0.30=7.',
+    why: 'Delta approximates the probability of expiring in-the-money. −0.20 to −0.25 ≈ 20–25% ITM probability — the sweet spot for premium vs. risk. Closer = more premium but higher assignment odds; further = safer but premium too thin to justify tying up capital.',
     formula: 'Black-Scholes put delta:\n  d1 = (ln(S/K) + (r + 0.5σ²)T) / (σ√T)\n  delta = N(d1) − 1\n  σ = yfinance IV; falls back to HV_30d if IV < 15%' },
   { factor: 'Dist vs Support', weight: 13,  detail: 'Strike ≤ support=13 · 0–5% above→8 · 5–10%→0 · >10%=0.',
+    why: 'A volume-profile support level below your strike attracts buyers on a pullback, acting as a floor that limits how far price can fall through your strike. Strikes above a void with no support are far more vulnerable to a fast move.',
     formula: 'Volume Profile support levels (top-3 by cumulative volume):\n  typical_price = (High + Low + Close) / 3\n  Bins 252d of typical prices into 50 equal-width buckets\n  Sums volume per bucket; takes top-3 below current price\n  Uses nearest support level below the strike' },
   { factor: 'Exp Move Buffer', weight: 15,  detail: '≥0.2σ outside=15 · 0–0.2σ→10 · −0.1–0σ→4 · deeper inside=0.',
+    why: 'Selling outside the 1σ expected move gives a >68% theoretical probability the stock stays above your strike. Every 0.1σ of additional buffer directly improves the edge built into options pricing at that strike.',
     formula: 'Expected move (1σ range):\n  EM = S × σ × √T    where T = DTE/365\n  EM_lower = S − EM\n  sigmas_outside = (EM_lower − strike) / EM\n  Positive = strike is outside the 1σ floor' },
   { factor: '% OTM from Spot', weight: 12,  detail: '≥15%=12 · ≥10%→9 · ≥5%→6 · ≥2%→2 · <2%=0.',
+    why: 'Raw price cushion independent of IV or time. More distance before going in-the-money is a concrete margin of safety regardless of what volatility is doing. Complements EM Buffer, which is volatility-adjusted.',
     formula: 'otm_pct = (S − K) / S × 100\n  Raw distance cushion from current price to strike\n  Independent of delta (delta also uses σ and T)' },
   { factor: 'Bid-Ask Spread',  weight: 22,  detail: '≤1%=22 · ≤3%→15 · ≤5%→8 · ≤8%→2 · >8%=0.',
+    why: 'Wide spreads directly erode realized premium. A 10% spread on a $1.00 put loses $0.05–$0.10 on entry alone, and you pay it again on every roll. Execution quality determines what you actually collect vs. what the screen shows.',
     formula: 'spread_pct = (ask − bid) / mid × 100\n  where mid = (bid + ask) / 2\n  Per-strike bid/ask from yfinance options chain' },
   { factor: 'OI / Volume',      weight: 20,  detail: '≥1000=20 · ≥500→14 · ≥200→8 · ≥100→0 · <100=0.',
+    why: 'High OI/volume at this specific strike = efficient price discovery, fast fills near mid, and a liquid exit if the stock moves against you. Low OI = you may be the only participant, making rolling or closing costly.',
     formula: 'Uses volume if US market is open (9:30–16:00 ET weekday)\n  Otherwise uses openInterest at this specific strike\n  Source: yfinance options chain row for the strike' },
 ]
 
@@ -174,8 +187,11 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
                       </span>
                       <span className="score-factor-detail">{f.detail}</span>
                     </div>
-                    {expandedFactor === f.factor && f.formula && (
-                      <pre className="score-factor-formula">{f.formula}</pre>
+                    {expandedFactor === f.factor && (f.why || f.formula) && (
+                      <div className="score-factor-expanded">
+                        {f.why && <p className="score-factor-why">{f.why}</p>}
+                        {f.formula && <pre className="score-factor-formula">{f.formula}</pre>}
+                      </div>
                     )}
                   </div>
             ))}
