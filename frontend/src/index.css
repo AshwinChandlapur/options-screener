@@ -332,6 +332,7 @@ body {
 .best-strike { white-space: nowrap; }
 .strike-price { font-weight: 600; font-size: 13px; }
 .strike-prem { font-size: 11px; margin-left: 4px; }
+.prem-cell { font-size: 13px; font-weight: 600; color: #a3e635; white-space: nowrap; }
 
 /* Alt strike rows — all non-best strikes, revealed on expand */
 .alt-strike-row > td {

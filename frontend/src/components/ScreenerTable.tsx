@@ -176,6 +176,7 @@ export function ScreenerTable({ data }: Props) {
                   Strike ⓘ
                 </span>
               </th>
+              <th>Premium</th>
               <th>Delta</th>
               <th>
                 <span className="col-tip" title="(Ask − Bid) / Mid × 100  ·  Lower = tighter market  ·  >10% = illiquid">
@@ -296,13 +297,13 @@ export function ScreenerTable({ data }: Props) {
                 <td className="strike-cell best-strike">
                   <span className="strike-price">{fmt2(bestStrike.strike)}</span>
                   <span className="strike-fall"> {((bestStrike.strike - r.price) / r.price * 100).toFixed(1)}%</span>
-                  <span className="strike-prem dim"> ${bestStrike.premium.toFixed(2)}</span>
                   {altStrikes.length > 0 && (
                     <button className="strike-toggle" onClick={() => toggleStrikes(key)}>
                       {showAlts ? '▲ hide' : `▼ ${altStrikes.length} more`}
                     </button>
                   )}
                 </td>
+                <td className="prem-cell">${bestStrike.premium.toFixed(2)}</td>
                 <td>
                       <span className={bestStrike.delta >= -0.35 && bestStrike.delta <= -0.10 ? 'delta-ok' : 'delta-warn'}>
                     {fmtDelta(bestStrike.delta)}
@@ -323,8 +324,8 @@ export function ScreenerTable({ data }: Props) {
                     <td className="strike-cell">
                       <span className="strike-price">{fmt2(s.strike)}</span>
                       <span className="strike-fall"> {((s.strike - r.price) / r.price * 100).toFixed(1)}%</span>
-                      <span className="strike-prem dim"> ${s.premium.toFixed(2)}</span>
                     </td>
+                    <td className="prem-cell">${s.premium.toFixed(2)}</td>
                     <td>
                       <span className={s.delta >= -0.35 && s.delta <= -0.10 ? 'delta-ok' : 'delta-warn'}>
                         {fmtDelta(s.delta)}
