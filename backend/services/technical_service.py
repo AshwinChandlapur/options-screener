@@ -694,7 +694,7 @@ def compute_ditm_env_score(
     dist_from_52w_high_pct: float,
     rsi: float,
     chain_median_oi: float,
-    earnings_within_dte: bool,
+    days_to_earnings: int | None,
 ) -> float:
     """
     DITM Environment Score 0–100.
@@ -704,7 +704,7 @@ def compute_ditm_env_score(
     Trend Strength (35): SMA Alignment (20) + 52W High Distance (15)
     Momentum (10):       RSI(14) — want uptrend momentum, not overbought
     Liquidity (10):      Chain Median OI (10)
-    Earnings in DTE:     −15 penalty (binary event = gap risk)
+    Earnings penalty:    tiered by days_to_earnings (<14d=-15, 14-30d=-8, 30-60d=-3, >60d=0)
     """
     import math as _math
     score = 0.0
@@ -773,9 +773,15 @@ def compute_ditm_env_score(
     if not _math.isnan(chain_median_oi) and chain_median_oi > 0:
         score += min(_math.log10(chain_median_oi) / _math.log10(5000), 1.0) * 10.0
 
-    # --- Earnings penalty ---
-    if earnings_within_dte:
-        score -= 15.0
+    # --- Earnings penalty (tiered by proximity) ---
+    if days_to_earnings is not None and days_to_earnings >= 0:
+        if days_to_earnings < 14:
+            score -= 15.0
+        elif days_to_earnings < 30:
+            score -= 8.0
+        elif days_to_earnings < 60:
+            score -= 3.0
+        # >= 60 days: no penalty
 
     return round(score, 1)
 

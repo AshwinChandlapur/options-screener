@@ -134,14 +134,17 @@ def process_ditm_symbol(
                 earnings_date = opts["earnings_date"]
                 expiration = opts["expiration"]
 
-                # Earnings-within-DTE flag
+                # Earnings proximity (days from today, None if no earnings date)
+                days_to_earnings: Optional[int] = None
                 earnings_within_dte = False
                 if earnings_date:
                     try:
                         ed = date.fromisoformat(earnings_date)
                         today = date.today()
-                        days_to_earnings = (ed - today).days
-                        if 0 <= days_to_earnings <= dte:
+                        _days = (ed - today).days
+                        if _days >= 0:
+                            days_to_earnings = _days
+                        if 0 <= _days <= dte:
                             earnings_within_dte = True
                     except ValueError:
                         pass
@@ -221,7 +224,7 @@ def process_ditm_symbol(
                             dist_from_52w_high_pct=dist_52w,
                             rsi=rsi,
                             chain_median_oi=chain_median_oi,
-                            earnings_within_dte=earnings_within_dte,
+                            days_to_earnings=days_to_earnings,
                         )
                         strike_s = compute_ditm_strike_score(
                             delta=d,
