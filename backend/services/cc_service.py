@@ -42,9 +42,12 @@ class CcStrikeResult:
     env_score: float
     strike_score: float
     cc_score: float
+    env_detail: str = ""
+    strike_detail: str = ""
     is_best: bool = False
     iv_fallback: bool = False   # True when hv_sigma was used instead of yfinance IV
     stale_premium: bool = False # True when lastPrice was used instead of (bid+ask)/2
+    iv_hv_ratio: Optional[float] = None   # sig / hv_sigma for this strike
 
 
 @dataclass
@@ -60,12 +63,16 @@ class CcResult:
     vol_resistance_1: Optional[float]
     vol_resistance_2: Optional[float]
     vol_resistance_3: Optional[float]
+    vol_resistance_126_1: Optional[float]
+    vol_resistance_126_2: Optional[float]
+    vol_resistance_126_3: Optional[float]
     dte: int
     expiration: str
     strikes: list[CcStrikeResult] = field(default_factory=list)
     best_cc_score: float = 0.0
     using_hv_fallback: bool = False
     expected_move: float = 0.0
+    dist_from_52w_high_pct: float = 0.0  # 0 = at 52w high, -10 = 10% below
 
 
 @dataclass
@@ -99,6 +106,7 @@ def process_cc_symbol(
         iv_rank: Optional[float] = None if math.isnan(iv_rank_raw) else iv_rank_raw
         iv_percentile: Optional[float] = None if math.isnan(iv_pct_raw) else iv_pct_raw
         vol_resistances = compute_volume_resistance(df)
+        vol_resistances_126 = compute_volume_resistance(df, lookback=126)
 
         # Pre-compute HV sigma fallback once
         import numpy as np
@@ -204,7 +212,7 @@ def process_cc_symbol(
                         ret_s = round((prem / current_price) * 100.0, 4) if current_price > 0 else 0.0
                         ann_ret_s = round(ret_s * (365.0 / dte), 4) if dte > 0 else 0.0
 
-                        env_s = compute_env_score(
+                        env_s, env_detail = compute_env_score(
                             iv_rank=iv_rank,
                             iv_hv_ratio=iv_hv_ratio_val,
                             price_above_sma50=trend["price_above_sma50"],
@@ -214,15 +222,15 @@ def process_cc_symbol(
                             chain_median_oi=chain_median_oi,
                             earnings_within_dte=earnings_within_dte,
                         )
-                        strike_s = compute_cc_strike_score(
+                        strike_s, strike_detail = compute_cc_strike_score(
                             delta=d,
                             current_price=current_price,
                             strike=sp,
                             iv_used=sig_used,
                             dte=dte,
-                            vol_resistance_1=vol_resistances[0] if len(vol_resistances) > 0 else None,
-                            vol_resistance_2=vol_resistances[1] if len(vol_resistances) > 1 else None,
-                            vol_resistance_3=vol_resistances[2] if len(vol_resistances) > 2 else None,
+                            vol_resistance_1=vol_resistances_126[0] if len(vol_resistances_126) > 0 else None,
+                            vol_resistance_2=vol_resistances_126[1] if len(vol_resistances_126) > 1 else None,
+                            vol_resistance_3=vol_resistances_126[2] if len(vol_resistances_126) > 2 else None,
                             bid_ask_spread_pct=spread_s,
                             open_interest=oi_val,
                             market_open=_market_open,
@@ -238,6 +246,9 @@ def process_cc_symbol(
                             env_score=env_s,
                             strike_score=strike_s,
                             cc_score=final_s,
+                            env_detail=env_detail,
+                            strike_detail=strike_detail,
+                            iv_hv_ratio=iv_hv_ratio_val,
                             iv_fallback=used_hv,
                             stale_premium=stale_prem,
                         ))
@@ -264,12 +275,16 @@ def process_cc_symbol(
                     vol_resistance_1=vol_resistances[0] if len(vol_resistances) > 0 else None,
                     vol_resistance_2=vol_resistances[1] if len(vol_resistances) > 1 else None,
                     vol_resistance_3=vol_resistances[2] if len(vol_resistances) > 2 else None,
+                    vol_resistance_126_1=vol_resistances_126[0] if len(vol_resistances_126) > 0 else None,
+                    vol_resistance_126_2=vol_resistances_126[1] if len(vol_resistances_126) > 1 else None,
+                    vol_resistance_126_3=vol_resistances_126[2] if len(vol_resistances_126) > 2 else None,
                     dte=dte,
                     expiration=expiration,
                     strikes=strike_results,
                     best_cc_score=best_score_val,
                     using_hv_fallback=any(s.iv_fallback for s in strike_results),
                     expected_move=expected_move,
+                    dist_from_52w_high_pct=round(dist_52w, 2),
                 ))
             except Exception as e:
                 logger.debug("Error processing expiration %s for %s: %s", opts.get("expiration", "?"), sym, e)

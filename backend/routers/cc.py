@@ -72,9 +72,12 @@ class CcStrikeResultOut(BaseModel):
     env_score: float
     strike_score: float
     cc_score: float
+    env_detail: str
+    strike_detail: str
     is_best: bool
     iv_fallback: bool
     stale_premium: bool
+    iv_hv_ratio: Optional[float]
 
 
 class CcResultOut(BaseModel):
@@ -89,12 +92,16 @@ class CcResultOut(BaseModel):
     vol_resistance_1: Optional[float]
     vol_resistance_2: Optional[float]
     vol_resistance_3: Optional[float]
+    vol_resistance_126_1: Optional[float]
+    vol_resistance_126_2: Optional[float]
+    vol_resistance_126_3: Optional[float]
     dte: int
     expiration: str
     strikes: List[CcStrikeResultOut]
     best_cc_score: float
     using_hv_fallback: bool
     expected_move: float
+    dist_from_52w_high_pct: float
 
 
 class CcErrorOut(BaseModel):
@@ -200,6 +207,9 @@ def _to_out(r: CcResult) -> CcResultOut:
         vol_resistance_1=r.vol_resistance_1,
         vol_resistance_2=r.vol_resistance_2,
         vol_resistance_3=r.vol_resistance_3,
+        vol_resistance_126_1=r.vol_resistance_126_1,
+        vol_resistance_126_2=r.vol_resistance_126_2,
+        vol_resistance_126_3=r.vol_resistance_126_3,
         dte=r.dte,
         expiration=r.expiration,
         strikes=[
@@ -212,13 +222,17 @@ def _to_out(r: CcResult) -> CcResultOut:
                 env_score=s.env_score,
                 strike_score=s.strike_score,
                 cc_score=s.cc_score,
+                env_detail=s.env_detail,
+                strike_detail=s.strike_detail,
                 is_best=s.is_best,
                 iv_fallback=s.iv_fallback,
                 stale_premium=s.stale_premium,
+                iv_hv_ratio=s.iv_hv_ratio,
             )
             for s in r.strikes
         ],
         best_cc_score=r.best_cc_score,
         using_hv_fallback=r.using_hv_fallback,
         expected_move=r.expected_move,
+        dist_from_52w_high_pct=r.dist_from_52w_high_pct,
     )

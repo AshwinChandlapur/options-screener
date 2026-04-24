@@ -74,9 +74,12 @@ class StrikeResultOut(BaseModel):
     env_score: float
     strike_score: float
     csp_score: float
+    env_detail: str
+    strike_detail: str
     is_best: bool
     iv_fallback: bool
     stale_premium: bool
+    iv_hv_ratio: Optional[float]
 
 
 class ScreenerResultOut(BaseModel):
@@ -94,12 +97,16 @@ class ScreenerResultOut(BaseModel):
     vol_support_1: Optional[float]
     vol_support_2: Optional[float]
     vol_support_3: Optional[float]
+    vol_support_126_1: Optional[float]
+    vol_support_126_2: Optional[float]
+    vol_support_126_3: Optional[float]
     dte: int
     expiration: str
     strikes: List[StrikeResultOut]
     best_csp_score: float
     using_hv_fallback: bool
     expected_move: float
+    dist_from_52w_high_pct: float
 
 
 class ScreenerErrorOut(BaseModel):
@@ -217,6 +224,9 @@ def _to_out(r: ScreenerResult) -> ScreenerResultOut:
         vol_support_1=r.vol_support_1,
         vol_support_2=r.vol_support_2,
         vol_support_3=r.vol_support_3,
+        vol_support_126_1=r.vol_support_126_1,
+        vol_support_126_2=r.vol_support_126_2,
+        vol_support_126_3=r.vol_support_126_3,
         dte=r.dte,
         expiration=r.expiration,
         strikes=[
@@ -229,13 +239,17 @@ def _to_out(r: ScreenerResult) -> ScreenerResultOut:
                 env_score=s.env_score,
                 strike_score=s.strike_score,
                 csp_score=s.csp_score,
+                env_detail=s.env_detail,
+                strike_detail=s.strike_detail,
                 is_best=s.is_best,
                 iv_fallback=s.iv_fallback,
                 stale_premium=s.stale_premium,
+                iv_hv_ratio=s.iv_hv_ratio,
             )
             for s in r.strikes
         ],
         best_csp_score=r.best_csp_score,
         using_hv_fallback=r.using_hv_fallback,
         expected_move=r.expected_move,
+        dist_from_52w_high_pct=r.dist_from_52w_high_pct,
     )

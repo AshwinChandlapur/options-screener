@@ -44,9 +44,12 @@ class StrikeResult:
     env_score: float
     strike_score: float
     csp_score: float            # final = 0.4×env + 0.6×strike
+    env_detail: str = ""
+    strike_detail: str = ""
     is_best: bool = False
     iv_fallback: bool = False   # True when hv_sigma was used instead of yfinance IV
     stale_premium: bool = False # True when lastPrice was used instead of (bid+ask)/2
+    iv_hv_ratio: Optional[float] = None   # sig / hv_sigma for this strike (None when HV fallback used)
 
 
 @dataclass
@@ -65,12 +68,16 @@ class ScreenerResult:
     vol_support_1: Optional[float]
     vol_support_2: Optional[float]
     vol_support_3: Optional[float]
+    vol_support_126_1: Optional[float]
+    vol_support_126_2: Optional[float]
+    vol_support_126_3: Optional[float]
     dte: int
     expiration: str
     strikes: list[StrikeResult] = field(default_factory=list)
     best_csp_score: float = 0.0
     using_hv_fallback: bool = False  # True when any strike in this row used hv_sigma
     expected_move: float = 0.0       # price × hv_sigma × √(dte/365)
+    dist_from_52w_high_pct: float = 0.0  # 0 = at 52w high, -10 = 10% below
 
 
 @dataclass
@@ -105,6 +112,7 @@ def process_symbol(
         iv_rank: Optional[float] = None if math.isnan(iv_rank_raw) else iv_rank_raw
         iv_percentile: Optional[float] = None if math.isnan(iv_pct_raw) else iv_pct_raw
         vol_supports = compute_volume_support(df)
+        vol_supports_126 = compute_volume_support(df, lookback=126)
 
         # Pre-compute HV sigma fallback once
         import numpy as np
@@ -215,7 +223,7 @@ def process_symbol(
                         ann_ret_s = round(ret_s * (365.0 / dte), 4) if dte > 0 else 0.0
 
                         # Env score uses iv_hv_ratio from the best-available sig for this strike
-                        env_s_strike = compute_env_score(
+                        env_s_strike, env_detail = compute_env_score(
                             iv_rank=iv_rank,
                             iv_hv_ratio=iv_hv_ratio_val,
                             price_above_sma50=trend["price_above_sma50"],
@@ -225,15 +233,15 @@ def process_symbol(
                             chain_median_oi=chain_median_oi,
                             earnings_within_dte=earnings_within_dte,
                         )
-                        strike_s = compute_strike_score(
+                        strike_s, strike_detail = compute_strike_score(
                             delta=d,
                             current_price=current_price,
                             strike=sp,
                             iv_used=sig_used,
                             dte=dte,
-                            vol_support_1=vol_supports[0] if len(vol_supports) > 0 else None,
-                            vol_support_2=vol_supports[1] if len(vol_supports) > 1 else None,
-                            vol_support_3=vol_supports[2] if len(vol_supports) > 2 else None,
+                            vol_support_1=vol_supports_126[0] if len(vol_supports_126) > 0 else None,
+                            vol_support_2=vol_supports_126[1] if len(vol_supports_126) > 1 else None,
+                            vol_support_3=vol_supports_126[2] if len(vol_supports_126) > 2 else None,
                             bid_ask_spread_pct=spread_s,
                             open_interest=oi_val,
                             market_open=_market_open,
@@ -249,6 +257,9 @@ def process_symbol(
                             env_score=env_s_strike,
                             strike_score=strike_s,
                             csp_score=final_s,
+                            env_detail=env_detail,
+                            strike_detail=strike_detail,
+                            iv_hv_ratio=iv_hv_ratio_val,
                             iv_fallback=used_hv,
                             stale_premium=stale_prem,
                         ))
@@ -278,12 +289,16 @@ def process_symbol(
                     vol_support_1=vol_supports[0] if len(vol_supports) > 0 else None,
                     vol_support_2=vol_supports[1] if len(vol_supports) > 1 else None,
                     vol_support_3=vol_supports[2] if len(vol_supports) > 2 else None,
+                    vol_support_126_1=vol_supports_126[0] if len(vol_supports_126) > 0 else None,
+                    vol_support_126_2=vol_supports_126[1] if len(vol_supports_126) > 1 else None,
+                    vol_support_126_3=vol_supports_126[2] if len(vol_supports_126) > 2 else None,
                     dte=dte,
                     expiration=expiration,
                     strikes=strike_results,
                     best_csp_score=best_score_val,
                     using_hv_fallback=any(sr.iv_fallback for sr in strike_results),
                     expected_move=round(current_price * hv_sigma * math.sqrt(dte / 365.0), 2),
+                    dist_from_52w_high_pct=round(dist_52w, 2),
                 ))
             except Exception as exc:
                 logger.debug("Skipping expiration %s for %s: %s", opts.get("expiration"), sym, exc)

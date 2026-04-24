@@ -7,9 +7,12 @@ export interface CcStrikeInfo {
   env_score: number
   strike_score: number
   cc_score: number
+  env_detail: string
+  strike_detail: string
   is_best: boolean
   iv_fallback: boolean
   stale_premium: boolean
+  iv_hv_ratio: number | null
 }
 
 export interface CcResult {
@@ -24,12 +27,16 @@ export interface CcResult {
   vol_resistance_1: number | null
   vol_resistance_2: number | null
   vol_resistance_3: number | null
+  vol_resistance_126_1: number | null
+  vol_resistance_126_2: number | null
+  vol_resistance_126_3: number | null
   dte: number
   expiration: string
   strikes: CcStrikeInfo[]
   best_cc_score: number
   using_hv_fallback: boolean
   expected_move: number
+  dist_from_52w_high_pct: number
 }
 
 export interface CcExpirationRow {
@@ -54,9 +61,14 @@ export interface GroupedCcResult {
   vol_resistance_1: number | null
   vol_resistance_2: number | null
   vol_resistance_3: number | null
+  vol_resistance_126_1: number | null
+  vol_resistance_126_2: number | null
+  vol_resistance_126_3: number | null
   best_score: number
   using_hv_fallback: boolean
   expirations: CcExpirationRow[]
+  dist_from_52w_high_pct: number
+  iv_hv_ratio: number | null
 }
 
 export interface CcError {

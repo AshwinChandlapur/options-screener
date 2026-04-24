@@ -50,6 +50,7 @@ class DitmStrikeResult:
     is_best: bool = False
     iv_fallback: bool = False
     stale_premium: bool = False
+    iv_hv_ratio: Optional[float] = None   # sig / hv_sigma for this strike
 
 
 @dataclass
@@ -70,6 +71,8 @@ class DitmResult:
     strikes: list[DitmStrikeResult] = field(default_factory=list)
     best_ditm_score: float = 0.0
     using_hv_fallback: bool = False
+    dist_from_52w_high_pct: float = 0.0  # 0 = at 52w high, -10 = 10% below
+    trend_persistence: Optional[float] = None  # % of last 60 sessions above SMA50
 
 
 @dataclass
@@ -253,6 +256,7 @@ def process_ditm_symbol(
                             env_score=env_s,
                             strike_score=strike_s,
                             ditm_score=final_s,
+                            iv_hv_ratio=iv_hv_ratio_val,
                             iv_fallback=used_hv,
                             stale_premium=stale_prem,
                         ))
@@ -283,6 +287,8 @@ def process_ditm_symbol(
                     strikes=strike_results,
                     best_ditm_score=best_score_val,
                     using_hv_fallback=any(s.iv_fallback for s in strike_results),
+                    dist_from_52w_high_pct=round(dist_52w, 2),
+                    trend_persistence=trend_persistence,
                 ))
             except Exception as e:
                 logger.debug("Error processing expiration %s for %s: %s", opts.get("expiration", "?"), sym, e)

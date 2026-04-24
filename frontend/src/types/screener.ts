@@ -7,9 +7,12 @@ export interface StrikeInfo {
   env_score: number
   strike_score: number
   csp_score: number
+  env_detail: string
+  strike_detail: string
   is_best: boolean
   iv_fallback: boolean
   stale_premium: boolean
+  iv_hv_ratio: number | null
 }
 
 export interface ScreenerResult {
@@ -27,12 +30,16 @@ export interface ScreenerResult {
   vol_support_1: number | null
   vol_support_2: number | null
   vol_support_3: number | null
+  vol_support_126_1: number | null
+  vol_support_126_2: number | null
+  vol_support_126_3: number | null
   dte: number
   expiration: string
   strikes: StrikeInfo[]
   best_csp_score: number
   using_hv_fallback: boolean
   expected_move: number
+  dist_from_52w_high_pct: number
 }
 
 export interface ExpirationRow {
@@ -60,9 +67,14 @@ export interface GroupedScreenerResult {
   vol_support_1: number | null
   vol_support_2: number | null
   vol_support_3: number | null
+  vol_support_126_1: number | null
+  vol_support_126_2: number | null
+  vol_support_126_3: number | null
   best_score: number
   using_hv_fallback: boolean
   expirations: ExpirationRow[]
+  dist_from_52w_high_pct: number
+  iv_hv_ratio: number | null
 }
 
 export interface ScreenerError {

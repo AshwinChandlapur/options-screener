@@ -31,7 +31,7 @@ const COLUMNS = [
   }),
   col.accessor('sma_ratio', {
     header: () => (
-      <span className="col-tip" title="SMA50 / SMA200 ratio  ·  >1 = bullish alignment  ·  Required for DITM">
+      <span className="col-tip col-scored" title="SMA50 / SMA200 ratio  ·  >1 = bullish alignment  ·  Required for DITM  ·  Used in scoring: SMA alignment (15 pts) + SMA50 slope (7 pts)">
         SMA50/200 ⓘ
       </span>
     ),
@@ -49,6 +49,30 @@ const COLUMNS = [
     header: () => (
       <span className="col-tip" title="IV Rank: how far today's IV sits between the 252d min and max (magnitude of the move).&#10;IV Percentile (P:): % of past days where IV was cheaper than today (frequency).&#10;&#10;For DITM: LOW rank = cheap options = better to buy">
         IV Rank ⓘ
+      </span>
+    ),
+    cell: () => null,
+  }),
+  col.accessor('dist_from_52w_high_pct', {
+    header: () => (
+      <span className="col-tip col-scored" title="Distance from 52-week high  ·  0% = at 52w high  ·  Scoring: ≤5% below = 8 pts, >30% below = 0 pts">
+        52W Dist ⓘ
+      </span>
+    ),
+    cell: () => null,
+  }),
+  col.accessor('iv_hv_ratio', {
+    header: () => (
+      <span className="col-tip col-scored" title="IV ÷ Historical Volatility (30d)  ·  INVERTED for buyers: low ratio = cheap options  ·  Scoring: <0.7 = 45 pts, >1.5 = 0 pts">
+        IV/HV ⓘ
+      </span>
+    ),
+    cell: () => null,
+  }),
+  col.accessor('trend_persistence', {
+    header: () => (
+      <span className="col-tip col-scored" title="% of last 60 sessions where price closed above SMA50  ·  Measures trend consistency for LEAPS horizon  ·  Scoring: ≥75% = 10 pts, <40% = 0 pts">
+        Trend% ⓘ
       </span>
     ),
     cell: () => null,
@@ -73,6 +97,9 @@ function groupResults(results: DitmResult[]): GroupedDitmResult[] {
         vol_resistance_1: r.vol_resistance_1,
         vol_resistance_2: r.vol_resistance_2,
         vol_resistance_3: r.vol_resistance_3,
+        dist_from_52w_high_pct: r.dist_from_52w_high_pct,
+        iv_hv_ratio: null,
+        trend_persistence: r.trend_persistence,
         best_score: 0,
         using_hv_fallback: false,
         expirations: [],
@@ -93,6 +120,8 @@ function groupResults(results: DitmResult[]): GroupedDitmResult[] {
   for (const g of map.values()) {
     g.expirations.sort((a, b) => a.dte - b.dte)
     g.best_score = Math.max(...g.expirations.map(e => e.best_score))
+    const bs = g.expirations.flatMap(e => e.strikes).find(s => s.is_best) ?? g.expirations[0]?.strikes[0]
+    g.iv_hv_ratio = bs?.iv_hv_ratio ?? null
   }
   return [...map.values()].sort((a, b) => b.best_score - a.best_score)
 }
@@ -179,9 +208,21 @@ export function DitmTable({ data }: Props) {
                   {header.column.getIsSorted() === 'desc' && ' ↓'}
                 </th>
               ))}
-              <th>DTE</th>
-              <th>Strike</th>
-              <th>Premium</th>
+              <th>
+                <span className="col-tip" title="Days to Expiration  ·  DITM positions typically held 180–365 DTE to minimize time decay (theta) as a % of the option's value">
+                  DTE ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="The strike price of the deep ITM call  ·  Well below current price  ·  Higher strike = cheaper option but less intrinsic value">
+                  Strike ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Option mid-price: (Bid + Ask) / 2  ·  Falls back to last-traded price if bid/ask = 0  ·  Includes both intrinsic and extrinsic value  ·  Per contract = × 100 shares">
+                  Premium ⓘ
+                </span>
+              </th>
               <th>
                 <span className="col-tip" title="Delta of the call option  ·  0.80–0.85 = DITM sweet spot  ·  High delta = stock substitute">
                   Delta ⓘ
@@ -289,6 +330,30 @@ export function DitmTable({ data }: Props) {
                           </span><br />
                           <span className="expiry-date">P:{r.iv_percentile != null ? r.iv_percentile.toFixed(0) : '—'}</span>
                         </>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {isNaN(r.dist_from_52w_high_pct)
+                      ? <span className="dim">—</span>
+                      : <span className={r.dist_from_52w_high_pct >= -5 ? 'score-good' : r.dist_from_52w_high_pct >= -15 ? 'score-caution' : 'score-bad'}>
+                          {r.dist_from_52w_high_pct.toFixed(1)}%
+                        </span>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {r.iv_hv_ratio == null
+                      ? <span className="dim">—</span>
+                      : <span className={r.iv_hv_ratio < 0.8 ? 'score-good' : r.iv_hv_ratio < 1.1 ? 'score-caution' : 'score-bad'}>
+                          {r.iv_hv_ratio.toFixed(2)}×
+                        </span>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {r.trend_persistence == null
+                      ? <span className="dim">—</span>
+                      : <span className={r.trend_persistence >= 75 ? 'score-good' : r.trend_persistence >= 50 ? 'score-caution' : 'score-bad'}>
+                          {r.trend_persistence.toFixed(0)}%
+                        </span>
                     }
                   </td>
                   <td rowSpan={totalRows}>

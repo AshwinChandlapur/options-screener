@@ -4,33 +4,42 @@ import type { KeyboardEvent } from 'react'
 const UNIVERSE_SIZE = 75
 
 const SCORE_LEGEND = [
-  { factor: '— ENV SCORE (×0.35) —', weight: null, detail: '', why: '', formula: '' },
+  { factor: '— ENV SCORE (×0.35) —', weight: null, detail: '', definition: '', why: '', formula: '' },
   { factor: 'IV / HV Ratio (inv.)', weight: 45, detail: '<0.7=45 · 0.7–0.9→27 · 0.9–1.1→13 · 1.1–1.5→2 · ≥1.5=0.',
+    definition: 'Implied Volatility divided by 30-day realized (Historical) Volatility — inverted for DITM buyers. A ratio below 1.0 means the market is pricing in less movement than the stock actually delivers, making options cheap relative to realized movement.',
     why: 'The sole IV metric — measures buyer\'s edge relative to realized vol. IV < HV means the market is pricing in LESS movement than the stock actually delivers. IV Rank was removed to avoid double-counting; IV/HV is more statistically precise and directly actionable.',
     formula: 'iv_hv_ratio = yfinance_IV / HV_30d\n  HV_30d = std(log(Closeₜ / Closeₜ₋₁), 30d) × √252\n  INVERTED: ratio < 1.0 = IV cheaper than realized vol\n  Used directly in earnings penalty: high IVR softens penalty' },
   { factor: 'Trend Strength',       weight: 30, detail: 'SMA Align(15) + SMA50 Slope(7) + 52W Prox(8).',
+    definition: 'A composite of three trend signals: SMA alignment (are price, SMA50, and SMA200 in bullish order?), SMA50 slope (is the trend accelerating or stalling?), and 52-week proximity (how close is price to its annual high?).',
     why: 'Composite replacing the old SMA Alignment + 52W Distance split. Three independent signals: alignment (direction), SMA50 slope (momentum of the trend), and 52W proximity (strength). A stock can be in alignment but with a flattening SMA50 — the slope catches that deterioration earlier.',
     formula: 'SMA Alignment: Price>SMA50>SMA200=15 · Price>SMA50=9 · SMA50>SMA200=4\n  SMA50 Slope: pct change in SMA50 over 10 days → >1%=7 · >0.3%=5+ · >0%=2+ · <-0.5%=0\n  52W Proximity: ≤5%=8 · ≤15%→3 · ≤30%→0' },
   { factor: 'Trend Persistence',    weight: 10, detail: '≥75%=10 · ≥60%→6 · ≥50%→3 · ≥40%=1 · <40%=0.',
+    definition: 'The percentage of the last 60 trading sessions in which the stock closed above its 50-day SMA. A high value means the uptrend has been consistently maintained, not just a recent bounce.',
     why: 'Replaces RSI(14) for LEAPS. RSI reacts to 2–3 week swings, which is noise for a 180–365 DTE position. Trend persistence measures what % of the last 60 sessions the stock closed above its SMA50 — directly relevant to whether the uptrend will persist over your holding period.',
     formula: '% of last 60 sessions where Close > SMA50\n  ≥75% = stock reliably above trend\n  <40% = choppy/downtrend, avoid' },
   { factor: 'Chain Median OI',      weight: 10, detail: 'log₁₀ scale · log₁₀(OI)/log₁₀(5000) × 10.',
+    definition: 'The median open interest across deep ITM call strikes in the 0.65–0.95 delta range. Open interest is the total number of outstanding contracts at those strikes — a measure of how actively traded the DITM chain is.',
     why: 'Deep ITM calls are illiquid by nature. Minimum chain OI confirms a real market exists, enabling a fair entry and an exit when you want to close or roll the position.',
     formula: 'Filters to 0.65 < delta < 0.95 (DITM call range)\n  chain_median_oi = np.median([oi for candidates])\n  pts = min(log10(OI) / log10(5000), 1.0) × 10' },
   { factor: 'Earnings Proximity',   weight: -15, detail: '<14d=−15/−8 · 14–30d=−8/−4 · 30–60d=−3/−1 · >60d=0.',
+    definition: 'A tiered penalty based on how many calendar days remain until the next earnings announcement, softened when IV Rank is already above 50 (meaning the market has already priced in earnings uncertainty).',
     why: 'Tiered by calendar proximity AND softened when IV Rank >50 (earnings already priced in). The left value is for IVR ≤50, right for IVR >50. Immediate earnings (<14 days) are always penalized heavily — gap-down risk destroys intrinsic value regardless of IV.',
     formula: 'days_to_earnings = (earnings_date − today).days\n  IVR ≤ 50 : < 14d→−15 · 14–30d→−8 · 30–60d→−3\n  IVR > 50 : < 14d→−8  · 14–30d→−4 · 30–60d→−1\n  > 60 days → 0 (no penalty)' },
-  { factor: '— STRIKE SCORE (×0.65) —', weight: null, detail: '', why: '', formula: '' },
+  { factor: '— STRIKE SCORE (×0.65) —', weight: null, detail: '', definition: '', why: '', formula: '' },
   { factor: 'Delta',                weight: 35, detail: '0.80–0.85=35 · ±band=28 · further out=18/9 · <0.65=0.',
+    definition: 'The rate of change of the option price per $1 move in the stock. For a deep ITM call, delta near 0.80–0.85 means the option moves $0.80–$0.85 for every $1 the stock moves — capturing most of the upside while spending less than the full share price.',
     why: 'Delta 0.80–0.85 is the DITM sweet spot: 80–85% correlation to stock movement while paying less than 100% of the stock price. Moneyness% was removed — it is mathematically derived from delta for a given IV/expiry and was double-counting this same information.',
     formula: 'Black-Scholes call delta:\n  d1 = (ln(S/K) + (r + 0.5σ²)T) / (σ√T)\n  call_delta = N(d1)\n  σ = yfinance IV; falls back to HV_30d if IV < 15%' },
   { factor: 'Extrinsic %',          weight: 35, detail: '≤1%=35 · ≤2%→26 · ≤4%→14 · ≤6%→5 · ≤9%→0 · >9%=0.',
+    definition: 'The time premium embedded in the option price above its intrinsic value (how much the stock is already above the strike), expressed as a percentage of the stock price. This portion decays to zero by expiration regardless of stock direction.',
     why: 'Extrinsic value is the time premium you pay that will DECAY to zero by expiration regardless of stock direction. Every dollar of extrinsic is a sunk cost. This is the core efficiency metric of DITM buying — minimizing what you pay above intrinsic value.',
     formula: 'intrinsic = max(0, price − strike)\n  extrinsic = max(0, premium − intrinsic)\n  extrinsic_pct = extrinsic / stock_price × 100\n  Normalized by stock price, not premium — comparable across price levels' },
   { factor: 'Bid-Ask Spread',       weight: 20, detail: '≤1%=20 · ≤3%→13 · ≤5%→7 · ≤8%→2 · >12%=0.',
+    definition: 'The percentage difference between the ask and bid prices relative to the option midpoint: (ask − bid) / mid × 100. Lower means a tighter market and cheaper execution cost to enter and exit.',
     why: 'Deep ITM calls are notoriously illiquid — spreads of 5–15% on the premium are common. A wide spread costs you on entry AND exit. For a position held for months, spread quality compounds in importance. Weight raised to 20 to reflect this.',
     formula: 'spread_pct = (ask − bid) / mid × 100\n  Per-strike bid/ask from yfinance call chain' },
   { factor: 'OI / Volume',          weight: 10, detail: '≥500=10 · ≥200→6 · ≥100→3 · ≥50→1 · <50=0.',
+    definition: 'Open interest (total outstanding contracts, used when market is closed) or today\'s volume (used when market is open) at this specific deep ITM strike — a direct count of active participants.',
     why: 'Open interest at this specific deep strike. Low OI on deep ITM calls means you may be the only participant. Closing a position at mid becomes difficult — you face the full spread on exit.',
     formula: 'Uses volume if US market is open (9:30–16:00 ET weekday)\n  Otherwise uses openInterest at this specific call strike' },
 ]
@@ -171,9 +180,10 @@ export function DitmInput({ onScan, onCustom, loading }: Props) {
                       </span>
                       <span className="score-factor-detail">{f.detail}</span>
                     </div>
-                    {expandedFactor === f.factor && (f.why || f.formula) && (
+                    {expandedFactor === f.factor && (f.definition || f.why || f.formula) && (
                       <div className="score-factor-expanded">
-                        {f.why && <p className="score-factor-why">{f.why}</p>}
+                        {f.definition && <p className="score-factor-definition"><strong>What</strong>{f.definition}</p>}
+                        {f.why && <p className="score-factor-why"><strong>Why</strong>{f.why}</p>}
                         {f.formula && <pre className="score-factor-formula">{f.formula}</pre>}
                       </div>
                     )}

@@ -26,8 +26,17 @@ const COLUMNS = [
   col.accessor('price',         { header: 'Price',      cell: () => null }),
   col.accessor('vol_resistance_1', {
     header: () => (
-      <span className="col-tip" title="Volume Profile resistance levels above current price (top-3 high-volume bins above price)">
-        Vol Resistance ⓘ
+      <span className="col-tip" title="Volume Profile resistance levels above current price (252-day / 1Y lookback)  ·  Top-3 high-volume bins above price">
+        Vol Resistance 1Y ⓘ
+      </span>
+    ),
+    cell: () => null,
+    enableSorting: false,
+  }),
+  col.accessor('vol_resistance_126_1', {
+    header: () => (
+      <span className="col-tip col-scored" title="Volume Profile resistance levels above current price (126-day / 6M lookback)  ·  Same method using only the most recent 6 months  ·  Better reflects current institutional memory  ·  Used in scoring: Dist vs Resistance (13 pts)">
+        Vol Resistance 6M ⓘ
       </span>
     ),
     cell: () => null,
@@ -35,7 +44,7 @@ const COLUMNS = [
   }),
   col.accessor('sma_ratio',     {
     header: () => (
-      <span className="col-tip" title="SMA50 / SMA200 ratio  ·  >1 = bullish alignment">
+      <span className="col-tip col-scored" title="SMA50 / SMA200 ratio  ·  >1 = bullish alignment  ·  Used in scoring: SMA alignment (15 pts)">
         SMA50/200 ⓘ
       </span>
     ),
@@ -43,7 +52,7 @@ const COLUMNS = [
   }),
   col.accessor('rsi',           {
     header: () => (
-      <span className="col-tip" title="RSI(14) Wilder-smoothed  ·  >70 overbought  ·  <30 oversold">
+      <span className="col-tip col-scored" title="RSI(14) Wilder-smoothed  ·  >70 overbought  ·  <30 oversold  ·  Used in scoring: RSI (10 pts)">
         RSI(14) ⓘ
       </span>
     ),
@@ -51,8 +60,24 @@ const COLUMNS = [
   }),
   col.accessor('iv_rank',       {
     header: () => (
-      <span className="col-tip" title="IV Rank: how far today's IV sits between the 252d min and max (magnitude of the move).&#10;IV Percentile (P:): % of past days where IV was cheaper than today (frequency).&#10;&#10;Formula: IV Rank = (HV_today − HV_min_252) / (HV_max_252 − HV_min_252) × 100&#10;Score uses IV Rank (25 pts) + IV÷HV Ratio (20 pts)">
+      <span className="col-tip col-scored" title="IV Rank: how far today's IV sits between the 252d min and max (magnitude of the move).&#10;IV Percentile (P:): % of past days where IV was cheaper than today (frequency).&#10;&#10;Formula: IV Rank = (HV_today − HV_min_252) / (HV_max_252 − HV_min_252) × 100&#10;Score uses IV Rank (25 pts) + IV÷HV Ratio (20 pts)">
         IV Rank ⓘ
+      </span>
+    ),
+    cell: () => null,
+  }),
+  col.accessor('dist_from_52w_high_pct', {
+    header: () => (
+      <span className="col-tip col-scored" title="Distance from 52-week high  ·  0% = at 52w high  ·  Negative = below high  ·  Scoring: ≤5% below = 15 pts, ≥20% below = 0 pts">
+        52W Dist ⓘ
+      </span>
+    ),
+    cell: () => null,
+  }),
+  col.accessor('iv_hv_ratio', {
+    header: () => (
+      <span className="col-tip col-scored" title="IV ÷ Historical Volatility (30d)  ·  >1.0 = options priced rich vs realized moves  ·  Scoring: ≥1.7 = 20 pts, <0.9 = 0 pts">
+        IV/HV ⓘ
       </span>
     ),
     cell: () => null,
@@ -77,6 +102,11 @@ function groupResults(results: CcResult[]): GroupedCcResult[] {
         vol_resistance_1: r.vol_resistance_1,
         vol_resistance_2: r.vol_resistance_2,
         vol_resistance_3: r.vol_resistance_3,
+        vol_resistance_126_1: r.vol_resistance_126_1,
+        vol_resistance_126_2: r.vol_resistance_126_2,
+        vol_resistance_126_3: r.vol_resistance_126_3,
+        dist_from_52w_high_pct: r.dist_from_52w_high_pct,
+        iv_hv_ratio: null,
         best_score: 0,
         using_hv_fallback: false,
         expirations: [],
@@ -98,6 +128,8 @@ function groupResults(results: CcResult[]): GroupedCcResult[] {
   for (const g of map.values()) {
     g.expirations.sort((a, b) => a.dte - b.dte)
     g.best_score = Math.max(...g.expirations.map(e => e.best_score))
+    const bs = g.expirations.flatMap(e => e.strikes).find(s => s.is_best) ?? g.expirations[0]?.strikes[0]
+    g.iv_hv_ratio = bs?.iv_hv_ratio ?? null
   }
   return [...map.values()].sort((a, b) => b.best_score - a.best_score)
 }
@@ -142,7 +174,7 @@ export function CcTable({ data }: Props) {
     return <span className={cls}>{v.toFixed(1)}%</span>
   }
 
-  const scoreFmt = (env: number | undefined, strike: number | undefined, final: number | undefined, highlight = false) => {
+  const scoreFmt = (env: number | undefined, strike: number | undefined, final: number | undefined, envDetail?: string, strikeDetail?: string, highlight = false) => {
     if (final == null || isNaN(final)) return <span className="dim">—</span>
     const cls = final >= 70 ? 'score-good' : final >= 45 ? 'score-caution' : 'score-bad'
     return (
@@ -155,6 +187,16 @@ export function CcTable({ data }: Props) {
         {env != null && strike != null && (
           <span style={{ fontSize: '10px', opacity: 0.7, display: 'block' }}>
             E{env.toFixed(0)} S{strike.toFixed(0)}
+          </span>
+        )}
+        {envDetail && (
+          <span style={{ fontSize: '9px', color: '#7a7a9a', display: 'block', lineHeight: '1.3', marginTop: '1px', fontWeight: 400 }}>
+            {envDetail}
+          </span>
+        )}
+        {strikeDetail && (
+          <span style={{ fontSize: '9px', color: '#7a7a9a', display: 'block', lineHeight: '1.3', fontWeight: 400 }}>
+            {strikeDetail}
           </span>
         )}
       </span>
@@ -184,7 +226,11 @@ export function CcTable({ data }: Props) {
                   {header.column.getIsSorted() === 'desc' && ' ↓'}
                 </th>
               ))}
-              <th>DTE</th>
+              <th>
+                <span className="col-tip" title="Days to Expiration  ·  Number of calendar days remaining until the option expires  ·  Score uses expirations within your min–max DTE range">
+                  DTE ⓘ
+                </span>
+              </th>
               <th>
                 <span className="col-tip" title="Expected Move = price × HV(30d) × √(DTE/365)  ·  1σ range  ·  Ceiling = price + EM">
                   Exp. Move ⓘ
@@ -195,14 +241,26 @@ export function CcTable({ data }: Props) {
                   Strike ⓘ
                 </span>
               </th>
-              <th>Premium</th>
-              <th>Delta</th>
+              <th>
+                <span className="col-tip" title="Option mid-price: (Bid + Ask) / 2  ·  Falls back to last-traded price if bid/ask = 0 (market closed)  ·  Per contract = × 100 shares">
+                  Premium ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Black-Scholes call delta  ·  Positive for calls  ·  Approximates probability of expiring in-the-money (shares called away)  ·  +0.20 to +0.25 = sweet spot (20–25% assignment chance)">
+                  Delta ⓘ
+                </span>
+              </th>
               <th>
                 <span className="col-tip" title="(Ask − Bid) / Mid × 100  ·  Lower = tighter market">
                   Spread% ⓘ
                 </span>
               </th>
-              <th>Ann. Return</th>
+              <th>
+                <span className="col-tip" title="(Premium / Stock Price) × (365 / DTE) × 100  ·  Annualized yield on the shares you already own  ·  Additional income on top of any capital appreciation">
+                  Ann. Return ⓘ
+                </span>
+              </th>
               <th
                 className="sortable"
                 onClick={() => scoreCol?.toggleSorting(scoreSorted === 'asc')}
@@ -265,6 +323,23 @@ export function CcTable({ data }: Props) {
                     })()}
                   </td>
                   <td rowSpan={totalRows}>
+                    {(() => {
+                      const levels = [r.vol_resistance_126_1, r.vol_resistance_126_2, r.vol_resistance_126_3]
+                        .filter((v): v is number => v != null)
+                      if (levels.length === 0) return <span className="dim">—</span>
+                      return (
+                        <span className="vol-support">
+                          {levels.map((lvl, i) => (
+                            <span key={i} className="vol-support-level">
+                              {fmt2(lvl)}
+                              <span className="vol-support-pct"> {((lvl - r.price) / r.price * 100).toFixed(1)}%</span>
+                            </span>
+                          ))}
+                        </span>
+                      )
+                    })()}
+                  </td>
+                  <td rowSpan={totalRows}>
                     {r.sma_ratio == null || isNaN(r.sma_ratio)
                       ? <span className="dim">—</span>
                       : <span className={r.sma_ratio >= 1 ? 'positive' : 'negative'}>{r.sma_ratio.toFixed(4)}</span>
@@ -285,6 +360,22 @@ export function CcTable({ data }: Props) {
                           </span><br />
                           <span className="expiry-date">P:{r.iv_percentile != null ? r.iv_percentile.toFixed(0) : '—'}</span>
                         </>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {isNaN(r.dist_from_52w_high_pct)
+                      ? <span className="dim">—</span>
+                      : <span className={r.dist_from_52w_high_pct >= -5 ? 'score-good' : r.dist_from_52w_high_pct >= -15 ? 'score-caution' : 'score-bad'}>
+                          {r.dist_from_52w_high_pct.toFixed(1)}%
+                        </span>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {r.iv_hv_ratio == null
+                      ? <span className="dim">—</span>
+                      : <span className={r.iv_hv_ratio >= 1.4 ? 'score-good' : r.iv_hv_ratio >= 1.0 ? 'score-caution' : 'score-bad'}>
+                          {r.iv_hv_ratio.toFixed(2)}×
+                        </span>
                     }
                   </td>
                   <td rowSpan={totalRows}>
@@ -328,7 +419,7 @@ export function CcTable({ data }: Props) {
                 </td>
                 <td>{fmtSpread(bestStrike.bid_ask_spread_pct)}</td>
                 <td>{fmtAnn(bestStrike.annualized_return)}</td>
-                <td>{scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.cc_score, true)}</td>
+                <td>{scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.cc_score, bestStrike.env_detail, bestStrike.strike_detail, true)}</td>
               </tr>
             )
 
@@ -349,7 +440,7 @@ export function CcTable({ data }: Props) {
                     </td>
                     <td>{fmtSpread(s.bid_ask_spread_pct)}</td>
                     <td>{fmtAnn(s.annualized_return)}</td>
-                    <td>{scoreFmt(s.env_score, s.strike_score, s.cc_score)}</td>
+                    <td>{scoreFmt(s.env_score, s.strike_score, s.cc_score, s.env_detail, s.strike_detail)}</td>
                   </tr>
                 )
                 absRowIdx++

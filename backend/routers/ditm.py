@@ -71,6 +71,7 @@ class DitmStrikeResultOut(BaseModel):
     is_best: bool
     iv_fallback: bool
     stale_premium: bool
+    iv_hv_ratio: Optional[float]
 
 
 class DitmResultOut(BaseModel):
@@ -90,6 +91,8 @@ class DitmResultOut(BaseModel):
     strikes: List[DitmStrikeResultOut]
     best_ditm_score: float
     using_hv_fallback: bool
+    dist_from_52w_high_pct: Optional[float]
+    trend_persistence: Optional[float]
 
 
 class DitmErrorOut(BaseModel):
@@ -138,11 +141,14 @@ def _to_result_out(r: DitmResult) -> DitmResultOut:
                 is_best=s.is_best,
                 iv_fallback=s.iv_fallback,
                 stale_premium=s.stale_premium,
+                iv_hv_ratio=s.iv_hv_ratio,
             )
             for s in r.strikes
         ],
         best_ditm_score=r.best_ditm_score,
         using_hv_fallback=r.using_hv_fallback,
+        dist_from_52w_high_pct=r.dist_from_52w_high_pct,
+        trend_persistence=r.trend_persistence,
     )
 
 

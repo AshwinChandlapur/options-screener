@@ -14,6 +14,7 @@ export interface DitmStrikeInfo {
   is_best: boolean
   iv_fallback: boolean
   stale_premium: boolean
+  iv_hv_ratio: number | null
 }
 
 export interface DitmResult {
@@ -33,6 +34,8 @@ export interface DitmResult {
   strikes: DitmStrikeInfo[]
   best_ditm_score: number
   using_hv_fallback: boolean
+  dist_from_52w_high_pct: number
+  trend_persistence: number | null
 }
 
 export interface DitmExpirationRow {
@@ -59,6 +62,9 @@ export interface GroupedDitmResult {
   best_score: number
   using_hv_fallback: boolean
   expirations: DitmExpirationRow[]
+  dist_from_52w_high_pct: number
+  iv_hv_ratio: number | null
+  trend_persistence: number | null
 }
 
 export interface DitmError {
