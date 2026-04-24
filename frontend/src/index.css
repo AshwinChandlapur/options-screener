@@ -520,6 +520,29 @@ body {
   color: #cbd5e1;
 }
 
+/* Sticky leading columns: Symbol + Price stay visible while the rest scrolls. */
+.screener-table th.sticky-col,
+.screener-table td.sticky-col {
+  position: sticky;
+  z-index: 2;
+  background: #12151f;
+}
+.screener-table thead th.sticky-col {
+  z-index: 4;
+  background: #1a1d27;
+}
+.screener-table th.sticky-col-1,
+.screener-table td.sticky-col-1 { left: 0; min-width: 72px; }
+.screener-table th.sticky-col-2,
+.screener-table td.sticky-col-2 { left: 72px; min-width: 72px; box-shadow: 1px 0 0 0 #2d3148; }
+/* Sticky cell backgrounds must track row state (hover, earnings warning, sub-exp) */
+.screener-table tbody tr:hover td.sticky-col { background: #1e2235; }
+.ticker-group.group-earnings-warn td.sticky-col { background: #2a1f00; }
+.ticker-group.group-earnings-warn:hover td.sticky-col,
+.ticker-group.group-earnings-warn tr:hover td.sticky-col { background: #332600; }
+.sub-exp-row > td.sticky-col,
+.alt-strike-row > td.sticky-col { background: #0f1117; }
+
 /* Row states */
 .row-earnings-warn { background: #2a1f00; }
 .row-earnings-warn:hover { background: #332600; }

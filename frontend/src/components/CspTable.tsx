@@ -74,8 +74,8 @@ function envColor(pts: Record<string, number>, key: string): string {
 // Ticker-level columns — for header rendering + sorting only.
 // Cells are rendered manually in the tbody via rowSpan.
 const COLUMNS = [
-  col.accessor('symbol', { header: 'Symbol', cell: () => null }),
-  col.accessor('price', { header: 'Price', cell: () => null }),
+  col.accessor('symbol', { header: 'Symbol', cell: () => null, meta: { sticky: 1 } }),
+  col.accessor('price', { header: 'Price', cell: () => null, meta: { sticky: 2 } }),
   col.accessor('bb_lower', {
     header: () => (
       <span className="col-tip" title="Bollinger Bands (20-period, 2σ) · Upper / Middle / Lower band around the closing price">
@@ -261,17 +261,24 @@ export function CspTable({ data }: Props) {
         <thead>
           {table.getHeaderGroups().map(hg => (
             <tr key={hg.id}>
-              {hg.headers.map(header => (
-                <th
-                  key={header.id}
-                  onClick={header.column.getToggleSortingHandler()}
-                  className={header.column.getCanSort() ? 'sortable' : ''}
-                >
-                  {flexRender(header.column.columnDef.header, header.getContext())}
-                  {header.column.getIsSorted() === 'asc' && ' ↑'}
-                  {header.column.getIsSorted() === 'desc' && ' ↓'}
-                </th>
-              ))}
+              {hg.headers.map(header => {
+                const stickyIdx = (header.column.columnDef.meta as { sticky?: number } | undefined)?.sticky
+                const classes = [
+                  header.column.getCanSort() ? 'sortable' : '',
+                  stickyIdx ? `sticky-col sticky-col-${stickyIdx}` : '',
+                ].filter(Boolean).join(' ')
+                return (
+                  <th
+                    key={header.id}
+                    onClick={header.column.getToggleSortingHandler()}
+                    className={classes}
+                  >
+                    {flexRender(header.column.columnDef.header, header.getContext())}
+                    {header.column.getIsSorted() === 'asc' && ' ↑'}
+                    {header.column.getIsSorted() === 'desc' && ' ↓'}
+                  </th>
+                )
+              })}
               <th>
                 <span className="col-tip" title="Days to Expiration  ·  Number of calendar days remaining until the option expires  ·  Score uses expirations within your min–max DTE range">
                   DTE ⓘ
@@ -364,10 +371,10 @@ export function CspTable({ data }: Props) {
 
                 {/* Ticker-level cells — only on absolute first row, spanning all rows */}
                 {isFirstRow && <>
-                  <td rowSpan={totalRows} className="ticker-cell">
+                  <td rowSpan={totalRows} className="ticker-cell sticky-col sticky-col-1">
                     <strong>{r.symbol}</strong>
                   </td>
-                  <td rowSpan={totalRows}>{fmt2(r.price)}</td>
+                  <td rowSpan={totalRows} className="sticky-col sticky-col-2">{fmt2(r.price)}</td>
                   <td rowSpan={totalRows}>
                     <span className="bb-bands">
                       <span className="bb-upper">{fmt2(r.bb_upper)}</span>
