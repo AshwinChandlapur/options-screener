@@ -500,11 +500,13 @@ def compute_csp_strike_score(
 
     # --- Distance vs Nearest Support Below Strike (13 pts) ---
     p = 0.0
+    _csp_dist_pct: float | None = None
     supports = [s for s in [vol_support_1, vol_support_2, vol_support_3] if s is not None]
     supports_below = [s for s in supports if s < strike]
     if supports_below:
         nearest = max(supports_below)
         gap_pct = (strike - nearest) / strike * 100.0
+        _csp_dist_pct = round(gap_pct, 2)
         if gap_pct <= 0:
             p = 13.0
         elif gap_pct <= 5:
@@ -517,11 +519,13 @@ def compute_csp_strike_score(
 
     # --- Expected Move Buffer (15 pts) ---
     p = 0.0
+    _em_buffer_pct: float = float('nan')
     if not _math.isnan(iv_used) and iv_used > 0 and dte > 0:
         T = dte / 365.0
         em = current_price * iv_used * _math.sqrt(T)
         em_lower = current_price - em
         sigmas_outside = (em_lower - strike) / em
+        _em_buffer_pct = round(sigmas_outside * 100, 2)
         if sigmas_outside >= 0.20:
             p = 15.0
         elif sigmas_outside >= 0.0:
@@ -570,7 +574,13 @@ def compute_csp_strike_score(
     score += p; bk['LQ'] = p
 
     detail = ' '.join(f"{k}:{round(v)}" for k, v in bk.items())
-    return round(max(0.0, min(100.0, score)), 1), detail
+    raw = {
+        'dist_pct': _csp_dist_pct,
+        'em_buffer_pct': _em_buffer_pct,
+        'otm_pct': otm_pct,
+        'lq_count': liquidity_count,
+    }
+    return round(max(0.0, min(100.0, score)), 1), detail, raw
 
 
 def compute_csp_final_score(env_score: float, strike_score: float) -> float:
@@ -664,11 +674,13 @@ def compute_cc_strike_score(
 
     # --- Distance vs Nearest Resistance Above Current Price (13 pts) ---
     p = 0.0
+    _cc_dist_pct: float | None = None
     resistances = [r for r in [vol_resistance_1, vol_resistance_2, vol_resistance_3] if r is not None]
     resistances_above_price = [r for r in resistances if r > current_price]
     if resistances_above_price:
         nearest_R = min(resistances_above_price)
         gap_pct = (nearest_R - strike) / strike * 100.0
+        _cc_dist_pct = round(gap_pct, 2)
         if gap_pct <= 0:
             p = 13.0
             if all(r <= strike for r in resistances_above_price):
@@ -681,11 +693,13 @@ def compute_cc_strike_score(
 
     # --- Expected Move Buffer (15 pts) ---
     p = 0.0
+    _cc_em_buffer_pct: float = float('nan')
     if not _math.isnan(iv_used) and iv_used > 0 and dte > 0:
         T = dte / 365.0
         em = current_price * iv_used * _math.sqrt(T)
         em_upper = current_price + em
         sigmas_outside = (strike - em_upper) / em
+        _cc_em_buffer_pct = round(sigmas_outside * 100, 2)
         if sigmas_outside >= 0.20:
             p = 15.0
         elif sigmas_outside >= 0.0:
@@ -734,7 +748,13 @@ def compute_cc_strike_score(
     score += p; bk['LQ'] = p
 
     detail = ' '.join(f"{k}:{round(v)}" for k, v in bk.items())
-    return round(max(0.0, min(100.0, score)), 1), detail
+    raw = {
+        'dist_pct': _cc_dist_pct,
+        'em_buffer_pct': _cc_em_buffer_pct,
+        'otm_pct': otm_pct,
+        'lq_count': liquidity_count,
+    }
+    return round(max(0.0, min(100.0, score)), 1), detail, raw
 
 
 

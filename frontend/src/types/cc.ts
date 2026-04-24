@@ -13,6 +13,10 @@ export interface CcStrikeInfo {
   iv_fallback: boolean
   stale_premium: boolean
   iv_hv_ratio: number | null
+  dist_pct: number | null
+  em_buffer_pct: number | null
+  otm_pct: number
+  lq_count: number
 }
 
 export interface CcResult {

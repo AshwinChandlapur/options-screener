@@ -30,7 +30,7 @@ function parseEnvDetail(detail: string): Record<string, number> {
   return out
 }
 const ENV_MAX: Record<string, number> = { IV: 25, IH: 20, SMA: 15, '52W': 15, RSI: 10 }
-const STRIKE_MAX: Record<string, number> = { 'Δ': 18, 'BA': 22 }
+const STRIKE_MAX: Record<string, number> = { 'Δ': 18, 'Res': 13, 'EM': 15, 'OTM': 12, 'BA': 22, 'LQ': 20 }
 function strikeSub(detail: string, key: string) {
   const pts = parseEnvDetail(detail)
   const v = pts[key], max = STRIKE_MAX[key]
@@ -281,6 +281,21 @@ export function CcTable({ data }: Props) {
                 </span>
               </th>
               <th>
+                <span className="col-tip" title="% gap from strike to nearest vol-resistance above  ·  0% = strike at or above resistance  ·  — if no resistance above in range">
+                  Res ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="How far the strike is outside the 1σ expected upward move  ·  +20% = well above the ceiling  ·  negative = strike is inside the move">
+                  EM ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Open Interest (or Volume when market open) at this specific strike  ·  Higher = more liquid">
+                  OI/Vol ⓘ
+                </span>
+              </th>
+              <th>
                 <span className="col-tip" title="(Premium / Stock Price) × (365 / DTE) × 100  ·  Annualized yield on the shares you already own  ·  Additional income on top of any capital appreciation">
                   Ann. Return ⓘ
                 </span>
@@ -417,6 +432,7 @@ export function CcTable({ data }: Props) {
                 <td className="strike-cell best-strike">
                   <span className="strike-price">{fmt2(bestStrike.strike)}</span>
                   <span className="strike-fall" style={{ color: '#4ade80' }}> +{((bestStrike.strike - r.price) / r.price * 100).toFixed(1)}%</span>
+                  {strikeSub(bestStrike.strike_detail, 'OTM')}
                   {altStrikes.length > 0 && (
                     <button className="strike-toggle" onClick={() => toggleStrikes(key)}>
                       {showAlts ? '▲ hide' : `▼ ${altStrikes.length} more`}
@@ -432,6 +448,21 @@ export function CcTable({ data }: Props) {
                   {strikeSub(bestStrike.strike_detail, 'Δ')}
                 </td>
                 <td>{fmtSpread(bestStrike.bid_ask_spread_pct)}{strikeSub(bestStrike.strike_detail, 'BA')}</td>
+                <td>
+                  {bestStrike.dist_pct == null
+                    ? <span className="dim">—</span>
+                    : <>{bestStrike.dist_pct >= 0 ? '+' : ''}{bestStrike.dist_pct.toFixed(1)}%{strikeSub(bestStrike.strike_detail, 'Res')}</>}
+                </td>
+                <td>
+                  {bestStrike.em_buffer_pct == null
+                    ? <span className="dim">—</span>
+                    : <>{bestStrike.em_buffer_pct >= 0 ? '+' : ''}{bestStrike.em_buffer_pct.toFixed(0)}%{strikeSub(bestStrike.strike_detail, 'EM')}</>}
+                </td>
+                <td>
+                  {bestStrike.lq_count >= 1000
+                    ? <>{(bestStrike.lq_count / 1000).toFixed(1)}k{strikeSub(bestStrike.strike_detail, 'LQ')}</>
+                    : <>{bestStrike.lq_count}{strikeSub(bestStrike.strike_detail, 'LQ')}</>}
+                </td>
                 <td>{fmtAnn(bestStrike.annualized_return)}</td>
                 <td>{scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.cc_score, bestStrike.env_detail, bestStrike.strike_detail, true)}</td>
               </tr>
@@ -444,6 +475,7 @@ export function CcTable({ data }: Props) {
                     <td className="strike-cell">
                       <span className="strike-price">{fmt2(s.strike)}</span>
                       <span className="strike-fall" style={{ color: '#4ade80' }}> +{((s.strike - r.price) / r.price * 100).toFixed(1)}%</span>
+                      {strikeSub(s.strike_detail, 'OTM')}
                     </td>
                     <td className="prem-cell">${s.premium.toFixed(2)}</td>
                     <td>
@@ -454,6 +486,21 @@ export function CcTable({ data }: Props) {
                       {strikeSub(s.strike_detail, 'Δ')}
                     </td>
                     <td>{fmtSpread(s.bid_ask_spread_pct)}{strikeSub(s.strike_detail, 'BA')}</td>
+                    <td>
+                      {s.dist_pct == null
+                        ? <span className="dim">—</span>
+                        : <>{s.dist_pct >= 0 ? '+' : ''}{s.dist_pct.toFixed(1)}%{strikeSub(s.strike_detail, 'Res')}</>}
+                    </td>
+                    <td>
+                      {s.em_buffer_pct == null
+                        ? <span className="dim">—</span>
+                        : <>{s.em_buffer_pct >= 0 ? '+' : ''}{s.em_buffer_pct.toFixed(0)}%{strikeSub(s.strike_detail, 'EM')}</>}
+                    </td>
+                    <td>
+                      {s.lq_count >= 1000
+                        ? <>{(s.lq_count / 1000).toFixed(1)}k{strikeSub(s.strike_detail, 'LQ')}</>
+                        : <>{s.lq_count}{strikeSub(s.strike_detail, 'LQ')}</>}
+                    </td>
                     <td>{fmtAnn(s.annualized_return)}</td>
                     <td>{scoreFmt(s.env_score, s.strike_score, s.cc_score, s.env_detail, s.strike_detail)}</td>
                   </tr>

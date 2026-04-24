@@ -80,6 +80,10 @@ class CspStrikeResultOut(BaseModel):
     iv_fallback: bool
     stale_premium: bool
     iv_hv_ratio: Optional[float]
+    dist_pct: Optional[float]
+    em_buffer_pct: Optional[float]
+    otm_pct: float
+    lq_count: int
 
 
 class CspResultOut(BaseModel):
@@ -240,6 +244,10 @@ def _to_out(r: CspResult) -> CspResultOut:
                 iv_fallback=s.iv_fallback,
                 stale_premium=s.stale_premium,
                 iv_hv_ratio=s.iv_hv_ratio,
+                dist_pct=s.dist_pct,
+                em_buffer_pct=s.em_buffer_pct,
+                otm_pct=s.otm_pct,
+                lq_count=s.lq_count,
             )
             for s in r.strikes
         ],

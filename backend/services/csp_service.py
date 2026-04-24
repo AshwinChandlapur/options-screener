@@ -50,6 +50,10 @@ class CspStrikeResult:
     iv_fallback: bool = False   # True when hv_sigma was used instead of yfinance IV
     stale_premium: bool = False # True when lastPrice was used instead of (bid+ask)/2
     iv_hv_ratio: Optional[float] = None   # sig / hv_sigma for this strike (None when HV fallback used)
+    dist_pct: Optional[float] = None      # % gap from strike to nearest support below
+    em_buffer_pct: Optional[float] = None # how far strike is outside 1σ move, as % of 1σ
+    otm_pct: float = 0.0                  # % below current price
+    lq_count: int = 0                     # OI or volume used for LQ score
 
 
 @dataclass
@@ -230,7 +234,7 @@ def process_symbol(
                             chain_median_oi=chain_median_oi,
                             earnings_within_dte=earnings_within_dte,
                         )
-                        strike_s, strike_detail = compute_csp_strike_score(
+                        strike_s, strike_detail, strike_raw = compute_csp_strike_score(
                             delta=d,
                             current_price=current_price,
                             strike=sp,
@@ -259,6 +263,10 @@ def process_symbol(
                             iv_hv_ratio=iv_hv_ratio_val,
                             iv_fallback=used_hv,
                             stale_premium=stale_prem,
+                            dist_pct=strike_raw.get('dist_pct'),
+                            em_buffer_pct=None if __import__('math').isnan(strike_raw.get('em_buffer_pct', float('nan'))) else strike_raw.get('em_buffer_pct'),
+                            otm_pct=strike_raw.get('otm_pct', 0.0),
+                            lq_count=int(strike_raw.get('lq_count', 0)),
                         ))
                     except Exception:
                         continue
