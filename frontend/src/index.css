@@ -197,7 +197,6 @@ body {
 .filter-toggle input { cursor: pointer; accent-color: #4f6ef7; }
 .filter-hint { font-size: 11px; color: #475569; }
 .col-tip { cursor: help; border-bottom: 1px dashed #475569; }
-.col-tip.col-scored { border-bottom: 2px solid rgba(99, 102, 241, 0.6); }
 .slope-n { font-size: 11px; color: #64748b; }
 /* RSI */
 /* RSI: green = ideal (40-70), yellow = overbought caution (>70), red = oversold/bad (<30) */
