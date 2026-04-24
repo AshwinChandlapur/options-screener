@@ -9,7 +9,7 @@ const SCORE_LEGEND = [
     definition: 'A percentile (0–100) showing where today\'s implied volatility sits within its 252-day range. 100 = highest IV of the past year; 0 = lowest.',
     why: 'Sell premium when options are historically expensive. High IV rank = inflated call prices → more premium collected for the same risk. This is the primary edge in premium selling.',
     formula: 'Uses 30-day rolling HV as IV proxy.\n  iv_rank = (HV_today − HV_min_252) / (HV_max_252 − HV_min_252) × 100\n  HV = std(log(Closeₜ / Closeₜ₋₁), 30d) × √252' },
-  { factor: 'IV / HV Ratio',   weight: 20,  detail: '<0.9=0 · 0.9–1.1→5 · 1.1–1.4→10 · 1.4–1.7→16 · ≥1.7=20.',
+  { factor: 'IV / HV Ratio',   weight: 20,  detail: '<0.8=0 · 0.8–0.9→2 · 0.9–1.1→5 · 1.1–1.4→10 · 1.4–1.7→16 · ≥1.7=20.',
     definition: 'Implied Volatility divided by 30-day realized (Historical) Volatility. Measures whether options are priced rich or cheap relative to actual recent movement in the stock.',
     why: "IV > HV means the market is pricing in more movement than the stock actually makes — the seller's edge. IV < HV = options are cheap; you'd be giving away premium below fair value.",
     formula: 'iv_hv_ratio = yfinance_IV / HV_30d\n  Falls back to HV if IV < 15% (stale market-closed data)' },
