@@ -83,6 +83,29 @@ const DECISION_STEPS = [
   { n: 4, q: 'Can I articulate the thesis that overrides those drags?',  a: 'If no, skip. If yes, size normally and write the thesis down before entering.' },
 ]
 
+interface ExitNode { cond: string; action: string; tone?: 'close' | 'hold' | 'monitor' | 'assign' | 'roll' }
+interface ExitBranch { label: string; children: ExitNode[] }
+const EXIT_STRATEGY: ExitBranch[] = [
+  {
+    label: 'Position has ≥ 21 DTE',
+    children: [
+      { cond: 'Captured ≥ 50% premium',                 action: 'CLOSE',                          tone: 'close' },
+      { cond: 'Captured ≥ 25% and > 21 DTE',             action: 'Consider CLOSE (optional)',      tone: 'close' },
+      { cond: 'ITM',                                      action: 'Monitor — no action yet',         tone: 'monitor' },
+      { cond: 'OTM, < 25% captured',                      action: 'HOLD',                           tone: 'hold' },
+    ],
+  },
+  {
+    label: 'Position has < 21 DTE',
+    children: [
+      { cond: 'Captured ≥ 50%',                           action: 'CLOSE',                          tone: 'close' },
+      { cond: 'OTM',                                      action: 'Let expire',                     tone: 'hold' },
+      { cond: 'ITM, within thesis, strike acceptable',    action: 'Let assign',                     tone: 'assign' },
+      { cond: 'ITM, thesis broken or strike below basis', action: 'ROLL for credit, else accept loss', tone: 'roll' },
+    ],
+  },
+]
+
 interface Props {
   onScan: (topN: number, minDTE: number, maxDTE: number) => void
   onCustom: (symbols: string[], minDTE: number, maxDTE: number) => void
@@ -207,6 +230,23 @@ export function CcInput({ onScan, onCustom, loading }: Props) {
                 </li>
               ))}
             </ol>
+          </div>
+          <div className="exit-strategy">
+            <div className="decision-framework-header">Exit strategy — manage after fill</div>
+            {EXIT_STRATEGY.map(branch => (
+              <div key={branch.label} className="exit-branch">
+                <div className="exit-branch-label">{branch.label}</div>
+                <ul className="exit-children">
+                  {branch.children.map(n => (
+                    <li key={n.cond} className="exit-child">
+                      <span className="exit-cond">{n.cond}</span>
+                      <span className="exit-arrow">→</span>
+                      <span className={`exit-action exit-action-${n.tone ?? 'hold'}`}>{n.action}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
           <div className="score-legend-factors">
             <div className="score-legend-header">Score breakdown — Final = 0.4 × Env + 0.6 × Strike</div>
