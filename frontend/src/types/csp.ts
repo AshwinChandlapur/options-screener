@@ -17,6 +17,8 @@ export interface CspStrikeInfo {
   em_buffer_pct: number | null
   otm_pct: number
   lq_count: number
+  roc_annualized: number | null
+  iv_stale: boolean
 }
 
 export interface CspResult {

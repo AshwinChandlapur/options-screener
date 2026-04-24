@@ -53,6 +53,8 @@ class CcStrikeResult:
     em_buffer_pct: Optional[float] = None # how far strike is outside 1σ move, as % of 1σ
     otm_pct: float = 0.0                  # % above current price
     lq_count: int = 0                     # OI or volume used for LQ score
+    roc_annualized: Optional[float] = None  # annualized return on capital % for ROC scoring
+    iv_stale: bool = False                # True when IV was NaN/zero (IV/HV pts forced to 0)
 
 
 @dataclass
@@ -178,13 +180,16 @@ def process_cc_symbol(
                         last = float(row["lastPrice"].iloc[0]) if not __import__('pandas').isna(row["lastPrice"].iloc[0]) else 0.0
                         oi_val = int(row["openInterest"].iloc[0]) if not __import__('pandas').isna(row["openInterest"].iloc[0]) else 0
                         vol_val = int(row["volume"].iloc[0]) if not __import__('pandas').isna(row["volume"].iloc[0]) else 0
-                        sig = get_implied_volatility(calls_df, sp)
+                        sig_raw = get_implied_volatility(calls_df, sp)
+                        # Stale-IV: NaN or essentially zero → flag and force IV/HV to 0 pts
+                        iv_stale_row = math.isnan(sig_raw) or sig_raw <= 0.01
                         used_hv = False
                         iv_hv_ratio_val: Optional[float] = None
-                        if math.isnan(sig) or sig < 0.15:
+                        if iv_stale_row:
                             sig = hv_sigma
                             used_hv = True
                         else:
+                            sig = sig_raw
                             if hv_sigma > 0:
                                 iv_hv_ratio_val = round(sig / hv_sigma, 4)
                         d = black_scholes_call_delta(current_price, sp, rf_rate, T, sig)
@@ -199,7 +204,7 @@ def process_cc_symbol(
                             stale_prem = True
                         else:
                             continue  # no usable premium — skip for trading candidates only
-                        candidates.append((sp, d, prem, used_hv, stale_prem, iv_hv_ratio_val, sig, oi_val, vol_val))
+                        candidates.append((sp, d, prem, used_hv, stale_prem, iv_hv_ratio_val, sig, oi_val, vol_val, iv_stale_row))
                     except Exception:
                         continue
 
@@ -214,7 +219,7 @@ def process_cc_symbol(
                     in_range = sorted(candidates, key=lambda x: abs(x[1] - _IDEAL_DELTA))[:5]
 
                 strike_results: list[CcStrikeResult] = []
-                for sp, d, prem, used_hv, stale_prem, iv_hv_ratio_val, sig_used, oi_val, vol_val in in_range:
+                for sp, d, prem, used_hv, stale_prem, iv_hv_ratio_val, sig_used, oi_val, vol_val, iv_stale_row in in_range:
                     try:
                         spread_raw = get_bid_ask_spread_pct(calls_df, sp)
                         spread_s: Optional[float] = None if math.isnan(spread_raw) else spread_raw
@@ -231,6 +236,9 @@ def process_cc_symbol(
                             rsi=rsi,
                             chain_median_oi=chain_median_oi,
                             earnings_within_dte=earnings_within_dte,
+                            direction='cc',
+                            dte=dte,
+                            iv_stale=iv_stale_row,
                         )
                         strike_s, strike_detail, strike_raw = compute_cc_strike_score(
                             delta=d,
@@ -245,6 +253,7 @@ def process_cc_symbol(
                             open_interest=oi_val,
                             market_open=_market_open,
                             volume=vol_val,
+                            credit=prem,
                         )
                         final_s = compute_cc_final_score(env_s, strike_s)
                         strike_results.append(CcStrikeResult(
@@ -265,6 +274,8 @@ def process_cc_symbol(
                             em_buffer_pct=None if __import__('math').isnan(strike_raw.get('em_buffer_pct', float('nan'))) else strike_raw.get('em_buffer_pct'),
                             otm_pct=strike_raw.get('otm_pct', 0.0),
                             lq_count=int(strike_raw.get('lq_count', 0)),
+                            roc_annualized=None if __import__('math').isnan(strike_raw.get('roc_annualized', float('nan'))) else strike_raw.get('roc_annualized'),
+                            iv_stale=iv_stale_row,
                         ))
                     except Exception:
                         continue

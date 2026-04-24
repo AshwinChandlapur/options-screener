@@ -84,6 +84,8 @@ class CspStrikeResultOut(BaseModel):
     em_buffer_pct: Optional[float]
     otm_pct: float
     lq_count: int
+    roc_annualized: Optional[float] = None
+    iv_stale: bool = False
 
 
 class CspResultOut(BaseModel):
@@ -248,6 +250,8 @@ def _to_out(r: CspResult) -> CspResultOut:
                 em_buffer_pct=s.em_buffer_pct,
                 otm_pct=s.otm_pct,
                 lq_count=s.lq_count,
+                roc_annualized=s.roc_annualized,
+                iv_stale=s.iv_stale,
             )
             for s in r.strikes
         ],

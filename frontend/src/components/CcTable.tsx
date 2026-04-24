@@ -29,8 +29,8 @@ function parseEnvDetail(detail: string): Record<string, number> {
   }
   return out
 }
-const ENV_MAX: Record<string, number> = { IV: 30, IH: 25, SMA: 15, '52W': 15, RSI: 10, OI: 5 }
-const STRIKE_MAX: Record<string, number> = { 'Δ': 18, 'Res': 18, 'EM': 20, 'OTM': 12, 'BA': 27, 'LQ': 5 }
+const ENV_MAX: Record<string, number> = { HV: 22, IH: 28, SMA: 15, '52W': 10, RSI: 10, OI: 8, DTE: 7 }
+const STRIKE_MAX: Record<string, number> = { 'Δ': 15, 'Res': 18, 'EM': 20, 'OTM': 9, 'BA': 23, 'LQ': 5, 'ROC': 10 }
 function strikeSub(detail: string, key: string) {
   const pts = parseEnvDetail(detail)
   const v = pts[key], max = STRIKE_MAX[key]
@@ -96,8 +96,8 @@ const COLUMNS = [
   }),
   col.accessor('iv_rank',       {
     header: () => (
-      <span className="col-tip col-scored" title="IV Rank: where today's implied volatility sits within its 252-day min–max range (0 = historically cheap, 100 = historically expensive)">
-        IV Rank ⓘ
+      <span className="col-tip col-scored" title="HV Rank: percentile of today's 30-day historical volatility within its 252-day min–max range (0 = historically cheap, 100 = historically expensive). Used as an IV proxy until true ATM IV history is available.">
+        HV Rank ⓘ
       </span>
     ),
     cell: () => null,
@@ -192,7 +192,9 @@ export function CcTable({ data }: Props) {
   const [strikeExpanded, setStrikeExpanded] = useState<Set<string>>(new Set())
   const [staleDismissed, setStaleDismissed] = useState(false)
 
-  const anyStale = groupedData.some(r => r.using_hv_fallback)
+  const anyStale = groupedData.some(
+    r => r.using_hv_fallback || r.expirations.some(e => e.strikes.some(s => s.iv_stale))
+  )
 
   const toggleStrikes = (key: string) => {
     setStrikeExpanded(prev => {
@@ -318,7 +320,7 @@ export function CcTable({ data }: Props) {
                 className="sortable"
                 onClick={() => scoreCol?.toggleSorting(scoreSorted === 'asc')}
               >
-                <span className="col-tip" title="Final Score = 0.4×Env + 0.6×Strike&#10;&#10;ENV SCORE (100 pts)&#10;  IV Rank           30 pts&#10;  IV / HV Ratio     25 pts&#10;  SMA Alignment     15 pts&#10;  52W High Dist.    15 pts&#10;  RSI(14)           10 pts&#10;  Chain Median OI    5 pts  circuit-breaker&#10;  Earnings in DTE  −15 pts&#10;&#10;STRIKE SCORE (100 pts)&#10;  Delta             18 pts  peak +0.20→+0.25&#10;  Dist vs Resist.   18 pts  strike ≥ resistance&#10;  Exp Move Buffer   20 pts  ≥0.2σ above ceiling&#10;  % OTM from Spot   12 pts  ≥15%=full&#10;  Bid-Ask Spread    27 pts  ≤1%=full&#10;  OI / Volume        5 pts  circuit-breaker">
+                <span className="col-tip" title="Final Score = 0.4×Env + 0.6×Strike&#10;&#10;ENV SCORE (100 pts)&#10;  HV Rank           22 pts&#10;  IV / HV Ratio     28 pts  (stale IV → 0)&#10;  SMA Alignment     15 pts&#10;  52W High Dist.    10 pts  CC: 5–15% below=full&#10;  RSI(14)           10 pts  CC: 38–58=full&#10;  Chain Median OI    8 pts  circuit-breaker&#10;  DTE Sweet Spot     7 pts  30–45 DTE=full&#10;  Earnings in DTE  −15 pts&#10;&#10;STRIKE SCORE (100 pts)&#10;  Delta             15 pts  peak +0.20→+0.25&#10;  Dist vs Resist.   18 pts  strike ≥ resistance&#10;  Exp Move Buffer   20 pts  ≥0.2σ above ceiling&#10;  % OTM from Spot    9 pts  ≥15%=full&#10;  Bid-Ask Spread    23 pts  ≤1%=full&#10;  OI / Volume        5 pts  circuit-breaker&#10;  Annualized ROC    10 pts  ≥30%=full">
                   Score ⓘ
                 </span>
                 {scoreSorted === 'asc' && ' ↑'}
@@ -383,9 +385,9 @@ export function CcTable({ data }: Props) {
                   <td rowSpan={totalRows}>
                     {r.iv_rank == null
                       ? <span className="dim">N/A</span>
-                      : <><span style={{ color: envColor(envPts, 'IV'), fontWeight: 600 }}>
+                      : <><span style={{ color: envColor(envPts, 'HV'), fontWeight: 600 }}>
                             {r.iv_rank.toFixed(0)}
-                          </span><br />{envSub(envPts, 'IV')}</>
+                          </span><br />{envSub(envPts, 'HV')}</>
                     }
                   </td>
                   <td rowSpan={totalRows}>
@@ -432,6 +434,7 @@ export function CcTable({ data }: Props) {
                   <span className="expiry-date">{exp.expiration}</span>
                   {exp.earnings_within_dte && <span className="earnings-warn"> ⚠</span>}
                   <div className="oi-badge">OI: {exp.chain_median_oi > 0 ? (exp.chain_median_oi >= 1000 ? (exp.chain_median_oi / 1000).toFixed(1) + 'k' : Math.round(exp.chain_median_oi)) : <span className="dim">—</span>}{envSubInline(parseEnvDetail(bestStrike.env_detail), 'OI')}</div>
+                  <div className="oi-badge">DTE☆{envSubInline(parseEnvDetail(bestStrike.env_detail), 'DTE')}</div>
                 </td>
                 <td className="em-cell" rowSpan={dteCellRows}>
                   {exp.expected_move > 0
@@ -475,7 +478,13 @@ export function CcTable({ data }: Props) {
                 <td>
                   <span style={{ color: strikeColor(bestStrike.strike_detail, 'LQ') }}>{bestStrike.lq_count >= 1000 ? (bestStrike.lq_count / 1000).toFixed(1) + 'k' : bestStrike.lq_count}</span>{strikeSub(bestStrike.strike_detail, 'LQ')}
                 </td>
-                <td>{fmtAnn(bestStrike.annualized_return)}</td>
+                <td>
+                  {fmtAnn(bestStrike.annualized_return)}
+                  {bestStrike.roc_annualized != null && (
+                    <><br /><span style={{ fontSize: '10px', opacity: 0.85 }} title="Annualized ROC = (credit / (price − credit)) × (365/DTE) × 100 — yield against capital actually tied up">ROC {bestStrike.roc_annualized.toFixed(1)}%</span></>
+                  )}
+                  {strikeSub(bestStrike.strike_detail, 'ROC')}
+                </td>
                 <td>{scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.cc_score, bestStrike.env_detail, bestStrike.strike_detail, true)}</td>
               </tr>
             )
@@ -511,7 +520,13 @@ export function CcTable({ data }: Props) {
                     <td>
                       <span style={{ color: strikeColor(s.strike_detail, 'LQ') }}>{s.lq_count >= 1000 ? (s.lq_count / 1000).toFixed(1) + 'k' : s.lq_count}</span>{strikeSub(s.strike_detail, 'LQ')}
                     </td>
-                    <td>{fmtAnn(s.annualized_return)}</td>
+                    <td>
+                      {fmtAnn(s.annualized_return)}
+                      {s.roc_annualized != null && (
+                        <><br /><span style={{ fontSize: '10px', opacity: 0.85 }}>ROC {s.roc_annualized.toFixed(1)}%</span></>
+                      )}
+                      {strikeSub(s.strike_detail, 'ROC')}
+                    </td>
                     <td>{scoreFmt(s.env_score, s.strike_score, s.cc_score, s.env_detail, s.strike_detail)}</td>
                   </tr>
                 )

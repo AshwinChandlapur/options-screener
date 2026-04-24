@@ -343,9 +343,36 @@ def compute_momentum_score(
     return round(score, 1)
 
 
+# =============================================================================
+# Scoring weight constants (single source of truth — must sum to 100 each)
+# =============================================================================
+ENV_WEIGHTS = {
+    'HV':  22.0,   # HV Rank (formerly mislabeled "IV Rank") — uses 30d HV proxy
+    'IH':  28.0,   # IV / HV Ratio
+    'SMA': 15.0,   # SMA Alignment
+    '52W': 10.0,   # 52W High Distance (direction-aware)
+    'RSI': 10.0,   # RSI (direction-aware)
+    'OI':   8.0,   # Chain Median OI (circuit breaker)
+    'DTE':  7.0,   # DTE sweet spot
+}
+ENV_MAX = sum(ENV_WEIGHTS.values())  # 100.0
+EARNINGS_PENALTY = -15.0
+
+STRIKE_WEIGHTS = {
+    'Δ':   15.0,   # Delta bell-curve
+    'SR':  18.0,   # Distance vs Support / Resistance
+    'EM':  20.0,   # Expected Move Buffer
+    'OTM':  9.0,   # % OTM from spot
+    'BA':  23.0,   # Bid-Ask spread
+    'LQ':   5.0,   # OI/Volume circuit breaker
+    'ROC': 10.0,   # Annualized return on capital
+}
+STRIKE_MAX = sum(STRIKE_WEIGHTS.values())  # 100.0
+
+
 def compute_env_score(
     *,
-    iv_rank: float | None,
+    iv_rank: float | None,             # HV Rank (kept name for back-compat at call sites)
     iv_hv_ratio: float | None,
     price_above_sma50: bool,
     sma50_above_sma200: bool,
@@ -353,52 +380,55 @@ def compute_env_score(
     rsi: float,
     chain_median_oi: float,
     earnings_within_dte: bool,
+    direction: str = 'csp',            # 'csp' or 'cc' — affects 52W and RSI curves
+    dte: int | None = None,            # Required for DTE sweet-spot factor
+    iv_stale: bool = False,            # If True, IV/HV pts forced to 0
 ) -> tuple[float, str]:
     """
-    Environment Score 0–100 (+penalty).
-    Measures whether *now* is a good time to sell puts on this stock.
+    Environment Score 0–100 (+earnings penalty up to −15).
+    Direction-aware: CSP rewards strength/momentum, CC rewards consolidation.
 
-    Volatility Edge (55):  IV Rank (30) + IV/HV Ratio (25)
-    Trend Structure (30):  SMA Alignment (15) + 52W High Distance (15)
-    Momentum (10):         RSI(14) (10)
-    Liquidity (5):         Chain Median OI (5)  [circuit-breaker only; near-always maxed on liquid tickers]
-    Earnings in DTE:       −15 penalty
+    Weights:  HV Rank 22 + IV/HV 28 + SMA 15 + 52W 10 + RSI 10 + Chain OI 8 + DTE 7 = 100
+    Penalty:  Earnings within DTE = −15
 
-    Returns (score, detail_string) where detail_string lists each component's earned pts.
+    Note: parameter `iv_rank` is the HV Rank value (30d HV ranked over 252d).
+    The name is preserved for call-site compatibility but the field is HV-derived.
     """
     import math as _math
+    direction = direction.lower()
     score = 0.0
     bk: dict[str, float] = {}
 
-    # --- IV Rank (30 pts) ---
+    # --- HV Rank (22 pts) — rescaled from 30 by ×22/30 ---
     p = 0.0
     if iv_rank is not None and not _math.isnan(iv_rank):
         if iv_rank >= 80:
-            p = 30.0
+            p = 22.0
         elif iv_rank >= 60:
-            p = 18.0 + (iv_rank - 60) / 20.0 * 7.0
+            p = 13.2 + (iv_rank - 60) / 20.0 * 5.13   # 13.2 → 18.33
         elif iv_rank >= 40:
-            p = 9.0 + (iv_rank - 40) / 20.0 * 9.0
+            p = 6.6 + (iv_rank - 40) / 20.0 * 6.6     # 6.6 → 13.2
         elif iv_rank >= 20:
-            p = (iv_rank - 20) / 20.0 * 9.0
-    score += p; bk['IV'] = p
+            p = (iv_rank - 20) / 20.0 * 6.6           # 0 → 6.6
+    score += p; bk['HV'] = p
 
-    # --- IV / HV Ratio (25 pts) ---
+    # --- IV / HV Ratio (28 pts) — rescaled from 25 by ×28/25 = 1.12 ---
+    # Stale-IV: when iv_stale=True (IV NaN or ≤0.01), award 0 pts and let UI flag the row.
     p = 0.0
-    if iv_hv_ratio is not None and not _math.isnan(iv_hv_ratio):
+    if not iv_stale and iv_hv_ratio is not None and not _math.isnan(iv_hv_ratio):
         if iv_hv_ratio >= 1.7:
-            p = 25.0
+            p = 28.0
         elif iv_hv_ratio >= 1.4:
-            p = 12.5 + (iv_hv_ratio - 1.4) / 0.3 * 7.5
+            p = 14.0 + (iv_hv_ratio - 1.4) / 0.3 * 8.4    # 14.0 → 22.4
         elif iv_hv_ratio >= 1.1:
-            p = 6.0 + (iv_hv_ratio - 1.1) / 0.3 * 6.5
+            p = 6.72 + (iv_hv_ratio - 1.1) / 0.3 * 7.28   # 6.72 → 14.0
         elif iv_hv_ratio >= 0.9:
-            p = 2.5 + (iv_hv_ratio - 0.9) / 0.2 * 3.5
+            p = 2.8 + (iv_hv_ratio - 0.9) / 0.2 * 3.92    # 2.8 → 6.72
         elif iv_hv_ratio >= 0.8:
-            p = (iv_hv_ratio - 0.8) / 0.1 * 2.5
+            p = (iv_hv_ratio - 0.8) / 0.1 * 2.8           # 0 → 2.8
     score += p; bk['IH'] = p
 
-    # --- SMA Alignment (15 pts): categorical ---
+    # --- SMA Alignment (15 pts): categorical, unchanged ---
     p = 0.0
     if price_above_sma50 and sma50_above_sma200:
         p = 15.0
@@ -408,43 +438,79 @@ def compute_env_score(
         p = 5.0
     score += p; bk['SMA'] = p
 
-    # --- 52W High Distance (15 pts) ---
+    # --- 52W High Distance (10 pts) — direction-aware ---
     p = 0.0
     if not _math.isnan(dist_from_52w_high_pct):
         pct_below = abs(min(dist_from_52w_high_pct, 0.0))
-        if pct_below <= 5:
-            p = 15.0
-        elif pct_below <= 10:
-            p = 11.0 - (pct_below - 5) / 5.0 * 4.0
-        elif pct_below <= 20:
-            p = 7.0 - (pct_below - 10) / 10.0 * 4.0
-        elif pct_below <= 30:
-            p = 3.0 - (pct_below - 20) / 10.0 * 3.0
+        if direction == 'cc':
+            # CC: reward consolidation (5–15% below). Smooth ramps, no plateaus.
+            if pct_below <= 5:
+                p = 4.0
+            elif pct_below <= 15:
+                p = 4.0 + (pct_below - 5.0) / 10.0 * 6.0   # 4 → 10
+            elif pct_below <= 25:
+                p = 10.0 - (pct_below - 15.0) / 10.0 * 4.0  # 10 → 6
+            elif pct_below <= 35:
+                p = 6.0 - (pct_below - 25.0) / 10.0 * 4.0   # 6 → 2
+            # > 35% → 0
+        else:
+            # CSP: reward strength near the high. Rescaled from 15 → 10 (×10/15).
+            if pct_below <= 5:
+                p = 10.0
+            elif pct_below <= 10:
+                p = 7.333 - (pct_below - 5.0) / 5.0 * 2.667   # 7.333 → 4.667
+            elif pct_below <= 20:
+                p = 4.667 - (pct_below - 10.0) / 10.0 * 2.667  # 4.667 → 2.0
+            elif pct_below <= 30:
+                p = 2.0 - (pct_below - 20.0) / 10.0 * 2.0     # 2.0 → 0
     score += p; bk['52W'] = p
 
-    # --- RSI(14) (10 pts) ---
+    # --- RSI(14) (10 pts) — direction-aware ---
     p = 0.0
     if not _math.isnan(rsi):
-        if 42 <= rsi <= 62:
-            p = 10.0
-        elif 35 <= rsi < 42:
-            p = 6.0 + (rsi - 35) / 7.0 * 4.0
-        elif 62 < rsi <= 75:
-            p = 10.0 * (75 - rsi) / 13.0
-        elif 30 <= rsi < 35:
-            p = 2.0
+        if direction == 'cc':
+            # CC sweet spot 38–58 (mild weakness favors call sellers)
+            # Steeper ceiling decay — overheated stocks blow through call strikes
+            if 38 <= rsi <= 58:
+                p = 10.0
+            elif 30 <= rsi < 38:
+                p = 4.0 + (rsi - 30.0) / 8.0 * 6.0      # 4 → 10
+            elif 58 < rsi <= 70:
+                p = 10.0 - (rsi - 58.0) / 12.0 * 10.0   # 10 → 0
+            # < 30 or > 70 → 0
+        else:
+            # CSP: unchanged sweet spot 42–62
+            if 42 <= rsi <= 62:
+                p = 10.0
+            elif 35 <= rsi < 42:
+                p = 6.0 + (rsi - 35.0) / 7.0 * 4.0
+            elif 62 < rsi <= 75:
+                p = 10.0 * (75.0 - rsi) / 13.0
+            elif 30 <= rsi < 35:
+                p = 2.0
     score += p; bk['RSI'] = p
 
-    # --- Chain Median OI (5 pts — circuit breaker for illiquid chains) ---
+    # --- Chain Median OI (8 pts — circuit breaker, rescaled from 5 by ×8/5) ---
     p = 0.0
     if not _math.isnan(chain_median_oi) and chain_median_oi > 0:
-        p = min(_math.log10(chain_median_oi) / _math.log10(5000), 1.0) * 5.0
+        p = min(_math.log10(chain_median_oi) / _math.log10(5000), 1.0) * 8.0
     score += p; bk['OI'] = p
+
+    # --- DTE Sweet Spot (7 pts) ---
+    p = 0.0
+    if dte is not None and dte > 0:
+        if 30 <= dte <= 45:
+            p = 7.0
+        elif 21 <= dte < 30 or 45 < dte <= 60:
+            p = 4.2
+        elif 14 <= dte < 21 or 60 < dte <= 75:
+            p = 2.1
+    score += p; bk['DTE'] = p
 
     # --- Earnings penalty ---
     earn_p = 0.0
     if earnings_within_dte:
-        earn_p = -15.0
+        earn_p = EARNINGS_PENALTY
         score += earn_p
 
     detail = ' '.join(f"{k}:{round(v)}" for k, v in bk.items())
@@ -467,38 +533,31 @@ def compute_csp_strike_score(
     open_interest: int,
     market_open: bool,
     volume: int,
-) -> tuple[float, str]:
+    credit: float | None = None,   # per-share premium for ROC factor
+) -> tuple[float, str, dict]:
     """
-    Strike Safety Score 0–100.
-    Measures how safe *this specific strike* is at *this expiration*.
+    CSP Strike Safety Score 0–100.
 
-    Delta (18):              Bell-curve peak at −0.20→−0.25
-    Distance vs Support (18): Nearest vol-support level below strike  [+5 from 13]
-    Expected Move Buffer (20): How far strike is outside 1σ move  [+5 from 15]
-    % OTM from Spot (12):    Raw distance cushion from current price
-    Bid-Ask Spread % (27):   Execution quality at this strike  [+5 from 22]
-    OI / Volume (5):         Circuit-breaker for illiquid strikes  [−15 from 20]
-
-    Returns (score, detail_string) where detail_string lists each component's earned pts.
+    Weights: Δ 15 + Sup 18 + EM 20 + OTM 9 + BA 23 + LQ 5 + ROC 10 = 100
     """
     import math as _math
     score = 0.0
     bk: dict[str, float] = {}
 
-    # --- Delta bell-curve (18 pts) ---
+    # --- Delta bell-curve (15 pts — rescaled from 18 by ×15/18) ---
     p = 0.0
     if not _math.isnan(delta):
         if -0.25 <= delta <= -0.20:
-            p = 18.0
+            p = 15.0
         elif (-0.30 <= delta < -0.25) or (-0.20 < delta <= -0.15):
-            p = 12.0
+            p = 10.0
         elif -0.15 < delta <= -0.10:
-            p = 6.0
+            p = 5.0
         elif delta < -0.30:
-            p = 7.0
+            p = 5.833
     score += p; bk['Δ'] = p
 
-    # --- Distance vs Nearest Support Below Strike (18 pts) ---
+    # --- Distance vs Nearest Support Below Strike (18 pts) — unchanged ---
     p = 0.0
     _csp_dist_pct: float | None = None
     supports = [s for s in [vol_support_1, vol_support_2, vol_support_3] if s is not None]
@@ -517,7 +576,7 @@ def compute_csp_strike_score(
         p = 7.0
     score += p; bk['Sup'] = p
 
-    # --- Expected Move Buffer (20 pts) ---
+    # --- Expected Move Buffer (20 pts) — unchanged ---
     p = 0.0
     _em_buffer_pct: float = float('nan')
     if not _math.isnan(iv_used) and iv_used > 0 and dte > 0:
@@ -534,33 +593,33 @@ def compute_csp_strike_score(
             p = 5.0 + (sigmas_outside + 0.10) / 0.10 * 8.0
     score += p; bk['EM'] = p
 
-    # --- % OTM from Spot (12 pts) ---
+    # --- % OTM from Spot (9 pts — rescaled from 12 by ×0.75) ---
     p = 0.0
     otm_pct = (current_price - strike) / current_price * 100.0
     if otm_pct >= 15:
-        p = 12.0
+        p = 9.0
     elif otm_pct >= 10:
-        p = 9.0 + (otm_pct - 10) / 5.0 * 3.0
+        p = 6.75 + (otm_pct - 10) / 5.0 * 2.25
     elif otm_pct >= 5:
-        p = 6.0 + (otm_pct - 5) / 5.0 * 3.0
+        p = 4.5 + (otm_pct - 5) / 5.0 * 2.25
     elif otm_pct >= 2:
-        p = 2.0 + (otm_pct - 2) / 3.0 * 4.0
+        p = 1.5 + (otm_pct - 2) / 3.0 * 3.0
     score += p; bk['OTM'] = p
 
-    # --- Bid-Ask Spread % (27 pts) ---
+    # --- Bid-Ask Spread % (23 pts — rescaled from 27 by ×23/27) ---
     p = 0.0
     if bid_ask_spread_pct is not None and not _math.isnan(bid_ask_spread_pct):
         if bid_ask_spread_pct <= 1.0:
-            p = 27.0
+            p = 23.0
         elif bid_ask_spread_pct <= 3.0:
-            p = 18.0 + (3.0 - bid_ask_spread_pct) / 2.0 * 9.0
+            p = 15.333 + (3.0 - bid_ask_spread_pct) / 2.0 * 7.667
         elif bid_ask_spread_pct <= 5.0:
-            p = 10.0 + (5.0 - bid_ask_spread_pct) / 2.0 * 8.0
+            p = 8.519 + (5.0 - bid_ask_spread_pct) / 2.0 * 6.815
         elif bid_ask_spread_pct <= 8.0:
-            p = 2.5 + (8.0 - bid_ask_spread_pct) / 3.0 * 7.5
+            p = 2.130 + (8.0 - bid_ask_spread_pct) / 3.0 * 6.389
     score += p; bk['BA'] = p
 
-    # --- OI / Volume at this strike (5 pts — circuit breaker) ---
+    # --- OI / Volume at this strike (5 pts) — unchanged ---
     p = 0.0
     liquidity_count = volume if (market_open and volume > 0) else open_interest
     if liquidity_count >= 1000:
@@ -573,12 +632,33 @@ def compute_csp_strike_score(
         p = (liquidity_count - 100) / 100.0 * 2.0
     score += p; bk['LQ'] = p
 
+    # --- Annualized ROC (10 pts) — provisional curve, calibrate empirically ---
+    # CSP capital = (strike * 100) − credit*100 (cash secured minus premium received)
+    # Per-share: capital = strike − credit
+    p = 0.0
+    _roc_annualized: float = float('nan')
+    if credit is not None and credit > 0 and dte > 0:
+        capital_per_share = strike - credit
+        if capital_per_share > 0:
+            roc = (credit / capital_per_share) * (365.0 / dte) * 100.0
+            _roc_annualized = round(roc, 2)
+            if roc >= 30:
+                p = 10.0
+            elif roc >= 20:
+                p = 7.0 + (roc - 20) / 10.0 * 3.0    # 7 → 10
+            elif roc >= 12:
+                p = 4.0 + (roc - 12) / 8.0 * 3.0     # 4 → 7
+            elif roc >= 6:
+                p = 1.0 + (roc - 6) / 6.0 * 3.0      # 1 → 4
+    score += p; bk['ROC'] = p
+
     detail = ' '.join(f"{k}:{round(v)}" for k, v in bk.items())
     raw = {
         'dist_pct': _csp_dist_pct,
         'em_buffer_pct': _em_buffer_pct,
         'otm_pct': otm_pct,
         'lq_count': liquidity_count,
+        'roc_annualized': _roc_annualized,
     }
     return round(max(0.0, min(100.0, score)), 1), detail, raw
 
@@ -641,50 +721,31 @@ def compute_cc_strike_score(
     open_interest: int,
     market_open: bool,
     volume: int,
-) -> tuple[float, str]:
+    credit: float | None = None,   # per-share premium for ROC factor
+) -> tuple[float, str, dict]:
     """
     CC Strike Safety Score 0–100.
-    Measures how safe *this specific call strike* is at *this expiration*.
 
-    Delta (18):               Bell-curve peak at +0.20→+0.25
-    Distance vs Resistance (18): Nearest vol-resistance level above current price  [+5 from 13]
-    Expected Move Buffer (20):  How far strike is above 1σ upward move  [+5 from 15]
-    % OTM from Spot (12):    Raw distance cushion above current price
-    Bid-Ask Spread % (27):   Execution quality at this strike  [+5 from 22]
-    OI / Volume (5):         Circuit-breaker for illiquid strikes  [−15 from 20]
-
-    Returns (score, detail_string) where detail_string lists each component's earned pts.
+    Weights: Δ 15 + Res 18 + EM 20 + OTM 9 + BA 23 + LQ 5 + ROC 10 = 100
     """
     import math as _math
     score = 0.0
     bk: dict[str, float] = {}
 
-    # --- Delta bell-curve (18 pts) ---
+    # --- Delta bell-curve (15 pts — rescaled from 18 by ×15/18) ---
     p = 0.0
     if not _math.isnan(delta):
         if 0.20 <= delta <= 0.25:
-            p = 18.0
+            p = 15.0
         elif (0.15 <= delta < 0.20) or (0.25 < delta <= 0.30):
-            p = 12.0
+            p = 10.0
         elif 0.10 <= delta < 0.15:
-            p = 6.0
+            p = 5.0
         elif delta > 0.30:
-            p = 7.0
+            p = 5.833
     score += p; bk['Δ'] = p
 
-    # --- Distance vs Nearest Resistance Above Current Price (18 pts) ---
-    # gap_pct = (nearest_R - strike) / strike * 100
-    #   negative  → resistance below strike (ceiling between price and strike)
-    #   positive  → resistance above strike (cushion above the call)
-    #
-    # Scoring with distance decay:
-    #   gap_pct ≤ −20%           → 3 pts  (resistance far below strike, uncharted territory)
-    #   −20% < gap_pct ≤ −10%   → 3→18 linear  (partial ceiling, approaching strike)
-    #   −10% < gap_pct ≤ 0%     → 18 pts  (effective ceiling just below strike)
-    #                              +5 bonus if ALL resistances are ≤ strike (multi-layer ceiling)
-    #   0% < gap_pct ≤ 5%       → 18→10  (resistance just above — some cushion)
-    #   5% < gap_pct ≤ 10%      → 10→0
-    #   gap_pct > 10%            → 0 pts  (resistance too far above, irrelevant)
+    # --- Distance vs Nearest Resistance Above Current Price (18 pts) — unchanged ---
     p = 0.0
     _cc_dist_pct: float | None = None
     resistances = [r for r in [vol_resistance_1, vol_resistance_2, vol_resistance_3] if r is not None]
@@ -696,19 +757,18 @@ def compute_cc_strike_score(
         if gap_pct <= -20:
             p = 3.0
         elif gap_pct <= -10:
-            # linear 3 → 18 as gap_pct goes from −20 → −10
             p = 3.0 + (gap_pct + 20.0) / 10.0 * 15.0
         elif gap_pct <= 0:
             p = 18.0
             if all(r <= strike for r in resistances_above_price):
-                p += 5.0  # multi-layer ceiling: all resistance between price and strike
+                p += 5.0
         elif gap_pct <= 5:
             p = 18.0 - gap_pct / 5.0 * 8.0
         elif gap_pct <= 10:
             p = 10.0 - (gap_pct - 5) / 5.0 * 10.0
     score += p; bk['Res'] = p
 
-    # --- Expected Move Buffer (20 pts) ---
+    # --- Expected Move Buffer (20 pts) — unchanged ---
     p = 0.0
     _cc_em_buffer_pct: float = float('nan')
     if not _math.isnan(iv_used) and iv_used > 0 and dte > 0:
@@ -725,33 +785,33 @@ def compute_cc_strike_score(
             p = 5.0 + (sigmas_outside + 0.10) / 0.10 * 8.0
     score += p; bk['EM'] = p
 
-    # --- % OTM from Spot (12 pts) ---
+    # --- % OTM from Spot (9 pts — rescaled from 12 by ×0.75) ---
     p = 0.0
     otm_pct = (strike - current_price) / current_price * 100.0
     if otm_pct >= 15:
-        p = 12.0
+        p = 9.0
     elif otm_pct >= 10:
-        p = 9.0 + (otm_pct - 10) / 5.0 * 3.0
+        p = 6.75 + (otm_pct - 10) / 5.0 * 2.25
     elif otm_pct >= 5:
-        p = 6.0 + (otm_pct - 5) / 5.0 * 3.0
+        p = 4.5 + (otm_pct - 5) / 5.0 * 2.25
     elif otm_pct >= 2:
-        p = 2.0 + (otm_pct - 2) / 3.0 * 4.0
+        p = 1.5 + (otm_pct - 2) / 3.0 * 3.0
     score += p; bk['OTM'] = p
 
-    # --- Bid-Ask Spread % (27 pts) ---
+    # --- Bid-Ask Spread % (23 pts — rescaled from 27 by ×23/27) ---
     p = 0.0
     if bid_ask_spread_pct is not None and not _math.isnan(bid_ask_spread_pct):
         if bid_ask_spread_pct <= 1.0:
-            p = 27.0
+            p = 23.0
         elif bid_ask_spread_pct <= 3.0:
-            p = 18.0 + (3.0 - bid_ask_spread_pct) / 2.0 * 9.0
+            p = 15.333 + (3.0 - bid_ask_spread_pct) / 2.0 * 7.667
         elif bid_ask_spread_pct <= 5.0:
-            p = 10.0 + (5.0 - bid_ask_spread_pct) / 2.0 * 8.0
+            p = 8.519 + (5.0 - bid_ask_spread_pct) / 2.0 * 6.815
         elif bid_ask_spread_pct <= 8.0:
-            p = 2.5 + (8.0 - bid_ask_spread_pct) / 3.0 * 7.5
+            p = 2.130 + (8.0 - bid_ask_spread_pct) / 3.0 * 6.389
     score += p; bk['BA'] = p
 
-    # --- OI / Volume at this strike (5 pts — circuit breaker) ---
+    # --- OI / Volume at this strike (5 pts) — unchanged ---
     p = 0.0
     liquidity_count = volume if (market_open and volume > 0) else open_interest
     if liquidity_count >= 1000:
@@ -764,12 +824,33 @@ def compute_cc_strike_score(
         p = (liquidity_count - 100) / 100.0 * 2.0
     score += p; bk['LQ'] = p
 
+    # --- Annualized ROC (10 pts) ---
+    # CC capital basis = current price (not cost basis — out of scope)
+    # Per-share: capital = current_price − credit
+    p = 0.0
+    _roc_annualized: float = float('nan')
+    if credit is not None and credit > 0 and dte > 0 and current_price > 0:
+        capital_per_share = current_price - credit
+        if capital_per_share > 0:
+            roc = (credit / capital_per_share) * (365.0 / dte) * 100.0
+            _roc_annualized = round(roc, 2)
+            if roc >= 30:
+                p = 10.0
+            elif roc >= 20:
+                p = 7.0 + (roc - 20) / 10.0 * 3.0
+            elif roc >= 12:
+                p = 4.0 + (roc - 12) / 8.0 * 3.0
+            elif roc >= 6:
+                p = 1.0 + (roc - 6) / 6.0 * 3.0
+    score += p; bk['ROC'] = p
+
     detail = ' '.join(f"{k}:{round(v)}" for k, v in bk.items())
     raw = {
         'dist_pct': _cc_dist_pct,
         'em_buffer_pct': _cc_em_buffer_pct,
         'otm_pct': otm_pct,
         'lq_count': liquidity_count,
+        'roc_annualized': _roc_annualized,
     }
     return round(max(0.0, min(100.0, score)), 1), detail, raw
 
