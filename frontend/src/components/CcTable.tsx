@@ -32,35 +32,10 @@ const COLUMNS = [
     ),
     cell: () => null,
   }),
-  col.accessor('vol_resistance_126_1', {
-    header: () => (
-      <span className="col-tip col-scored" title="Volume Profile resistance levels above the current price (126-day / 6M lookback) · High-volume price bins where sellers historically appeared">
-        Vol Resistance 6M ⓘ
-      </span>
-    ),
-    cell: () => null,
-    enableSorting: false,
-  }),
   col.accessor('sma_ratio',     {
     header: () => (
       <span className="col-tip col-scored" title="SMA50 ÷ SMA200 · Ratio >1 means the 50-day average is above the 200-day average (bullish structure)">
         SMA50/200 ⓘ
-      </span>
-    ),
-    cell: () => null,
-  }),
-  col.accessor('rsi',           {
-    header: () => (
-      <span className="col-tip col-scored" title="Relative Strength Index (14-period) · Momentum oscillator on a 0–100 scale · >70 overbought · <30 oversold">
-        RSI(14) ⓘ
-      </span>
-    ),
-    cell: () => null,
-  }),
-  col.accessor('iv_rank',       {
-    header: () => (
-      <span className="col-tip col-scored" title="IV Rank: where today's implied volatility sits within its 252-day min–max range (0 = historically cheap, 100 = historically expensive)">
-        IV Rank ⓘ
       </span>
     ),
     cell: () => null,
@@ -73,6 +48,14 @@ const COLUMNS = [
     ),
     cell: () => null,
   }),
+  col.accessor('iv_rank',       {
+    header: () => (
+      <span className="col-tip col-scored" title="IV Rank: where today's implied volatility sits within its 252-day min–max range (0 = historically cheap, 100 = historically expensive)">
+        IV Rank ⓘ
+      </span>
+    ),
+    cell: () => null,
+  }),
   col.accessor('iv_hv_ratio', {
     header: () => (
       <span className="col-tip col-scored" title="Implied Volatility ÷ 30-day Historical Volatility · >1.0 = options priced above recent realized moves · <1.0 = options relatively cheap">
@@ -80,6 +63,23 @@ const COLUMNS = [
       </span>
     ),
     cell: () => null,
+  }),
+  col.accessor('rsi',           {
+    header: () => (
+      <span className="col-tip col-scored" title="Relative Strength Index (14-period) · Momentum oscillator on a 0–100 scale · >70 overbought · <30 oversold">
+        RSI(14) ⓘ
+      </span>
+    ),
+    cell: () => null,
+  }),
+  col.accessor('vol_resistance_126_1', {
+    header: () => (
+      <span className="col-tip col-scored" title="Volume Profile resistance levels above the current price (126-day / 6M lookback) · High-volume price bins where sellers historically appeared">
+        Vol Resistance 6M ⓘ
+      </span>
+    ),
+    cell: () => null,
+    enableSorting: false,
   }),
   col.accessor('earnings_date', { header: 'Earnings',   cell: () => null }),
   col.accessor('best_score',    { header: () => null,   cell: () => null }),
@@ -312,6 +312,42 @@ export function CcTable({ data }: Props) {
                     </span>
                   </td>
                   <td rowSpan={totalRows}>
+                    {r.sma_ratio == null || isNaN(r.sma_ratio)
+                      ? <span className="dim">—</span>
+                      : <span className={r.sma_ratio >= 1 ? 'positive' : 'negative'}>{r.sma_ratio.toFixed(4)}</span>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {isNaN(r.dist_from_52w_high_pct)
+                      ? <span className="dim">—</span>
+                      : <span className={r.dist_from_52w_high_pct >= -5 ? 'score-good' : r.dist_from_52w_high_pct >= -15 ? 'score-caution' : 'score-bad'}>
+                          {r.dist_from_52w_high_pct.toFixed(1)}%
+                        </span>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {r.iv_rank == null
+                      ? <span className="dim">N/A</span>
+                      : <span className={r.iv_rank >= 50 ? 'badge badge-green' : r.iv_rank >= 30 ? 'badge badge-yellow' : 'badge badge-red'}>
+                            {r.iv_rank.toFixed(0)}
+                          </span>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {r.iv_hv_ratio == null
+                      ? <span className="dim">—</span>
+                      : <span className={r.iv_hv_ratio >= 1.4 ? 'score-good' : r.iv_hv_ratio >= 1.0 ? 'score-caution' : 'score-bad'}>
+                          {r.iv_hv_ratio.toFixed(2)}×
+                        </span>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
+                    {r.rsi == null || isNaN(r.rsi)
+                      ? <span className="dim">—</span>
+                      : <span className={r.rsi >= 70 ? 'rsi-high' : r.rsi <= 30 ? 'rsi-low' : 'rsi-ok'}>{r.rsi.toFixed(1)}</span>
+                    }
+                  </td>
+                  <td rowSpan={totalRows}>
                     {(() => {
                       const levels = [r.vol_resistance_126_1, r.vol_resistance_126_2, r.vol_resistance_126_3]
                         .filter((v): v is number => v != null)
@@ -327,42 +363,6 @@ export function CcTable({ data }: Props) {
                         </span>
                       )
                     })()}
-                  </td>
-                  <td rowSpan={totalRows}>
-                    {r.sma_ratio == null || isNaN(r.sma_ratio)
-                      ? <span className="dim">—</span>
-                      : <span className={r.sma_ratio >= 1 ? 'positive' : 'negative'}>{r.sma_ratio.toFixed(4)}</span>
-                    }
-                  </td>
-                  <td rowSpan={totalRows}>
-                    {r.rsi == null || isNaN(r.rsi)
-                      ? <span className="dim">—</span>
-                      : <span className={r.rsi >= 70 ? 'rsi-high' : r.rsi <= 30 ? 'rsi-low' : 'rsi-ok'}>{r.rsi.toFixed(1)}</span>
-                    }
-                  </td>
-                  <td rowSpan={totalRows}>
-                    {r.iv_rank == null
-                      ? <span className="dim">N/A</span>
-                      : <span className={r.iv_rank >= 50 ? 'badge badge-green' : r.iv_rank >= 30 ? 'badge badge-yellow' : 'badge badge-red'}>
-                            {r.iv_rank.toFixed(0)}
-                          </span>
-                    }
-                  </td>
-                  <td rowSpan={totalRows}>
-                    {isNaN(r.dist_from_52w_high_pct)
-                      ? <span className="dim">—</span>
-                      : <span className={r.dist_from_52w_high_pct >= -5 ? 'score-good' : r.dist_from_52w_high_pct >= -15 ? 'score-caution' : 'score-bad'}>
-                          {r.dist_from_52w_high_pct.toFixed(1)}%
-                        </span>
-                    }
-                  </td>
-                  <td rowSpan={totalRows}>
-                    {r.iv_hv_ratio == null
-                      ? <span className="dim">—</span>
-                      : <span className={r.iv_hv_ratio >= 1.4 ? 'score-good' : r.iv_hv_ratio >= 1.0 ? 'score-caution' : 'score-bad'}>
-                          {r.iv_hv_ratio.toFixed(2)}×
-                        </span>
-                    }
                   </td>
                   <td rowSpan={totalRows}>
                     {r.earnings_date
