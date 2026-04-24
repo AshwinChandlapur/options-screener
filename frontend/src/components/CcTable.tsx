@@ -39,6 +39,13 @@ function strikeSub(detail: string, key: string) {
   const color = ratio >= 0.70 ? '#4ade80' : ratio >= 0.45 ? '#fbbf24' : '#f87171'
   return <span style={{ fontSize: '10px', color, display: 'block', lineHeight: 1.2 }}>{Math.round(v)}/{max}</span>
 }
+function strikeColor(detail: string, key: string): string {
+  const pts = parseEnvDetail(detail)
+  const v = pts[key], max = STRIKE_MAX[key]
+  if (v == null || max == null) return ''
+  const ratio = v / max
+  return ratio >= 0.70 ? '#4ade80' : ratio >= 0.45 ? '#fbbf24' : '#f87171'
+}
 function envSub(pts: Record<string, number>, key: string) {
   const v = pts[key], max = ENV_MAX[key]
   if (v == null || max == null) return null
@@ -441,27 +448,25 @@ export function CcTable({ data }: Props) {
                 </td>
                 <td className="prem-cell">${bestStrike.premium.toFixed(2)}</td>
                 <td>
-                  <span className={bestStrike.delta >= 0.10 && bestStrike.delta <= 0.35 ? 'delta-ok' : 'delta-warn'}>
+                  <span style={{ color: strikeColor(bestStrike.strike_detail, 'Δ') }}>
                     +{bestStrike.delta.toFixed(3)}
                   </span>
                   {bestStrike.iv_fallback && <span className="hv-tag" title="Delta estimated from 30d HV (IV unavailable)"> ~HV</span>}
                   {strikeSub(bestStrike.strike_detail, 'Δ')}
                 </td>
-                <td>{fmtSpread(bestStrike.bid_ask_spread_pct)}{strikeSub(bestStrike.strike_detail, 'BA')}</td>
+                <td><span style={{ color: strikeColor(bestStrike.strike_detail, 'BA') }}>{fmtSpread(bestStrike.bid_ask_spread_pct)}</span>{strikeSub(bestStrike.strike_detail, 'BA')}</td>
                 <td>
                   {bestStrike.dist_pct == null
                     ? <span className="dim">—</span>
-                    : <>{bestStrike.dist_pct >= 0 ? '+' : ''}{bestStrike.dist_pct.toFixed(1)}%{strikeSub(bestStrike.strike_detail, 'Res')}</>}
+                    : <><span style={{ color: strikeColor(bestStrike.strike_detail, 'Res') }}>{bestStrike.dist_pct >= 0 ? '+' : ''}{bestStrike.dist_pct.toFixed(1)}%</span>{strikeSub(bestStrike.strike_detail, 'Res')}</>}
                 </td>
                 <td>
                   {bestStrike.em_buffer_pct == null
                     ? <span className="dim">—</span>
-                    : <>{bestStrike.em_buffer_pct >= 0 ? '+' : ''}{bestStrike.em_buffer_pct.toFixed(0)}%{strikeSub(bestStrike.strike_detail, 'EM')}</>}
+                    : <><span style={{ color: strikeColor(bestStrike.strike_detail, 'EM') }}>{bestStrike.em_buffer_pct >= 0 ? '+' : ''}{bestStrike.em_buffer_pct.toFixed(0)}%</span>{strikeSub(bestStrike.strike_detail, 'EM')}</>}
                 </td>
                 <td>
-                  {bestStrike.lq_count >= 1000
-                    ? <>{(bestStrike.lq_count / 1000).toFixed(1)}k{strikeSub(bestStrike.strike_detail, 'LQ')}</>
-                    : <>{bestStrike.lq_count}{strikeSub(bestStrike.strike_detail, 'LQ')}</>}
+                  <span style={{ color: strikeColor(bestStrike.strike_detail, 'LQ') }}>{bestStrike.lq_count >= 1000 ? (bestStrike.lq_count / 1000).toFixed(1) + 'k' : bestStrike.lq_count}</span>{strikeSub(bestStrike.strike_detail, 'LQ')}
                 </td>
                 <td>{fmtAnn(bestStrike.annualized_return)}</td>
                 <td>{scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.cc_score, bestStrike.env_detail, bestStrike.strike_detail, true)}</td>
@@ -479,27 +484,25 @@ export function CcTable({ data }: Props) {
                     </td>
                     <td className="prem-cell">${s.premium.toFixed(2)}</td>
                     <td>
-                      <span className={s.delta >= 0.10 && s.delta <= 0.35 ? 'delta-ok' : 'delta-warn'}>
+                      <span style={{ color: strikeColor(s.strike_detail, 'Δ') }}>
                         +{s.delta.toFixed(3)}
                       </span>
                       {s.iv_fallback && <span className="hv-tag"> ~HV</span>}
                       {strikeSub(s.strike_detail, 'Δ')}
                     </td>
-                    <td>{fmtSpread(s.bid_ask_spread_pct)}{strikeSub(s.strike_detail, 'BA')}</td>
+                    <td><span style={{ color: strikeColor(s.strike_detail, 'BA') }}>{fmtSpread(s.bid_ask_spread_pct)}</span>{strikeSub(s.strike_detail, 'BA')}</td>
                     <td>
                       {s.dist_pct == null
                         ? <span className="dim">—</span>
-                        : <>{s.dist_pct >= 0 ? '+' : ''}{s.dist_pct.toFixed(1)}%{strikeSub(s.strike_detail, 'Res')}</>}
+                        : <><span style={{ color: strikeColor(s.strike_detail, 'Res') }}>{s.dist_pct >= 0 ? '+' : ''}{s.dist_pct.toFixed(1)}%</span>{strikeSub(s.strike_detail, 'Res')}</>}
                     </td>
                     <td>
                       {s.em_buffer_pct == null
                         ? <span className="dim">—</span>
-                        : <>{s.em_buffer_pct >= 0 ? '+' : ''}{s.em_buffer_pct.toFixed(0)}%{strikeSub(s.strike_detail, 'EM')}</>}
+                        : <><span style={{ color: strikeColor(s.strike_detail, 'EM') }}>{s.em_buffer_pct >= 0 ? '+' : ''}{s.em_buffer_pct.toFixed(0)}%</span>{strikeSub(s.strike_detail, 'EM')}</>}
                     </td>
                     <td>
-                      {s.lq_count >= 1000
-                        ? <>{(s.lq_count / 1000).toFixed(1)}k{strikeSub(s.strike_detail, 'LQ')}</>
-                        : <>{s.lq_count}{strikeSub(s.strike_detail, 'LQ')}</>}
+                      <span style={{ color: strikeColor(s.strike_detail, 'LQ') }}>{s.lq_count >= 1000 ? (s.lq_count / 1000).toFixed(1) + 'k' : s.lq_count}</span>{strikeSub(s.strike_detail, 'LQ')}
                     </td>
                     <td>{fmtAnn(s.annualized_return)}</td>
                     <td>{scoreFmt(s.env_score, s.strike_score, s.cc_score, s.env_detail, s.strike_detail)}</td>
