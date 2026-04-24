@@ -587,10 +587,12 @@ body {
 .fallback { color: #fbbf24; }
 .earnings-warn { color: #fbbf24; font-weight: 600; }
 
-/* Score tiers */
-.score-good   { color: #4ade80; font-weight: 700; font-size: 14px; }
-.score-caution { color: #fbbf24; font-weight: 700; font-size: 14px; }
-.score-bad    { color: #f87171; font-weight: 700; font-size: 14px; }
+/* Score tiers (5-level) */
+.score-strong  { color: #4ade80; font-weight: 700; font-size: 14px; }
+.score-good    { color: #86efac; font-weight: 700; font-size: 14px; }
+.score-caution { color: #facc15; font-weight: 700; font-size: 14px; }
+.score-warn    { color: #fb923c; font-weight: 700; font-size: 14px; }
+.score-bad     { color: #f87171; font-weight: 700; font-size: 14px; }
 
 /* Delta */
 .delta-ok { color: #4ade80; }

@@ -226,7 +226,12 @@ export function CcTable({ data }: Props) {
 
   const scoreFmt = (env: number | undefined, strike: number | undefined, final: number | undefined, envDetail?: string, strikeDetail?: string, highlight = false) => {
     if (final == null || isNaN(final)) return <span className="dim">—</span>
-    const cls = final >= 70 ? 'score-good' : final >= 45 ? 'score-caution' : 'score-bad'
+    const cls =
+      final >= 75 ? 'score-strong'
+      : final >= 65 ? 'score-good'
+      : final >= 55 ? 'score-caution'
+      : final >= 45 ? 'score-warn'
+      : 'score-bad'
     return (
       <span
         className={cls}
