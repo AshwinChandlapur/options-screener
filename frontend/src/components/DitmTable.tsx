@@ -22,7 +22,7 @@ const COLUMNS = [
   col.accessor('price',     { header: 'Price',    cell: () => null }),
   col.accessor('vol_resistance_1', {
     header: () => (
-      <span className="col-tip" title="Volume Profile resistance levels above current price (top-3 high-volume bins, 252-day lookback)  ·  Upside ceiling for your long call  ·  ≥15% clear air = room to run  ·  NOT scored — use as context for entry/target">
+      <span className="col-tip" title="Volume Profile resistance levels above the current price (252-day lookback) · High-volume price bins where sellers historically appeared · Context for your long call's upside ceiling">
         Vol Resistance ⓘ
       </span>
     ),
@@ -31,7 +31,7 @@ const COLUMNS = [
   }),
   col.accessor('sma_ratio', {
     header: () => (
-      <span className="col-tip col-scored" title="SMA50 / SMA200 ratio  ·  >1 = bullish alignment  ·  Required for DITM  ·  Used in scoring: SMA alignment (15 pts) + SMA50 slope (7 pts)">
+      <span className="col-tip col-scored" title="SMA50 ÷ SMA200 · Ratio >1 means the 50-day average is above the 200-day average (bullish structure)">
         SMA50/200 ⓘ
       </span>
     ),
@@ -39,7 +39,7 @@ const COLUMNS = [
   }),
   col.accessor('rsi', {
     header: () => (
-      <span className="col-tip" title="RSI(14) Wilder-smoothed  ·  45–68 ideal for uptrend momentum  ·  >78 = overbought">
+      <span className="col-tip" title="Relative Strength Index (14-period) · Momentum oscillator on a 0–100 scale · >70 overbought · <30 oversold">
         RSI(14) ⓘ
       </span>
     ),
@@ -47,7 +47,7 @@ const COLUMNS = [
   }),
   col.accessor('iv_rank', {
     header: () => (
-      <span className="col-tip" title="IV Rank: how far today's IV sits between the 252d min and max (magnitude of the move).&#10;IV Percentile (P:): % of past days where IV was cheaper than today (frequency).&#10;&#10;For DITM: LOW rank = cheap options = better to buy">
+      <span className="col-tip" title="IV Rank: where today's implied volatility sits within its 252-day min–max range (0 = historically cheap, 100 = historically expensive)&#10;IV Percentile (P:): % of past days where IV was lower than today">
         IV Rank ⓘ
       </span>
     ),
@@ -55,7 +55,7 @@ const COLUMNS = [
   }),
   col.accessor('dist_from_52w_high_pct', {
     header: () => (
-      <span className="col-tip col-scored" title="Distance from 52-week high  ·  0% = at 52w high  ·  Scoring: ≤5% below = 8 pts, >30% below = 0 pts">
+      <span className="col-tip col-scored" title="Distance from the 52-week high · 0% = at the high · Negative = % below the high">
         52W Dist ⓘ
       </span>
     ),
@@ -63,7 +63,7 @@ const COLUMNS = [
   }),
   col.accessor('iv_hv_ratio', {
     header: () => (
-      <span className="col-tip col-scored" title="IV ÷ Historical Volatility (30d)  ·  INVERTED for buyers: low ratio = cheap options  ·  Scoring: <0.7 = 45 pts, >1.5 = 0 pts">
+      <span className="col-tip col-scored" title="Implied Volatility ÷ 30-day Historical Volatility · >1.0 = options priced above recent realized moves · <1.0 = options relatively cheap (favorable for buyers)">
         IV/HV ⓘ
       </span>
     ),
@@ -71,7 +71,7 @@ const COLUMNS = [
   }),
   col.accessor('trend_persistence', {
     header: () => (
-      <span className="col-tip col-scored" title="% of last 60 sessions where price closed above SMA50  ·  Measures trend consistency for LEAPS horizon  ·  Scoring: ≥75% = 10 pts, <40% = 0 pts">
+      <span className="col-tip col-scored" title="% of the last 60 sessions where price closed above the SMA50 · Measures trend consistency">
         Trend% ⓘ
       </span>
     ),
@@ -209,42 +209,42 @@ export function DitmTable({ data }: Props) {
                 </th>
               ))}
               <th>
-                <span className="col-tip" title="Days to Expiration  ·  DITM positions typically held 180–365 DTE to minimize time decay (theta) as a % of the option's value">
+                <span className="col-tip" title="Days to Expiration · Time remaining until the option contract expires">
                   DTE ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="The strike price of the deep ITM call  ·  Well below current price  ·  Higher strike = cheaper option but less intrinsic value">
+                <span className="col-tip" title="Strike price of the call option · Chosen deep in-the-money, well below the current stock price">
                   Strike ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Option mid-price: (Bid + Ask) / 2  ·  Falls back to last-traded price if bid/ask = 0  ·  Includes both intrinsic and extrinsic value  ·  Per contract = × 100 shares">
+                <span className="col-tip" title="Option mid-price: (Bid + Ask) ÷ 2 · Per-share price; multiply by 100 for full contract cost">
                   Premium ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Delta of the call option  ·  0.80–0.85 = DITM sweet spot  ·  High delta = stock substitute">
+                <span className="col-tip" title="Delta: rate of change of option price per $1 move in the stock · 0.80+ = deep in-the-money, behaves closely like the stock">
                   Delta ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Intrinsic = max(0, Price − Strike)  ·  Pure stock value embedded in the option">
+                <span className="col-tip" title="Intrinsic value: max(0, Stock Price − Strike) · The equity value embedded in the option">
                   Intrinsic ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Extrinsic % = (Premium − Intrinsic) / Stock Price × 100  ·  This is the time premium you overpay — it decays to zero by expiration">
+                <span className="col-tip" title="Extrinsic value as % of stock price: (Premium − Intrinsic) ÷ Stock Price × 100 · Time premium that decays to zero by expiration">
                   Extrinsic% ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Leverage = Stock Price / Premium  ·  e.g. 3.5× means you control $100 of stock for $28.50  ·  Higher leverage = more price exposure per $ spent">
+                <span className="col-tip" title="Stock Price ÷ Premium · Capital efficiency vs buying shares outright · e.g. 3.5× = you control $100 of stock for $28.57">
                   Leverage ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="(Ask − Bid) / Mid × 100  ·  Deep ITM calls are illiquid — wide spreads are common">
+                <span className="col-tip" title="Bid-ask spread as % of mid-price: (Ask − Bid) ÷ Mid × 100 · Reflects execution cost and liquidity">
                   Spread% ⓘ
                 </span>
               </th>

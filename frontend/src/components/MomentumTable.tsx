@@ -28,7 +28,7 @@ const COLUMNS = [
   }),
   col.accessor('momentum_score', {
     header: () => (
-      <span className="col-tip" title="Composite 0–100: RVOL(30pt) + RSI zone(20pt) + 52w proximity(25pt) + SMA structure(15pt) + ROC(10pt)">
+      <span className="col-tip" title="Composite momentum score 0–100 combining relative volume, RSI zone, 52-week proximity, SMA structure, and rate of change">
         Score ⓘ
       </span>
     ),
@@ -52,7 +52,7 @@ const COLUMNS = [
   }),
   col.accessor('rvol', {
     header: () => (
-      <span className="col-tip" title="Today's volume / 20-day avg volume · ≥2× = unusual institutional interest · ≥3× = very strong signal">
+      <span className="col-tip" title="Relative Volume · Today's volume ÷ 20-day average volume · Values above 1.0 indicate above-average activity">
         RVOL ⓘ
       </span>
     ),
@@ -65,7 +65,7 @@ const COLUMNS = [
   }),
   col.accessor('rsi', {
     header: () => (
-      <span className="col-tip" title="RSI(14) · 55–72 = momentum sweet spot · >80 = overbought (chasing) · <30 = oversold">
+      <span className="col-tip" title="Relative Strength Index (14-period) · Momentum oscillator on a 0–100 scale · >70 overbought · <30 oversold">
         RSI(14) ⓘ
       </span>
     ),
@@ -78,7 +78,7 @@ const COLUMNS = [
   }),
   col.accessor('roc_21', {
     header: () => (
-      <span className="col-tip" title="21-day Rate of Change: % price gain over last month · Top momentum stocks: >10%">
+      <span className="col-tip" title="21-day Rate of Change · % price change over the past month">
         ROC(21) ⓘ
       </span>
     ),
@@ -91,7 +91,7 @@ const COLUMNS = [
   }),
   col.accessor('dist_from_52w_high_pct', {
     header: () => (
-      <span className="col-tip" title="% below 52-week high · 0% = at year high · Breakout stocks are typically within 5–15%">
+      <span className="col-tip" title="Distance from the 52-week high · 0% = at the high · Negative = % below the high">
         vs 52w High ⓘ
       </span>
     ),
@@ -110,7 +110,7 @@ const COLUMNS = [
   }),
   col.accessor('sma_ratio', {
     header: () => (
-      <span className="col-tip" title="SMA50 / SMA200 · >1.05 = strong bullish trend structure">
+      <span className="col-tip" title="SMA50 ÷ SMA200 · Ratio >1 means the 50-day average is above the 200-day average (bullish structure)">
         SMA50/200 ⓘ
       </span>
     ),
@@ -122,7 +122,7 @@ const COLUMNS = [
   }),
   col.accessor('price_vs_sma20_pct', {
     header: () => (
-      <span className="col-tip" title="% above/below SMA20 · Positive = above (bullish) · 0–5% = ideal entry, not extended · >10% = extended/risky">
+      <span className="col-tip" title="% above or below the 20-day moving average · Positive = price is above SMA20">
         vs SMA20 ⓘ
       </span>
     ),
@@ -135,7 +135,7 @@ const COLUMNS = [
   }),
   col.accessor('dist_from_sma200_pct', {
     header: () => (
-      <span className="col-tip" title="% above SMA200 · 10–40% = strong trend · >50% = extended (higher pullback risk)">
+      <span className="col-tip" title="% above or below the 200-day moving average · Positive = price is above SMA200">
         vs SMA200 ⓘ
       </span>
     ),
@@ -148,7 +148,7 @@ const COLUMNS = [
   }),
   col.accessor('sma20_slope_pct', {
     header: () => (
-      <span className="col-tip" title="% change in SMA20 over last 5 trading days · Rising = short-term trend accelerating">
+      <span className="col-tip" title="% change in SMA20 over the last 5 trading days · Positive = short-term trend is rising">
         SMA20 Slope ⓘ
       </span>
     ),
@@ -161,7 +161,7 @@ const COLUMNS = [
   }),
   col.accessor('macd_histogram', {
     header: () => (
-      <span className="col-tip" title="MACD(12,26,9) histogram · Positive & growing = bullish momentum accelerating">
+      <span className="col-tip" title="MACD histogram (12, 26, 9) · Difference between the MACD line and its signal line · Positive = bullish momentum">
         MACD Hist ⓘ
       </span>
     ),
@@ -174,7 +174,7 @@ const COLUMNS = [
   }),
   col.accessor('short_ratio', {
     header: () => (
-      <span className="col-tip" title="Days to cover short interest at avg volume · High ratio = potential short squeeze fuel">
+      <span className="col-tip" title="Short Interest Ratio · Days to cover the short interest at the stock's average daily volume">
         Short Ratio ⓘ
       </span>
     ),

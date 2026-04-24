@@ -32,7 +32,7 @@ const COLUMNS = [
   col.accessor('price', { header: 'Price', cell: () => null }),
   col.accessor('bb_lower', {
     header: () => (
-      <span className="col-tip" title="Bollinger Bands (20, 2σ)  ·  Upper / Middle / Lower">
+      <span className="col-tip" title="Bollinger Bands (20-period, 2σ) · Upper / Middle / Lower band around the closing price">
         BB Bands ⓘ
       </span>
     ),
@@ -40,7 +40,7 @@ const COLUMNS = [
   }),
   col.accessor('vol_support_126_1', {
     header: () => (
-      <span className="col-tip col-scored" title="Volume Profile Support (126-day / 6M lookback)  ·  Same method as 1Y but uses only the most recent 6 months  ·  Better reflects current institutional memory  ·  Used in scoring: Dist vs Support (13 pts)">
+      <span className="col-tip col-scored" title="Volume Profile support levels below the current price (126-day / 6M lookback) · High-volume price bins where buyers historically stepped in">
         Vol Support 6M ⓘ
       </span>
     ),
@@ -49,7 +49,7 @@ const COLUMNS = [
   }),
   col.accessor('sma_ratio', {
     header: () => (
-      <span className="col-tip col-scored" title="SMA50 / SMA200 ratio (display)  ·  Score uses: Price>SMA50>SMA200 alignment (10 pts) + SMA50 10-day slope (10 pts)">
+      <span className="col-tip col-scored" title="SMA50 ÷ SMA200 · Ratio >1 means the 50-day average is above the 200-day average (bullish structure)">
         SMA50/200 ⓘ
       </span>
     ),
@@ -57,7 +57,7 @@ const COLUMNS = [
   }),
   col.accessor('rsi', {
     header: () => (
-      <span className="col-tip col-scored" title="RSI(14) Wilder-smoothed  ·  >70 overbought  ·  <30 oversold  ·  40–70 ideal for CSP  ·  Used in scoring: RSI (10 pts)">
+      <span className="col-tip col-scored" title="Relative Strength Index (14-period) · Momentum oscillator on a 0–100 scale · >70 overbought · <30 oversold">
         RSI(14) ⓘ
       </span>
     ),
@@ -65,7 +65,7 @@ const COLUMNS = [
   }),
   col.accessor('iv_rank', {
     header: () => (
-      <span className="col-tip col-scored" title="IV Rank: how far today's IV sits between the 252d min and max (magnitude of the move).&#10;IV Percentile (P:): % of past days where IV was cheaper than today (frequency).&#10;&#10;Formula: IV Rank = (HV_today − HV_min_252) / (HV_max_252 − HV_min_252) × 100&#10;Score uses IV Rank (25 pts) + IV÷HV Ratio (20 pts)">
+      <span className="col-tip col-scored" title="IV Rank: where today's implied volatility sits within its 252-day min–max range (0 = historically cheap, 100 = historically expensive)&#10;IV Percentile (P:): % of past days where IV was lower than today">
         IV Rank ⓘ
       </span>
     ),
@@ -73,7 +73,7 @@ const COLUMNS = [
   }),
   col.accessor('dist_from_52w_high_pct', {
     header: () => (
-      <span className="col-tip col-scored" title="Distance from 52-week high  ·  0% = at 52w high  ·  Negative = below high  ·  Scoring: ≤5% below = 15 pts, ≥20% below = 0 pts">
+      <span className="col-tip col-scored" title="Distance from the 52-week high · 0% = at the high · Negative = % below the high">
         52W Dist ⓘ
       </span>
     ),
@@ -81,7 +81,7 @@ const COLUMNS = [
   }),
   col.accessor('iv_hv_ratio', {
     header: () => (
-      <span className="col-tip col-scored" title="IV ÷ Historical Volatility (30d)  ·  >1.0 = options priced rich vs realized moves  ·  Scoring: ≥1.7 = 20 pts, <0.9 = 0 pts">
+      <span className="col-tip col-scored" title="Implied Volatility ÷ 30-day Historical Volatility · >1.0 = options priced above recent realized moves · <1.0 = options relatively cheap">
         IV/HV ⓘ
       </span>
     ),
