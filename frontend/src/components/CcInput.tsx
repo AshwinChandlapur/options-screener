@@ -99,7 +99,7 @@ const EXIT_STRATEGY: ExitBranch[] = [
     label: 'Position has < 21 DTE',
     children: [
       { cond: 'Captured ≥ 50%',                                    action: 'CLOSE',                     tone: 'close' },
-      { cond: 'OTM',                                                action: 'Let expire',                tone: 'hold' },
+      { cond: 'OTM (price < strike)',                                 action: 'Let it expire worthless — keep full premium + shares', tone: 'hold' },
       { cond: 'ITM, strike ≥ cost basis, happy to sell here',       action: 'Let assign',                tone: 'assign' },
       { cond: 'ITM, thesis broken or strike below cost basis',      action: 'ROLL up/out for credit, else accept the called-away loss', tone: 'roll' },
     ],
