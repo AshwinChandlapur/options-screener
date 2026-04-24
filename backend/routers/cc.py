@@ -83,6 +83,9 @@ class CcStrikeResultOut(BaseModel):
 class CcResultOut(BaseModel):
     symbol: str
     price: float
+    bb_upper: float
+    bb_middle: float
+    bb_lower: float
     sma_ratio: float
     rsi: float
     iv_rank: Optional[float]
@@ -195,6 +198,9 @@ def _to_out(r: CcResult) -> CcResultOut:
     return CcResultOut(
         symbol=r.symbol,
         price=r.price,
+        bb_upper=r.bb_upper,
+        bb_middle=r.bb_middle,
+        bb_lower=r.bb_lower,
         sma_ratio=r.sma_ratio,
         rsi=r.rsi,
         iv_rank=r.iv_rank,

@@ -18,6 +18,7 @@ from services.options_service import (
     get_all_expirations_calls_data,
 )
 from services.technical_service import (
+    compute_bollinger,
     compute_env_score,
     compute_cc_strike_score,
     compute_cc_final_score,
@@ -54,6 +55,9 @@ class CcStrikeResult:
 class CcResult:
     symbol: str
     price: float
+    bb_upper: float
+    bb_middle: float
+    bb_lower: float
     sma_ratio: float
     rsi: float
     iv_rank: Optional[float]
@@ -95,6 +99,7 @@ def process_cc_symbol(
         current_price = float(df["Close"].iloc[-1])
 
         # 2. Technical indicators (computed once, shared across expirations)
+        bb = compute_bollinger(df)
         sma_ratio = compute_sma_ratio(df)
         trend = compute_trend_data(df)
         rsi = compute_rsi(df)
@@ -262,6 +267,9 @@ def process_cc_symbol(
                 results.append(CcResult(
                     symbol=sym,
                     price=round(current_price, 4),
+                    bb_upper=bb["bb_upper"],
+                    bb_middle=bb["bb_middle"],
+                    bb_lower=bb["bb_lower"],
                     sma_ratio=sma_ratio,
                     rsi=rsi,
                     iv_rank=iv_rank,

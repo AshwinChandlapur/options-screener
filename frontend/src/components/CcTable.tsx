@@ -24,6 +24,14 @@ function fmtAnn(n: number | null | undefined): string {
 const COLUMNS = [
   col.accessor('symbol',        { header: 'Symbol',     cell: () => null }),
   col.accessor('price',         { header: 'Price',      cell: () => null }),
+  col.accessor('bb_lower', {
+    header: () => (
+      <span className="col-tip" title="Bollinger Bands (20, 2σ)  ·  Upper / Middle / Lower">
+        BB Bands ⓘ
+      </span>
+    ),
+    cell: () => null,
+  }),
   col.accessor('vol_resistance_126_1', {
     header: () => (
       <span className="col-tip col-scored" title="Volume Profile resistance levels above current price (126-day / 6M lookback)  ·  Same method using only the most recent 6 months  ·  Better reflects current institutional memory  ·  Used in scoring: Dist vs Resistance (13 pts)">
@@ -84,6 +92,9 @@ function groupResults(results: CcResult[]): GroupedCcResult[] {
       map.set(r.symbol, {
         symbol: r.symbol,
         price: r.price,
+        bb_upper: r.bb_upper,
+        bb_middle: r.bb_middle,
+        bb_lower: r.bb_lower,
         sma_ratio: r.sma_ratio,
         rsi: r.rsi,
         iv_rank: r.iv_rank,
@@ -293,6 +304,13 @@ export function CcTable({ data }: Props) {
                     <strong>{r.symbol}</strong>
                   </td>
                   <td rowSpan={totalRows}>{fmt2(r.price)}</td>
+                  <td rowSpan={totalRows}>
+                    <span className="bb-bands">
+                      <span className="bb-upper">{fmt2(r.bb_upper)}</span>
+                      <span className="bb-middle">{fmt2(r.bb_middle)}</span>
+                      <span className="bb-lower">{fmt2(r.bb_lower)}</span>
+                    </span>
+                  </td>
                   <td rowSpan={totalRows}>
                     {(() => {
                       const levels = [r.vol_resistance_126_1, r.vol_resistance_126_2, r.vol_resistance_126_3]

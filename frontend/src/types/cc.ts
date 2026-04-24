@@ -18,6 +18,9 @@ export interface CcStrikeInfo {
 export interface CcResult {
   symbol: string
   price: number
+  bb_upper: number
+  bb_middle: number
+  bb_lower: number
   sma_ratio: number
   rsi: number
   iv_rank: number | null
@@ -49,6 +52,9 @@ export interface CcExpirationRow {
 export interface GroupedCcResult {
   symbol: string
   price: number
+  bb_upper: number
+  bb_middle: number
+  bb_lower: number
   sma_ratio: number
   rsi: number
   iv_rank: number | null
