@@ -393,7 +393,9 @@ def compute_env_score(
         elif iv_hv_ratio >= 1.1:
             p = 5.0 + (iv_hv_ratio - 1.1) / 0.3 * 5.0
         elif iv_hv_ratio >= 0.9:
-            p = (iv_hv_ratio - 0.9) / 0.2 * 5.0
+            p = 2.0 + (iv_hv_ratio - 0.9) / 0.2 * 3.0
+        elif iv_hv_ratio >= 0.8:
+            p = (iv_hv_ratio - 0.8) / 0.1 * 2.0
     score += p; bk['IH'] = p
 
     # --- SMA Alignment (15 pts): categorical ---
