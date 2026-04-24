@@ -37,6 +37,12 @@ function envSub(pts: Record<string, number>, key: string) {
   const color = ratio >= 0.70 ? '#4ade80' : ratio >= 0.45 ? '#fbbf24' : '#f87171'
   return <span style={{ fontSize: '10px', color, display: 'block', lineHeight: 1.2 }}>{Math.round(v)}/{max}</span>
 }
+function envColor(pts: Record<string, number>, key: string): string {
+  const v = pts[key], max = ENV_MAX[key]
+  if (v == null || max == null) return ''
+  const ratio = v / max
+  return ratio >= 0.70 ? '#4ade80' : ratio >= 0.45 ? '#fbbf24' : '#f87171'
+}
 
 const COLUMNS = [
   col.accessor('symbol',        { header: 'Symbol',     cell: () => null }),
@@ -324,13 +330,16 @@ export function CcTable({ data }: Props) {
                   <td rowSpan={totalRows}>
                     {r.sma_ratio == null || isNaN(r.sma_ratio)
                       ? <span className="dim">—</span>
-                      : <><span className={r.sma_ratio >= 1 ? 'positive' : 'negative'}>{r.sma_ratio.toFixed(4)}</span><br />{envSub(envPts, 'SMA')}</>
+                  <td rowSpan={totalRows}>
+                    {r.sma_ratio == null || isNaN(r.sma_ratio)
+                      ? <span className="dim">—</span>
+                      : <><span style={{ color: envColor(envPts, 'SMA') }}>{r.sma_ratio.toFixed(4)}</span><br />{envSub(envPts, 'SMA')}</>
                     }
                   </td>
                   <td rowSpan={totalRows}>
                     {isNaN(r.dist_from_52w_high_pct)
                       ? <span className="dim">—</span>
-                      : <><span className={r.dist_from_52w_high_pct >= -5 ? 'score-good' : r.dist_from_52w_high_pct >= -15 ? 'score-caution' : 'score-bad'}>
+                      : <><span style={{ color: envColor(envPts, '52W') }}>
                           {r.dist_from_52w_high_pct.toFixed(1)}%
                         </span><br />{envSub(envPts, '52W')}</>
                     }
@@ -338,7 +347,7 @@ export function CcTable({ data }: Props) {
                   <td rowSpan={totalRows}>
                     {r.iv_rank == null
                       ? <span className="dim">N/A</span>
-                      : <><span className={r.iv_rank >= 50 ? 'badge badge-green' : r.iv_rank >= 30 ? 'badge badge-yellow' : 'badge badge-red'}>
+                      : <><span style={{ color: envColor(envPts, 'IV'), fontWeight: 600 }}>
                             {r.iv_rank.toFixed(0)}
                           </span><br />{envSub(envPts, 'IV')}</>
                     }
@@ -346,7 +355,7 @@ export function CcTable({ data }: Props) {
                   <td rowSpan={totalRows}>
                     {r.iv_hv_ratio == null
                       ? <span className="dim">—</span>
-                      : <><span className={r.iv_hv_ratio >= 1.4 ? 'score-good' : r.iv_hv_ratio >= 1.0 ? 'score-caution' : 'score-bad'}>
+                      : <><span style={{ color: envColor(envPts, 'IH') }}>
                           {r.iv_hv_ratio.toFixed(2)}×
                         </span><br />{envSub(envPts, 'IH')}</>
                     }
@@ -354,7 +363,7 @@ export function CcTable({ data }: Props) {
                   <td rowSpan={totalRows}>
                     {r.rsi == null || isNaN(r.rsi)
                       ? <span className="dim">—</span>
-                      : <><span className={r.rsi >= 70 ? 'rsi-high' : r.rsi <= 30 ? 'rsi-low' : 'rsi-ok'}>{r.rsi.toFixed(1)}</span><br />{envSub(envPts, 'RSI')}</>
+                      : <><span style={{ color: envColor(envPts, 'RSI') }}>{r.rsi.toFixed(1)}</span><br />{envSub(envPts, 'RSI')}</>
                     }
                   </td>
                   <td rowSpan={totalRows}>
