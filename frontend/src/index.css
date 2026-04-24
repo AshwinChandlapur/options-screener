@@ -277,6 +277,23 @@ body {
 .score-tier-range { font-size: 12px; color: #94a3b8; min-width: 40px; }
 .score-tier-desc  { font-size: 12px; color: #64748b; }
 
+.decision-framework {
+  border-left: 2px solid #334155;
+  padding: 4px 0 4px 14px;
+  margin: 4px 0;
+  min-width: 260px;
+  max-width: 360px;
+}
+.decision-framework-header {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
+  color: #94a3b8; text-transform: uppercase; margin-bottom: 8px;
+}
+.decision-steps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.decision-step  { display: grid; grid-template-columns: 20px 1fr; grid-template-rows: auto auto; column-gap: 8px; row-gap: 2px; align-items: baseline; }
+.decision-step-num { grid-row: 1 / span 2; font-weight: 700; font-size: 12px; color: #60a5fa; text-align: right; }
+.decision-step-q   { font-size: 12px; color: #e2e8f0; font-weight: 600; }
+.decision-step-a   { font-size: 11px; color: #64748b; line-height: 1.35; }
+
 .score-legend-factors { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 260px; }
 .score-legend-header  { font-size: 12px; font-weight: 600; color: #64748b; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.05em; }
 .score-factor-row              { display: flex; align-items: baseline; gap: 8px; }

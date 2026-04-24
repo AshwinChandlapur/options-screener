@@ -74,6 +74,13 @@ const SCORE_TIERS = [
   { range: '< 45',  label: 'Weak',     color: '#f87171', desc: 'Poor IV environment, execution risk, earnings overlap, or illiquid chain' },
 ]
 
+const DECISION_STEPS = [
+  { n: 1, q: 'Score ≥ 70?',                                              a: 'Trade it. Steps 2–4 are confirmation, not a gate.' },
+  { n: 2, q: 'Am I OK getting called away at this strike?',              a: 'If no, stop. A CC is a conditional sell — only sell the call at a price you’d actually take for the shares.' },
+  { n: 3, q: 'What are the 2 biggest factor drags?',                     a: 'Lowest-scoring factors in Env and Strike define the “ticker question” — the specific risk this trade is paying you to accept.' },
+  { n: 4, q: 'Can I articulate the thesis that overrides those drags?',  a: 'If no, skip. If yes, size normally and write the thesis down before entering.' },
+]
+
 interface Props {
   onScan: (topN: number, minDTE: number, maxDTE: number) => void
   onCustom: (symbols: string[], minDTE: number, maxDTE: number) => void
@@ -181,6 +188,18 @@ export function CcInput({ onScan, onCustom, loading }: Props) {
                 <span className="score-tier-desc">{t.desc}</span>
               </div>
             ))}
+          </div>
+          <div className="decision-framework">
+            <div className="decision-framework-header">Decision framework — run top-down per row</div>
+            <ol className="decision-steps">
+              {DECISION_STEPS.map(s => (
+                <li key={s.n} className="decision-step">
+                  <span className="decision-step-num">{s.n}</span>
+                  <span className="decision-step-q">{s.q}</span>
+                  <span className="decision-step-a">{s.a}</span>
+                </li>
+              ))}
+            </ol>
           </div>
           <div className="score-legend-factors">
             <div className="score-legend-header">Score breakdown — Final = 0.4 × Env + 0.6 × Strike</div>
