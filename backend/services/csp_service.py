@@ -167,6 +167,8 @@ def process_symbol(
 
                 # Pre-compute (strike, delta, premium, iv_fallback, stale_prem) for every OTM liquid strike
                 candidates: list[tuple[float, float, float, bool, bool]] = []
+                # Separate OI-only pass so chain_median_oi is never empty due to missing premiums
+                _delta_range_ois_all: list[int] = []
                 for sp in otm_strikes:
                     try:
                         row = puts_df[puts_df["strike"] == sp]
@@ -178,18 +180,7 @@ def process_symbol(
                         market_closed_row = (bid == 0.0 and ask == 0.0)
                         oi_val = int(row["openInterest"].iloc[0]) if not __import__('pandas').isna(row["openInterest"].iloc[0]) else 0
                         vol_val = int(row["volume"].iloc[0]) if not __import__('pandas').isna(row["volume"].iloc[0]) else 0
-                        if bid > 0 and ask > 0:
-                            prem = round((bid + ask) / 2.0, 4)
-                            stale_prem = False
-                        elif last > 0:
-                            prem = round(last, 4)
-                            stale_prem = True
-                        else:
-                            continue  # no usable premium
                         sig = get_implied_volatility(puts_df, sp)
-                        # IV from yfinance is back-computed from lastPrice when
-                        # bid/ask are 0 (market closed) — stale and unreliable.
-                        # Use hv_sigma if IV looks suspiciously low (< 15%).
                         used_hv = False
                         iv_hv_ratio_val: Optional[float] = None
                         if math.isnan(sig) or sig < 0.15:
@@ -199,13 +190,23 @@ def process_symbol(
                             if hv_sigma > 0:
                                 iv_hv_ratio_val = round(sig / hv_sigma, 4)
                         d = black_scholes_put_delta(current_price, sp, rf_rate, T, sig)
+                        # Always collect OI for chain_median_oi regardless of premium availability
+                        if 0.1 < abs(d) < 0.4:
+                            _delta_range_ois_all.append(oi_val)
+                        if bid > 0 and ask > 0:
+                            prem = round((bid + ask) / 2.0, 4)
+                            stale_prem = False
+                        elif last > 0:
+                            prem = round(last, 4)
+                            stale_prem = True
+                        else:
+                            continue  # no usable premium — skip for trading candidates only
                         candidates.append((sp, d, prem, used_hv, stale_prem, iv_hv_ratio_val, sig, oi_val, vol_val))
                     except Exception:
                         continue
 
-                # Chain median OI: only strikes with 0.1 < |delta| < 0.4 (the relevant CSP range)
-                delta_range_ois = [c[7] for c in candidates if 0.1 < abs(c[1]) < 0.4]
-                chain_median_oi = float(np.median(delta_range_ois)) if delta_range_ois else 0.0
+                # Chain median OI: use the all-strikes pass (independent of premium availability)
+                chain_median_oi = float(np.median(_delta_range_ois_all)) if _delta_range_ois_all else 0.0
 
                 # Primary filter: -0.35 to -0.10 delta
                 in_range = [c for c in candidates if -0.35 <= c[1] <= -0.10]
