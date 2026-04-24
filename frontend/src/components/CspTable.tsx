@@ -211,16 +211,6 @@ export function CspTable({ data }: Props) {
             E{env.toFixed(0)} S{strike.toFixed(0)}
           </span>
         )}
-        {envDetail && (
-          <span style={{ fontSize: '9px', color: '#7a7a9a', display: 'block', lineHeight: '1.3', marginTop: '1px', fontWeight: 400 }}>
-            {envDetail}
-          </span>
-        )}
-        {strikeDetail && (
-          <span style={{ fontSize: '9px', color: '#7a7a9a', display: 'block', lineHeight: '1.3', fontWeight: 400 }}>
-            {strikeDetail}
-          </span>
-        )}
       </span>
     )
   }
