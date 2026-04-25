@@ -8,8 +8,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routers.csp import router as csp_router
-from routers.ditm import router as ditm_router
-from routers.momentum import router as momentum_router
 from routers.cc import router as cc_router
 
 logging.basicConfig(
@@ -40,8 +38,6 @@ app.add_middleware(
 )
 
 app.include_router(csp_router)
-app.include_router(ditm_router)
-app.include_router(momentum_router)
 app.include_router(cc_router)
 
 

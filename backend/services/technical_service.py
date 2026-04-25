@@ -301,48 +301,6 @@ def compute_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int =
     }
 
 
-def compute_momentum_score(
-    rvol: float,
-    rsi: float,
-    dist_from_52w_high_pct: float,
-    sma_ratio: float,
-    roc_21: float,
-) -> float:
-    """
-    Composite momentum score 0–100. Weights:
-      RVOL                  30 pts  (3× avg vol = max)
-      RSI in 55–72 zone     20 pts
-      Price near 52w high   25 pts  (<5% below = near max)
-      SMA50/200 ratio       15 pts  (1.10+ = max)
-      ROC(21)               10 pts  (10%+ = max)
-    """
-    import math as _math
-    score = 0.0
-
-    if not _math.isnan(rvol) and rvol > 0:
-        score += min(rvol / 3.0, 1.0) * 30
-
-    if not _math.isnan(rsi):
-        if 55 <= rsi <= 72:
-            score += 20
-        elif (50 <= rsi < 55) or (72 < rsi <= 80):
-            score += 12
-        elif 45 <= rsi < 50:
-            score += 5
-
-    if not _math.isnan(dist_from_52w_high_pct):
-        pct_below = abs(min(dist_from_52w_high_pct, 0.0))
-        score += max(0.0, 1.0 - pct_below / 20.0) * 25
-
-    if not _math.isnan(sma_ratio):
-        score += min(max((sma_ratio - 1.0) / 0.10, 0.0), 1.0) * 15
-
-    if not _math.isnan(roc_21):
-        score += min(max(roc_21 / 10.0, 0.0), 1.0) * 10
-
-    return round(score, 1)
-
-
 # =============================================================================
 # Scoring weight constants (single source of truth — must sum to 100 each)
 # =============================================================================
