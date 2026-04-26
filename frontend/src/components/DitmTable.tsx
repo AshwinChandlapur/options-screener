@@ -1,0 +1,654 @@
+import {
+  useReactTable,
+  getCoreRowModel,
+  getSortedRowModel,
+  flexRender,
+  createColumnHelper,
+  type SortingState,
+} from '@tanstack/react-table'
+import { useState, useMemo } from 'react'
+import type { ReactElement } from 'react'
+import type { DitmResult, GroupedDitmResult } from '../types/ditm'
+
+const col = createColumnHelper<GroupedDitmResult>()
+
+function fmt2(n: number | null | undefined): string {
+  if (n == null) return '—'
+  return n.toFixed(2)
+}
+function fmtDelta(n: number | null | undefined): string {
+  if (n == null) return '—'
+  return n.toFixed(3)
+}
+function fmtPct(n: number | null | undefined, decimals = 1): string {
+  if (n == null) return '—'
+  return n.toFixed(decimals) + '%'
+}
+
+// ---------------------------------------------------------------------------
+// Detail string parsing (mirrors CspTable pattern)
+// ---------------------------------------------------------------------------
+
+function parseDetail(detail: string): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const part of (detail ?? '').split(' ')) {
+    const idx = part.indexOf(':')
+    if (idx > 0) out[part.slice(0, idx)] = Number(part.slice(idx + 1))
+  }
+  return out
+}
+
+// ENV factor keys + max pts (must match ditm_service detail string keys)
+const ENV_MAX: Record<string, number> = {
+  Tr: 30, HV: 12, WRSI: 10, '52W': 12, R2: 15, Ea: 8, LQ: 13,
+}
+// Strike factor keys + max pts
+const STRIKE_MAX: Record<string, number> = {
+  'Δ': 22, Ext: 28, Th: 17, IV: 10, BA: 18, Cap: 5,
+}
+
+function subScore(pts: Record<string, number>, key: string, maxMap: Record<string, number>) {
+  const v = pts[key], max = maxMap[key]
+  if (v == null || max == null) return null
+  const ratio = v / max
+  const color = ratio >= 0.70 ? '#4ade80' : ratio >= 0.45 ? '#fbbf24' : '#f87171'
+  return <span style={{ fontSize: '10px', color, display: 'block', lineHeight: 1.2 }}>{Math.round(v)}/{max}</span>
+}
+
+function subColor(pts: Record<string, number>, key: string, maxMap: Record<string, number>): string {
+  const v = pts[key], max = maxMap[key]
+  if (v == null || max == null) return ''
+  const ratio = v / max
+  return ratio >= 0.70 ? '#4ade80' : ratio >= 0.45 ? '#fbbf24' : '#f87171'
+}
+
+function subInline(pts: Record<string, number>, key: string, maxMap: Record<string, number>) {
+  const v = pts[key], max = maxMap[key]
+  if (v == null || max == null) return null
+  const ratio = v / max
+  const color = ratio >= 0.70 ? '#4ade80' : ratio >= 0.45 ? '#fbbf24' : '#f87171'
+  return <span style={{ fontSize: '10px', color, marginLeft: 3 }}>{Math.round(v)}/{max}</span>
+}
+
+// ---------------------------------------------------------------------------
+// Score colour (same 5-tier thresholds as CSP/CC)
+// ---------------------------------------------------------------------------
+
+function scoreFmt(
+  env: number | undefined,
+  strike: number | undefined,
+  final: number | undefined,
+  highlight = false,
+) {
+  if (final == null || isNaN(final)) return <span className="dim">—</span>
+  const rounded = Math.round(final)
+  const cls =
+    rounded >= 75 ? 'score-strong'
+    : rounded >= 65 ? 'score-good'
+    : rounded >= 55 ? 'score-caution'
+    : rounded >= 45 ? 'score-warn'
+    : 'score-bad'
+  return (
+    <span
+      className={cls}
+      style={highlight ? { fontWeight: 800, fontSize: '15px' } : {}}
+      title={`Env: ${env?.toFixed(0) ?? '—'}  ·  Strike: ${strike?.toFixed(0) ?? '—'}  ·  Final: ${final.toFixed(0)}`}
+    >
+      {final.toFixed(0)}
+      {env != null && strike != null && (
+        <span style={{ fontSize: '10px', opacity: 0.7, display: 'block' }}>
+          E{env.toFixed(0)} S{strike.toFixed(0)}
+        </span>
+      )}
+    </span>
+  )
+}
+
+const fmtSpread = (v: number | null) => {
+  if (v == null) return <span className="dim">—</span>
+  const cls = v > 10 ? 'spread-wide' : v > 5 ? 'spread-ok' : 'spread-tight'
+  return <span className={cls}>{v.toFixed(1)}%</span>
+}
+
+// ---------------------------------------------------------------------------
+// Grouping
+// ---------------------------------------------------------------------------
+
+// Ticker-level columns (header rendering / sorting only; cells rendered via rowSpan)
+const COLUMNS = [
+  col.accessor('symbol',                 { header: 'Symbol',   cell: () => null, meta: { sticky: 1 } }),
+  col.accessor('price',                  { header: 'Price',    cell: () => null, meta: { sticky: 2 } }),
+  col.accessor('sma_ratio',              { header: () => <span className="col-tip col-scored" title="SMA50 ÷ SMA200 · >1 = SMA50 above SMA200 (uptrend)">Trend ⓘ</span>, cell: () => null }),
+  col.accessor('hv_rank',                { header: () => <span className="col-tip col-scored" title="HV Rank (0–100) · DITM buyers want LOW rank = cheap extrinsic">HV Rank ⓘ</span>, cell: () => null }),
+  col.accessor('weekly_rsi',             { header: () => <span className="col-tip col-scored" title="Weekly RSI(14) — medium-term momentum on weekly closes · 50–65 = ideal">W-RSI ⓘ</span>, cell: () => null }),
+  col.accessor('ret_200d',               { header: () => <span className="col-tip col-scored" title="200-day median-anchored return · close_today / median(closes 200d ago) − 1">200d Ret ⓘ</span>, cell: () => null }),
+  col.accessor('dist_from_52w_high_pct', { header: () => <span className="col-tip col-scored" title="Distance from 52-week high · 0% = at the high · negative = % below">52W Dist ⓘ</span>, cell: () => null }),
+  col.accessor('earnings_date',          { header: 'Earnings', cell: () => null }),
+  col.accessor('best_score',             { header: () => null, cell: () => null }),
+]
+
+function groupResults(results: DitmResult[]): GroupedDitmResult[] {
+  const map = new Map<string, GroupedDitmResult>()
+  for (const r of results) {
+    if (!map.has(r.symbol)) {
+      map.set(r.symbol, {
+        symbol: r.symbol,
+        price: r.price,
+        sma_ratio: r.sma_ratio,
+        hv_rank: r.hv_rank,
+        hv30: r.hv30,
+        weekly_rsi: r.weekly_rsi,
+        ret_200d: r.ret_200d,
+        dist_from_52w_high_pct: r.dist_from_52w_high_pct,
+        earnings_date: r.earnings_date,
+        earnings_within_dte: false,
+        gap_3d_pct: r.gap_3d_pct,
+        macro_hold: false,
+        best_score: 0,
+        expirations: [],
+        env_detail: '',
+      })
+    }
+    const g = map.get(r.symbol)!
+    if (r.earnings_within_dte) g.earnings_within_dte = true
+    if (r.macro_hold) g.macro_hold = true
+    g.expirations.push({
+      dte: r.dte,
+      expiration: r.expiration,
+      earnings_within_dte: r.earnings_within_dte,
+      strikes: r.strikes,
+      best_score: r.best_ditm_score,
+      macro_hold: r.macro_hold,
+      chain_median_oi: r.chain_median_oi,
+    })
+  }
+  for (const g of map.values()) {
+    g.expirations.sort((a, b) => a.dte - b.dte)
+    g.best_score = Math.max(...g.expirations.map(e => e.best_score))
+    const bestStrike = g.expirations.flatMap(e => e.strikes).find(s => s.is_best)
+      ?? g.expirations[0]?.strikes[0]
+    g.env_detail = bestStrike?.env_detail ?? ''
+  }
+  return [...map.values()].sort((a, b) => b.best_score - a.best_score)
+}
+
+interface Props {
+  data: DitmResult[]
+  macroPass: boolean
+  vixLevel: number | null
+  vix5dChange: number | null
+  spyAboveSma200: boolean
+}
+
+export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma200 }: Props) {
+  const groupedData = useMemo(() => groupResults(data), [data])
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'best_score', desc: true }])
+  const [strikeExpanded, setStrikeExpanded] = useState<Set<string>>(new Set())
+
+  const anyHvFallback = groupedData.some(r =>
+    r.expirations.some(e => e.strikes.some(s => s.iv_fallback))
+  )
+
+  const toggleStrikes = (key: string) => {
+    setStrikeExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  const table = useReactTable({
+    data: groupedData,
+    columns: COLUMNS,
+    state: { sorting, columnVisibility: { best_score: false } },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  })
+
+  if (groupedData.length === 0) return null
+
+  const scoreCol = table.getColumn('best_score')
+  const scoreSorted = scoreCol?.getIsSorted()
+
+  return (
+    <div className="table-wrapper">
+      {/* Macro status — always visible */}
+      {(() => {
+        const vixHigh = vixLevel != null && vixLevel >= 25
+        const vixRising = vix5dChange != null && vix5dChange > 0
+        const vixFailing = vixHigh && vixRising
+        const spyFailing = !spyAboveSma200
+        const failReasons: string[] = []
+        if (vixFailing) failReasons.push(`VIX ${vixLevel!.toFixed(1)} ≥ 25 and rising (+${vix5dChange!.toFixed(1)} over 5d)`)
+        if (spyFailing) failReasons.push('SPY below SMA200')
+        return (
+          <div className="stale-banner" style={{ background: macroPass ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.10)', borderColor: macroPass ? '#22c55e' : '#ef4444' }}>
+            <span style={{ color: macroPass ? '#4ade80' : '#f87171' }}>
+              {macroPass ? '✓ Macro Pass' : '⚠ Macro Hold'}
+            </span>
+            <span style={{ color: '#94a3b8', marginLeft: 10, fontSize: '12px' }}>
+              VIX {vixLevel != null ? vixLevel.toFixed(1) : '—'}
+              {vix5dChange != null && (
+                <span style={{ color: vix5dChange > 0 ? '#f87171' : '#4ade80', marginLeft: 4 }}>
+                  ({vix5dChange > 0 ? '+' : ''}{vix5dChange.toFixed(1)} 5d)
+                </span>
+              )}
+              {macroPass
+                ? ' · SPY > SMA200 · Low macro risk'
+                : ` · Failing: ${failReasons.join(', ')} — scores shown for reference`}
+            </span>
+          </div>
+        )
+      })()}
+      {anyHvFallback && (
+        <div className="stale-banner">
+          <span>⚠ Market closed — some IV values are stale. Delta is estimated from 30-day historical volatility.</span>
+        </div>
+      )}
+      <table className="screener-table">
+        <thead>
+          {table.getHeaderGroups().map(hg => (
+            <tr key={hg.id}>
+              {hg.headers.map(header => {
+                const stickyIdx = (header.column.columnDef.meta as { sticky?: number } | undefined)?.sticky
+                const classes = [
+                  header.column.getCanSort() ? 'sortable' : '',
+                  stickyIdx ? `sticky-col sticky-col-${stickyIdx}` : '',
+                ].filter(Boolean).join(' ')
+                return (
+                  <th
+                    key={header.id}
+                    onClick={header.column.getToggleSortingHandler()}
+                    className={classes}
+                  >
+                    {flexRender(header.column.columnDef.header, header.getContext())}
+                    {header.column.getIsSorted() === 'asc' && ' ↑'}
+                    {header.column.getIsSorted() === 'desc' && ' ↓'}
+                  </th>
+                )
+              })}
+              {/* Expiration-level header */}
+              <th>
+                <span className="col-tip" title="Days to Expiration · DITM uses longer DTE (90–365) for sustained directional exposure">
+                  DTE ⓘ
+                </span>
+              </th>
+              {/* Strike-level headers */}
+              <th>
+                <span className="col-tip" title="Strike price · ITM for calls (strike < price) · % shown is how far ITM">
+                  Strike ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Option mid-price: (Bid + Ask) / 2 · Falls back to last-traded price if bid/ask = 0">
+                  Mid ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Black-Scholes call delta · Sweet spot 0.80–0.85 · Approximates $ move per $1 stock move">
+                  Δ ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Extrinsic value / strike × 100 · The time-value cost · DITM buyers want this BELOW 4%">
+                  Extrinsic% ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Annualised BS theta / strike × 100 · Cost-of-carry per year as % of strike · Below 10% = efficient hold">
+                  Theta/yr ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="(Strike + Mid − Price) / Price × 100 · Stock must rise this much by expiry to break even · Display only">
+                  BE% ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Mid / Price × 100 · Capital committed as % of stock price · Sweet spot 25–35%">
+                  Cap% ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="(Ask − Bid) / Mid × 100 · Transaction cost on entry and exit">
+                  Spread% ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Chain median OI across 0.60–0.95 delta call strikes">
+                  OI ⓘ
+                </span>
+              </th>
+              <th
+                className="sortable"
+                onClick={() => scoreCol?.toggleSorting(scoreSorted === 'asc')}
+              >
+                <span className="col-tip" title="Final Score = 0.5×Env + 0.5×Strike&#10;&#10;ENV (100 pts)&#10;  Trend Strength  30 pts  P>SMA50>SMA200&#10;  HV Rank (inv.)  12 pts  ≤20=full (buyers want cheap vol)&#10;  Weekly RSI      10 pts  50–65=full&#10;  52W High Dist.  12 pts  3–10%=full&#10;  200d Return     15 pts  ≥25%=full&#10;  Days to Earn.    8 pts  ≤7=gate&#10;  Chain Liquidity 13 pts  log10 scale&#10;&#10;STRIKE (100 pts)&#10;  Delta           22 pts  0.80–0.85 peak&#10;  Extrinsic%      28 pts  &lt;2%=full&#10;  Theta/yr        17 pts  &lt;5%=full&#10;  IV Percentile   10 pts  ≤25th=full&#10;  Bid-Ask Spread  18 pts  ≤2%=full&#10;  Capital Eff.     5 pts  25–35%=full">
+                  Score ⓘ
+                </span>
+                {scoreSorted === 'asc' && ' ↑'}
+                {scoreSorted === 'desc' && ' ↓'}
+              </th>
+            </tr>
+          ))}
+        </thead>
+
+        {table.getRowModel().rows.map(row => {
+          const r = row.original
+
+          const totalRows = r.expirations.reduce((sum, exp) => {
+            const altCount = strikeExpanded.has(`${r.symbol}-${exp.expiration}`)
+              ? exp.strikes.filter(s => !s.is_best).length
+              : 0
+            return sum + 1 + altCount
+          }, 0)
+
+          const rows: ReactElement[] = []
+          let absRowIdx = 0
+
+          for (const [expIdx, exp] of r.expirations.entries()) {
+            const key = `${r.symbol}-${exp.expiration}`
+            const showAlts = strikeExpanded.has(key)
+            if (!exp.strikes?.length) continue
+            const bestStrike = exp.strikes.find(s => s.is_best) ?? exp.strikes[0]
+            const altStrikes = exp.strikes.filter(s => !s.is_best)
+            const dteCellRows = 1 + (showAlts ? altStrikes.length : 0)
+            const isFirstRow = absRowIdx === 0
+
+            const envPts = isFirstRow ? parseDetail(r.env_detail) : {}
+
+            // Trend label from SMA ratio
+            const trendLabel = r.sma_ratio > 1.0
+              ? (r.sma_ratio > 1.02 ? 'Strong' : 'Bullish')
+              : 'Neutral'
+
+            rows.push(
+              <tr key={`${expIdx}-best`} className={isFirstRow ? 'first-exp-row' : 'sub-exp-row'}>
+
+                {/* ── Ticker-level cells (first row only, rowSpan all) ── */}
+                {isFirstRow && <>
+                  <td rowSpan={totalRows} className="ticker-cell sticky-col sticky-col-1">
+                    <strong>{r.symbol}</strong>
+                    {r.gap_3d_pct >= 3 && (
+                      <span className="earnings-warn" title={`Recent gap: ${r.gap_3d_pct.toFixed(1)}%`}> ⚠</span>
+                    )}
+                  </td>
+                  <td rowSpan={totalRows} className="sticky-col sticky-col-2">{fmt2(r.price)}</td>
+
+                  {/* Trend */}
+                  <td rowSpan={totalRows}>
+                    <span style={{ color: subColor(envPts, 'Tr', ENV_MAX) || '#94a3b8', fontWeight: 600 }}>{trendLabel}</span>
+                    <br />
+                    <span style={{ fontSize: '10px', color: '#94a3b8' }}>
+                      {isNaN(r.sma_ratio) ? '—' : r.sma_ratio.toFixed(4)}
+                    </span>
+                    {(() => {
+                      const trPts = envPts['Tr']
+                      if (trPts == null) return null
+                      const pass = trPts >= 22
+                      return (
+                        <span
+                          style={{ fontSize: '10px', color: pass ? '#4ade80' : '#f87171', display: 'block', lineHeight: 1.2 }}
+                          title={pass ? 'Trend gate: Pass (P>SMA50>SMA200)' : `Trend gate: Fail (${Math.round(trPts)} pts < 22 → ENV = 0)`}
+                        >
+                          {pass ? '✓ Gate' : '✗ Gate'}
+                        </span>
+                      )
+                    })()}
+                  </td>
+
+                  {/* HV Rank */}
+                  <td rowSpan={totalRows}>
+                    {isNaN(r.hv_rank)
+                      ? <span className="dim">N/A</span>
+                      : <>
+                          <span style={{ color: subColor(envPts, 'HV', ENV_MAX), fontWeight: 600 }}>
+                            {r.hv_rank.toFixed(0)}
+                          </span>
+                          {subScore(envPts, 'HV', ENV_MAX)}
+                          {(() => {
+                            const pass = r.hv_rank <= 50
+                            return (
+                              <span
+                                style={{ fontSize: '10px', color: pass ? '#4ade80' : '#f87171', display: 'block', lineHeight: 1.2 }}
+                                title={pass ? 'HV gate: Pass (rank ≤ 50)' : `HV gate: Fail (rank ${r.hv_rank.toFixed(0)} > 50 → ENV = 0)`}
+                              >
+                                {pass ? '✓ Gate' : '✗ Gate'}
+                              </span>
+                            )
+                          })()}
+                        </>
+                    }
+                  </td>
+
+                  {/* Weekly RSI */}
+                  <td rowSpan={totalRows}>
+                    {isNaN(r.weekly_rsi)
+                      ? <span className="dim">—</span>
+                      : <>
+                          <span style={{ color: subColor(envPts, 'WRSI', ENV_MAX) }}>
+                            {r.weekly_rsi.toFixed(1)}
+                          </span>
+                          {subScore(envPts, 'WRSI', ENV_MAX)}
+                        </>
+                    }
+                  </td>
+
+                  {/* 200d Return */}
+                  <td rowSpan={totalRows}>
+                    {isNaN(r.ret_200d)
+                      ? <span className="dim">—</span>
+                      : <>
+                          <span style={{ color: subColor(envPts, 'R2', ENV_MAX) }}>
+                            {r.ret_200d >= 0 ? '+' : ''}{r.ret_200d.toFixed(1)}%
+                          </span>
+                          {subScore(envPts, 'R2', ENV_MAX)}
+                        </>
+                    }
+                  </td>
+
+                  {/* 52W Dist */}
+                  <td rowSpan={totalRows}>
+                    {isNaN(r.dist_from_52w_high_pct)
+                      ? <span className="dim">—</span>
+                      : <>
+                          <span style={{ color: subColor(envPts, '52W', ENV_MAX) }}>
+                            {r.dist_from_52w_high_pct.toFixed(1)}%
+                          </span>
+                          {subScore(envPts, '52W', ENV_MAX)}
+                        </>
+                    }
+                  </td>
+
+                  {/* Earnings */}
+                  <td rowSpan={totalRows}>
+                    {r.earnings_date
+                      ? <>
+                          <span className={r.days_to_earnings != null && r.days_to_earnings <= 7 ? 'earnings-warn' : ''}>
+                            {r.earnings_date}
+                          </span>
+                          {(() => {
+                            const dte = r.days_to_earnings
+                            if (dte == null) return null
+                            const pass = dte > 7
+                            return (
+                              <span
+                                style={{ fontSize: '10px', color: pass ? '#4ade80' : '#f87171', display: 'block', lineHeight: 1.2 }}
+                                title={pass ? `Earnings gate: Pass (${dte}d away)` : `Earnings gate: Fail (${dte}d ≤ 7 → ENV = 0)`}
+                              >
+                                {pass ? '✓ Gate' : '✗ Gate'}
+                              </span>
+                            )
+                          })()}
+                        </>
+                      : <span className="dim">—</span>
+                    }
+                  </td>
+                </>}
+
+                {/* ── DTE cell (spans best + alt strikes for this expiry) ── */}
+                <td className="dte-cell" rowSpan={dteCellRows}>
+                  <span className="dte-num">{exp.dte}</span><br />
+                  <span className="expiry-date">{exp.expiration}</span>
+                  {exp.earnings_within_dte && <span className="earnings-warn"> ⚠</span>}
+                  <div className="oi-badge">
+                    OI: {exp.chain_median_oi > 0
+                      ? (exp.chain_median_oi >= 1000
+                        ? (exp.chain_median_oi / 1000).toFixed(1) + 'k'
+                        : Math.round(exp.chain_median_oi))
+                      : <span className="dim">—</span>}
+                    {subInline(parseDetail(bestStrike.env_detail), 'LQ', ENV_MAX)}
+                  </div>
+                </td>
+
+                {/* ── Best strike cells ── */}
+                <td className="strike-cell best-strike">
+                  <span className="strike-price">{fmt2(bestStrike.strike)}</span>
+                  {/* ITM % (negative = below price) */}
+                  <span className="strike-fall" style={{ color: '#4ade80' }}>
+                    {' '}{((bestStrike.strike - r.price) / r.price * 100).toFixed(1)}%
+                  </span>
+                  {altStrikes.length > 0 && (
+                    <button className="strike-toggle" onClick={() => toggleStrikes(key)}>
+                      {showAlts ? '▲ hide' : `▼ ${altStrikes.length} more`}
+                    </button>
+                  )}
+                </td>
+
+                <td className="prem-cell">${bestStrike.mid.toFixed(2)}</td>
+
+                <td>
+                  <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'Δ', STRIKE_MAX) }}>
+                    +{fmtDelta(bestStrike.delta)}
+                  </span>
+                  {bestStrike.iv_fallback && (
+                    <span className="iv-fallback-tag" title="Delta estimated from historical volatility — market closed/stale quotes">~HV</span>
+                  )}
+                  {subScore(parseDetail(bestStrike.strike_detail), 'Δ', STRIKE_MAX)}
+                </td>
+
+                <td>
+                  <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'Ext', STRIKE_MAX) }}>
+                    {fmtPct(bestStrike.extrinsic_pct)}
+                  </span>
+                  {subScore(parseDetail(bestStrike.strike_detail), 'Ext', STRIKE_MAX)}
+                </td>
+
+                <td>
+                  <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'Th', STRIKE_MAX) }}>
+                    {fmtPct(bestStrike.theta_annualized_pct)}
+                  </span>
+                  {subScore(parseDetail(bestStrike.strike_detail), 'Th', STRIKE_MAX)}
+                </td>
+
+                <td>
+                  <span className="dim">{fmtPct(bestStrike.breakeven_pct)}</span>
+                </td>
+
+                <td>
+                  <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'Cap', STRIKE_MAX) }}>
+                    {fmtPct(bestStrike.capital_efficiency_pct)}
+                  </span>
+                  {subScore(parseDetail(bestStrike.strike_detail), 'Cap', STRIKE_MAX)}
+                </td>
+
+                <td>
+                  <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'BA', STRIKE_MAX) }}>
+                    {fmtSpread(bestStrike.bid_ask_spread_pct)}
+                  </span>
+                  {subScore(parseDetail(bestStrike.strike_detail), 'BA', STRIKE_MAX)}
+                </td>
+
+                <td>
+                  <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'IV', STRIKE_MAX) }}>
+                    {bestStrike.chain_oi >= 1000
+                      ? (bestStrike.chain_oi / 1000).toFixed(1) + 'k'
+                      : bestStrike.chain_oi}
+                  </span>
+                  {subScore(parseDetail(bestStrike.strike_detail), 'IV', STRIKE_MAX)}
+                </td>
+
+                <td>
+                  {scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.ditm_score, true)}
+                </td>
+              </tr>
+            )
+            absRowIdx++
+
+            {/* Alt strike rows */}
+            if (showAlts) {
+              for (const [si, s] of altStrikes.entries()) {
+                rows.push(
+                  <tr key={`${expIdx}-alt-${si}`} className="alt-strike-row">
+                    <td className="strike-cell">
+                      <span className="strike-price">{fmt2(s.strike)}</span>
+                      <span className="strike-fall" style={{ color: '#4ade80' }}>
+                        {' '}{((s.strike - r.price) / r.price * 100).toFixed(1)}%
+                      </span>
+                    </td>
+                    <td className="prem-cell">${s.mid.toFixed(2)}</td>
+                    <td>
+                      <span style={{ color: subColor(parseDetail(s.strike_detail), 'Δ', STRIKE_MAX) }}>
+                        +{fmtDelta(s.delta)}
+                      </span>
+                      {s.iv_fallback && (
+                        <span className="iv-fallback-tag" title="Delta estimated from historical volatility">~HV</span>
+                      )}
+                      {subScore(parseDetail(s.strike_detail), 'Δ', STRIKE_MAX)}
+                    </td>
+                    <td>
+                      <span style={{ color: subColor(parseDetail(s.strike_detail), 'Ext', STRIKE_MAX) }}>
+                        {fmtPct(s.extrinsic_pct)}
+                      </span>
+                      {subScore(parseDetail(s.strike_detail), 'Ext', STRIKE_MAX)}
+                    </td>
+                    <td>
+                      <span style={{ color: subColor(parseDetail(s.strike_detail), 'Th', STRIKE_MAX) }}>
+                        {fmtPct(s.theta_annualized_pct)}
+                      </span>
+                      {subScore(parseDetail(s.strike_detail), 'Th', STRIKE_MAX)}
+                    </td>
+                    <td>
+                      <span className="dim">{fmtPct(s.breakeven_pct)}</span>
+                    </td>
+                    <td>
+                      <span style={{ color: subColor(parseDetail(s.strike_detail), 'Cap', STRIKE_MAX) }}>
+                        {fmtPct(s.capital_efficiency_pct)}
+                      </span>
+                      {subScore(parseDetail(s.strike_detail), 'Cap', STRIKE_MAX)}
+                    </td>
+                    <td>
+                      <span style={{ color: subColor(parseDetail(s.strike_detail), 'BA', STRIKE_MAX) }}>
+                        {fmtSpread(s.bid_ask_spread_pct)}
+                      </span>
+                      {subScore(parseDetail(s.strike_detail), 'BA', STRIKE_MAX)}
+                    </td>
+                    <td>
+                      <span style={{ color: subColor(parseDetail(s.strike_detail), 'IV', STRIKE_MAX) }}>
+                        {s.chain_oi >= 1000 ? (s.chain_oi / 1000).toFixed(1) + 'k' : s.chain_oi}
+                      </span>
+                      {subScore(parseDetail(s.strike_detail), 'IV', STRIKE_MAX)}
+                    </td>
+                    <td>
+                      {scoreFmt(s.env_score, s.strike_score, s.ditm_score)}
+                    </td>
+                  </tr>
+                )
+                absRowIdx++
+              }
+            }
+          }
+
+          return <tbody key={r.symbol}>{rows}</tbody>
+        })}
+      </table>
+      <div className="table-footer-note">
+        HV Rank = 30-day historical volatility ranked over a 252-day window.
+        Trend = price vs SMA50 vs SMA200.
+        ⚠ in Symbol = overnight gap ≥ 3% in last 3 sessions.
+        Best strike highlighted by highest DITM score.
+      </div>
+    </div>
+  )
+}

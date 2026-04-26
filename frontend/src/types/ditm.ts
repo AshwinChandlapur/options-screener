@@ -1,0 +1,94 @@
+export interface DitmStrikeInfo {
+  strike: number
+  delta: number
+  mid: number
+  extrinsic_pct: number           // extrinsic / strike as % (lower = better)
+  theta_annualized_pct: number    // |BS theta annual| / strike * 100 (lower = better)
+  breakeven_pct: number           // (strike + mid - price) / price * 100 — display only
+  capital_efficiency_pct: number  // mid / price * 100 — sweet spot 25–35%
+  bid_ask_spread_pct: number | null
+  chain_oi: number
+  env_score: number
+  strike_score: number
+  ditm_score: number
+  env_detail: string
+  strike_detail: string
+  is_best: boolean
+  iv_fallback: boolean            // true when HV30 used instead of chain IV
+}
+
+export interface DitmResult {
+  symbol: string
+  price: number
+  sma_ratio: number               // SMA50 / SMA200
+  hv_rank: number                 // HV percentile 0–100
+  hv30: number                    // 30-day HV as % (e.g. 28.5)
+  weekly_rsi: number              // Weekly RSI(14)
+  ret_200d: number                // 200d median-anchored return as % (e.g. 18.5)
+  dist_from_52w_high_pct: number  // % below 52W high (negative = below)
+  earnings_date: string | null
+  days_to_earnings: number | null
+  earnings_within_dte: boolean
+  dte: number
+  expiration: string
+  strikes: DitmStrikeInfo[]
+  best_ditm_score: number
+  gap_3d_pct: number              // max overnight gap last 3 sessions (%)
+  macro_hold: boolean             // VIX ≥ 25 and rising, or SPY < SMA200
+  chain_median_oi: number
+}
+
+export interface DitmExpirationRow {
+  dte: number
+  expiration: string
+  earnings_within_dte: boolean
+  strikes: DitmStrikeInfo[]
+  best_score: number
+  macro_hold: boolean
+  chain_median_oi: number
+}
+
+export interface GroupedDitmResult {
+  symbol: string
+  price: number
+  sma_ratio: number
+  hv_rank: number
+  hv30: number
+  weekly_rsi: number
+  ret_200d: number
+  dist_from_52w_high_pct: number
+  earnings_date: string | null
+  earnings_within_dte: boolean
+  gap_3d_pct: number
+  macro_hold: boolean
+  best_score: number
+  expirations: DitmExpirationRow[]
+  env_detail: string
+}
+
+export interface DitmFilterState {
+  smaRatioBullishOnly: boolean
+  maxSpreadPct: number
+  excludeEarningsWithinDte: boolean
+  maxCapital: number
+}
+
+export interface DitmError {
+  symbol: string
+  reason: string
+}
+
+export interface DitmRequest {
+  symbols: string[]
+  minDTE: number
+  maxDTE: number
+}
+
+export interface DitmResponse {
+  results: DitmResult[]
+  errors: DitmError[]
+  macro_pass: boolean
+  vix_level: number | null
+  vix_5d_change: number | null
+  spy_above_sma200: boolean
+}

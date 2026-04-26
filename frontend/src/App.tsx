@@ -5,10 +5,15 @@ import { CspTable } from './components/CspTable'
 import { CcInput } from './components/CcInput'
 import { CcTable } from './components/CcTable'
 import { CcFilterPanel } from './components/CcFilterPanel'
+import { DitmInput } from './components/DitmInput'
+import { DitmFilterPanel } from './components/DitmFilterPanel'
+import { DitmTable } from './components/DitmTable'
 import { useCsp } from './hooks/useCsp'
 import { useCc } from './hooks/useCc'
+import { useDitm } from './hooks/useDitm'
 import type { CspFilterState, CspResult } from './types/csp'
 import type { CcFilterState, CcResult } from './types/cc'
+import type { DitmFilterState, DitmResult } from './types/ditm'
 
 const DEFAULT_CSP_FILTERS: CspFilterState = {
   smaRatioBullishOnly: false,
@@ -22,6 +27,13 @@ const DEFAULT_CC_FILTERS: CcFilterState = {
   maxSpreadPct: 0,
   excludeEarningsWithinDte: false,
   maxCollateral: 0,
+}
+
+const DEFAULT_DITM_FILTERS: DitmFilterState = {
+  smaRatioBullishOnly: false,
+  maxSpreadPct: 0,
+  excludeEarningsWithinDte: false,
+  maxCapital: 0,
 }
 
 function applyCspFilters(results: CspResult[], filters: CspFilterState): CspResult[] {
@@ -46,8 +58,19 @@ function applyCcFilters(results: CcResult[], filters: CcFilterState): CcResult[]
   })
 }
 
+function applyDitmFilters(results: DitmResult[], filters: DitmFilterState): DitmResult[] {
+  return results.filter(r => {
+    const best = r.strikes.find(s => s.is_best) ?? r.strikes[0]
+    if (filters.smaRatioBullishOnly && r.sma_ratio <= 1.0) return false
+    if (filters.maxSpreadPct > 0 && (best == null || best.bid_ask_spread_pct == null || best.bid_ask_spread_pct > filters.maxSpreadPct)) return false
+    if (filters.excludeEarningsWithinDte && r.earnings_within_dte) return false
+    if (filters.maxCapital > 0 && best != null && best.mid * 100 > filters.maxCapital) return false
+    return true
+  })
+}
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'csp' | 'cc'>('csp')
+  const [activeTab, setActiveTab] = useState<'csp' | 'cc' | 'ditm'>('csp')
 
   // CSP state
   const { results: cspResults, errors: cspErrors, loading: cspLoading, symbolCount: cspSymbolCount, isScanMode: cspIsScanMode, errorMessage: cspErrorMessage, run: runCsp, scan: scanCsp } = useCsp()
@@ -58,6 +81,11 @@ export default function App() {
   const { results: ccResults, errors: ccErrors, loading: ccLoading, symbolCount: ccSymbolCount, isScanMode: ccIsScanMode, errorMessage: ccErrorMessage, run: runCc, scan: scanCc } = useCc()
   const [ccFilters, setCcFilters] = useState<CcFilterState>(DEFAULT_CC_FILTERS)
   const filteredCc = useMemo(() => applyCcFilters(ccResults, ccFilters), [ccResults, ccFilters])
+
+  // DITM state
+  const { results: ditmResults, errors: ditmErrors, loading: ditmLoading, symbolCount: ditmSymbolCount, isScanMode: ditmIsScanMode, errorMessage: ditmErrorMessage, macroPass, vixLevel, vix5dChange, spyAboveSma200, run: runDitm, scan: scanDitm } = useDitm()
+  const [ditmFilters, setDitmFilters] = useState<DitmFilterState>(DEFAULT_DITM_FILTERS)
+  const filteredDitm = useMemo(() => applyDitmFilters(ditmResults, ditmFilters), [ditmResults, ditmFilters])
 
   return (
     <div className="app">
@@ -75,6 +103,12 @@ export default function App() {
             onClick={() => setActiveTab('cc')}
           >
             CC — Covered Call
+          </button>
+          <button
+            className={`tab-btn${activeTab === 'ditm' ? ' tab-btn-active' : ''}`}
+            onClick={() => setActiveTab('ditm')}
+          >
+            DITM — Long Call
           </button>
         </div>
       </header>
@@ -163,6 +197,50 @@ export default function App() {
             {!ccLoading && ccResults.length === 0 && !ccErrorMessage && (
               <div className="empty-state">
                 <p>Click <strong>⚡ Scan Now</strong> to automatically find top Covered Call opportunities, or switch to Custom Symbols.</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {activeTab === 'ditm' && (
+          <>
+            <DitmInput
+              onScan={(topN, minDTE, maxDTE) => scanDitm(topN, minDTE, maxDTE)}
+              onCustom={(symbols, minDTE, maxDTE) => runDitm({ symbols, minDTE, maxDTE })}
+              loading={ditmLoading}
+            />
+            {ditmResults.length > 0 && (
+              <DitmFilterPanel filters={ditmFilters} onChange={setDitmFilters} />
+            )}
+            {ditmLoading && (
+              <div className="loading-state">
+                <div className="spinner" />
+                {ditmIsScanMode
+                  ? <p>Scanning <strong>75 stocks</strong> in parallel &mdash; est. <strong>~25s</strong></p>
+                  : <p>Fetching <strong>{ditmSymbolCount}</strong> symbol{ditmSymbolCount !== 1 ? 's' : ''} in parallel
+                      &nbsp;&mdash; est. <strong>~{Math.ceil(ditmSymbolCount / 5) * 5}s</strong></p>
+                }
+              </div>
+            )}
+            {ditmErrorMessage && (
+              <div className="error-banner"><strong>Error:</strong> {ditmErrorMessage}</div>
+            )}
+            {ditmErrors.length > 0 && (
+              <div className="error-summary">
+                <strong>{ditmErrors.length} symbol{ditmErrors.length > 1 ? 's' : ''} failed:</strong>
+                <ul>{ditmErrors.map(e => <li key={e.symbol}><strong>{e.symbol}</strong>: {e.reason}</li>)}</ul>
+              </div>
+            )}
+            {!ditmLoading && ditmResults.length > 0 && (
+              <div className="results-meta">
+                Showing <strong>{filteredDitm.length}</strong> of <strong>{ditmResults.length}</strong> results
+                {filteredDitm.length < ditmResults.length && ' (filters active)'}
+              </div>
+            )}
+            <DitmTable data={filteredDitm} macroPass={macroPass} vixLevel={vixLevel} vix5dChange={vix5dChange} spyAboveSma200={spyAboveSma200} />
+            {!ditmLoading && ditmResults.length === 0 && !ditmErrorMessage && (
+              <div className="empty-state">
+                <p>Click <strong>⚡ Scan Now</strong> to automatically find top DITM Long Call opportunities, or switch to Custom Symbols.</p>
               </div>
             )}
           </>

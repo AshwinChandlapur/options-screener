@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers.csp import router as csp_router
 from routers.cc import router as cc_router
+from routers.ditm import router as ditm_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +40,7 @@ app.add_middleware(
 
 app.include_router(csp_router)
 app.include_router(cc_router)
+app.include_router(ditm_router)
 
 
 @app.get("/health", tags=["meta"])

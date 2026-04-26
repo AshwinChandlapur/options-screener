@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -63,7 +67,7 @@ jobs:
           az webapp config set \
             --name optionsapi \
             --resource-group options-rg \
-            --startup-file "pip install -r /home/site/wwwroot/requirements.txt -q && uvicorn main:app --host 0.0.0.0 --port 8000"
+            --startup-file "uvicorn main:app --host 0.0.0.0 --port 8000"
 
       - name: Logout
         run: az logout
