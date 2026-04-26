@@ -42,6 +42,8 @@ _CACHE: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL_SEC = 24 * 60 * 60
 
 FORECAST_YEARS = 5
+FORECAST_YEARS_HIGH_GROWTH = 10
+HIGH_GROWTH_THRESHOLD = 0.18  # rev_cagr_5y or any-scenario revenue_growth above this -> 10y forecast
 MC_TRIALS = 5000
 MC_TRIALS_MIN = 500
 MC_TRIALS_MAX = 20000
@@ -60,6 +62,8 @@ MAX_WACC = 0.16
 RANGES = {
     "revenue_growth": (-0.20, 0.60),
     "operating_margin": (-0.20, 0.70),
+    "operating_margin_y5": (-0.20, 0.70),
+    "mid_growth": (-0.10, 0.50),
     "terminal_growth": (0.00, 0.045),
     "capex_pct_revenue": (0.0, 0.30),
 }
@@ -97,11 +101,23 @@ class Grounding:
     revenue_history: list[dict]
     revenue_cagr_5y: Optional[float]
     operating_margin_ttm: Optional[float]
+    gross_margin_ttm: Optional[float]
+    operating_margin_3y: list[dict]      # [{year:int, margin:float}]
+    rnd_pct_revenue: Optional[float]
+    sbc_ttm: Optional[float]
+    sbc_pct_revenue: Optional[float]
+    deferred_revenue_yoy: Optional[float]
+    roic_ttm: Optional[float]
     tax_rate: Optional[float]
     sector: Optional[str]
     industry: Optional[str]
-    buyback_yield: Optional[float]      # 5y avg share-count change; negative = dilution
+    buyback_yield: Optional[float]      # NET buyback yield (gross buyback - SBC dilution); used in math
+    gross_buyback_yield: Optional[float]
+    sbc_dilution_yield: Optional[float]
     share_history: list[dict]            # [{year:int, shares:float}]
+    forward_pe: Optional[float]          # market multiple from yfinance info
+    market_ev_ebitda: Optional[float]
+    market_ev_revenue: Optional[float]
     wacc_buildup: WaccBuildup
     as_of: str
 
@@ -110,7 +126,9 @@ class Grounding:
 class ScenarioAssumption:
     label: str                          # Conservative | Base | Optimistic
     revenue_growth: float
-    operating_margin: float
+    operating_margin: float              # Year-1 operating margin
+    operating_margin_y5: float           # End-of-explicit-period operating margin
+    mid_growth: float                    # Y6-Y10 fade target (used only if 10y forecast)
     wacc_risk_adj_bps: int               # offset from CAPM WACC, in bps
     discount_rate: float                 # derived: wacc_capm + adj
     terminal_growth: float
@@ -178,6 +196,31 @@ class Verdict:
 
 
 @dataclass
+class MultiplesCrossCheck:
+    base_fair_value: float
+    implied_forward_pe: Optional[float]
+    market_forward_pe: Optional[float]
+    pe_delta_pct: Optional[float]            # (implied - market) / market
+    implied_ev_ebitda: Optional[float]
+    market_ev_ebitda: Optional[float]
+    ev_ebitda_delta_pct: Optional[float]
+    implied_ev_revenue: Optional[float]
+    market_ev_revenue: Optional[float]
+    ev_revenue_delta_pct: Optional[float]
+    diagnostic: str
+
+
+@dataclass
+class FranchiseFlag:
+    is_franchise: bool
+    roic: Optional[float]
+    wacc: float
+    spread: Optional[float]              # ROIC - WACC
+    terminal_growth_used: float
+    message: str
+
+
+@dataclass
 class DcfResult:
     ticker: str
     grounding: Grounding
@@ -188,6 +231,9 @@ class DcfResult:
     reverse_dcf: ReverseDcfResult
     sensitivity: SensitivityMatrix
     verdict: Verdict
+    multiples: MultiplesCrossCheck
+    franchise_flag: FranchiseFlag
+    forecast_years_used: int
     risks: list[str]
     key_drivers: list[str]
     model: str
@@ -262,6 +308,154 @@ def _compute_buyback_yield(t: yf.Ticker) -> tuple[Optional[float], list[dict]]:
     except Exception as exc:
         logger.warning("Buyback yield fetch failed: %s", exc)
         return None, []
+
+
+def _financials_row(fin, candidates: list[str]):
+    """Return first matching row in a yfinance financials/cashflow/balance frame, or None."""
+    if fin is None or getattr(fin, "empty", True):
+        return None
+    for c in candidates:
+        if c in fin.index:
+            return fin.loc[c].dropna()
+    return None
+
+
+def _compute_sbc(t: yf.Ticker, revenue_ttm: Optional[float]) -> tuple[Optional[float], Optional[float]]:
+    """Returns (sbc_ttm_dollars, sbc_pct_revenue). SBC is the most recent annual figure."""
+    try:
+        cf = t.cashflow
+        row = _financials_row(cf, [
+            "Stock Based Compensation",
+            "Stock-Based Compensation",
+            "Share Based Compensation",
+        ])
+        if row is None or row.empty:
+            return None, None
+        sbc = _safe_float(row.iloc[0])
+        if sbc is None:
+            return None, None
+        sbc_abs = abs(sbc)
+        pct = (sbc_abs / revenue_ttm) if (revenue_ttm and revenue_ttm > 0) else None
+        return float(sbc_abs), pct
+    except Exception as exc:
+        logger.warning("SBC fetch failed: %s", exc)
+        return None, None
+
+
+def _compute_operating_margin_3y(t: yf.Ticker) -> list[dict]:
+    try:
+        fin = t.financials
+        rev_row = _financials_row(fin, ["Total Revenue"])
+        op_row = _financials_row(fin, ["Operating Income", "Total Operating Income As Reported"])
+        if rev_row is None or op_row is None:
+            return []
+        out: list[dict] = []
+        for date in rev_row.index[:3]:
+            rev = _safe_float(rev_row.get(date))
+            op = _safe_float(op_row.get(date))
+            yr = getattr(date, "year", None)
+            if rev and op is not None and yr:
+                out.append({"year": int(yr), "margin": float(op / rev)})
+        out.sort(key=lambda r: r["year"])
+        return out
+    except Exception as exc:
+        logger.warning("Op margin 3y fetch failed: %s", exc)
+        return []
+
+
+def _compute_rnd_pct(t: yf.Ticker, revenue_ttm: Optional[float]) -> Optional[float]:
+    if not revenue_ttm or revenue_ttm <= 0:
+        return None
+    try:
+        fin = t.financials
+        row = _financials_row(fin, ["Research And Development", "Research Development"])
+        if row is None or row.empty:
+            return None
+        rnd = _safe_float(row.iloc[0])
+        if rnd is None:
+            return None
+        return float(abs(rnd) / revenue_ttm)
+    except Exception as exc:
+        logger.warning("R&D fetch failed: %s", exc)
+        return None
+
+
+def _compute_gross_margin(t: yf.Ticker, info: dict) -> Optional[float]:
+    gm = _safe_float(info.get("grossMargins"))
+    if gm is not None:
+        return gm
+    try:
+        fin = t.financials
+        rev_row = _financials_row(fin, ["Total Revenue"])
+        gp_row = _financials_row(fin, ["Gross Profit"])
+        if rev_row is None or gp_row is None or rev_row.empty or gp_row.empty:
+            return None
+        rev = _safe_float(rev_row.iloc[0])
+        gp = _safe_float(gp_row.iloc[0])
+        if rev and gp is not None and rev > 0:
+            return float(gp / rev)
+    except Exception:
+        pass
+    return None
+
+
+def _compute_deferred_revenue_yoy(t: yf.Ticker) -> Optional[float]:
+    try:
+        bs = t.balance_sheet
+        row = _financials_row(bs, [
+            "Current Deferred Revenue",
+            "Deferred Revenue",
+        ])
+        if row is None or len(row) < 2:
+            return None
+        latest = _safe_float(row.iloc[0])
+        prior = _safe_float(row.iloc[1])
+        if latest is None or prior is None or prior <= 0:
+            return None
+        return float(latest / prior - 1.0)
+    except Exception as exc:
+        logger.warning("Deferred revenue fetch failed: %s", exc)
+        return None
+
+
+def _compute_roic(
+    revenue_ttm: Optional[float],
+    op_margin: Optional[float],
+    tax_rate: float,
+    total_debt: Optional[float],
+    cash: Optional[float],
+    market_cap: Optional[float],
+    book_equity: Optional[float],
+) -> Optional[float]:
+    """ROIC = NOPAT / Invested Capital. Invested capital approx = book equity + total debt - cash.
+
+    If book equity unavailable, fall back to market_cap (over-states denominator -> conservative ROIC).
+    """
+    if not revenue_ttm or op_margin is None:
+        return None
+    nopat = revenue_ttm * op_margin * (1.0 - tax_rate)
+    eq = book_equity if (book_equity and book_equity > 0) else market_cap
+    if eq is None:
+        return None
+    invested = eq + (total_debt or 0.0) - (cash or 0.0)
+    if invested <= 0:
+        return None
+    return float(nopat / invested)
+
+
+def _compute_book_equity(t: yf.Ticker) -> Optional[float]:
+    try:
+        bs = t.balance_sheet
+        row = _financials_row(bs, [
+            "Stockholders Equity",
+            "Total Stockholder Equity",
+            "Common Stock Equity",
+        ])
+        if row is None or row.empty:
+            return None
+        return _safe_float(row.iloc[0])
+    except Exception:
+        return None
 
 
 def _build_wacc(
@@ -363,11 +557,40 @@ def fetch_grounding(ticker: str) -> Grounding:
     if tax_rate is None:
         tax_rate = 0.21
 
-    # Buyback yield
-    bb_yield, share_history = _compute_buyback_yield(t)
-    if bb_yield is not None:
-        # Clip to +/- 8%
-        bb_yield = float(max(-0.08, min(0.08, bb_yield)))
+    # Gross buyback yield from share count history
+    gross_bb, share_history = _compute_buyback_yield(t)
+    if gross_bb is not None:
+        gross_bb = float(max(-0.08, min(0.08, gross_bb)))
+
+    # SBC: pulls from cashflow statement; pct expressed as fraction of revenue
+    sbc_dollars, sbc_pct = _compute_sbc(t, revenue_ttm)
+    # SBC dilution yield: SBC dollars / market cap (rough share dilution per year)
+    sbc_dilution: Optional[float] = None
+    if sbc_dollars is not None and market_cap and market_cap > 0:
+        sbc_dilution = float(min(0.10, sbc_dollars / market_cap))
+
+    # NET buyback yield = gross buyback - SBC dilution. This is what's used in math.
+    if gross_bb is None and sbc_dilution is None:
+        net_bb: Optional[float] = None
+    else:
+        net_bb = float((gross_bb or 0.0) - (sbc_dilution or 0.0))
+        net_bb = max(-0.08, min(0.08, net_bb))
+
+    # Other grounding signals
+    gross_margin = _compute_gross_margin(t, info)
+    op_margin_3y = _compute_operating_margin_3y(t)
+    rnd_pct = _compute_rnd_pct(t, revenue_ttm)
+    deferred_yoy = _compute_deferred_revenue_yoy(t)
+    book_equity = _compute_book_equity(t)
+    roic = _compute_roic(
+        revenue_ttm=revenue_ttm,
+        op_margin=op_margin,
+        tax_rate=tax_rate,
+        total_debt=total_debt,
+        cash=cash,
+        market_cap=market_cap,
+        book_equity=book_equity,
+    )
 
     # WACC build-up
     rf = _fetch_risk_free_rate()
@@ -393,11 +616,23 @@ def fetch_grounding(ticker: str) -> Grounding:
         revenue_history=revenue_history,
         revenue_cagr_5y=rev_cagr,
         operating_margin_ttm=op_margin,
+        gross_margin_ttm=gross_margin,
+        operating_margin_3y=op_margin_3y,
+        rnd_pct_revenue=rnd_pct,
+        sbc_ttm=sbc_dollars,
+        sbc_pct_revenue=sbc_pct,
+        deferred_revenue_yoy=deferred_yoy,
+        roic_ttm=roic,
         tax_rate=tax_rate,
         sector=info.get("sector"),
         industry=info.get("industry"),
-        buyback_yield=bb_yield,
+        buyback_yield=net_bb,
+        gross_buyback_yield=gross_bb,
+        sbc_dilution_yield=sbc_dilution,
         share_history=share_history,
+        forward_pe=_safe_float(info.get("forwardPE")),
+        market_ev_ebitda=_safe_float(info.get("enterpriseToEbitda")),
+        market_ev_revenue=_safe_float(info.get("enterpriseToRevenue")),
         wacc_buildup=wacc_bu,
         as_of=time.strftime("%Y-%m-%d"),
     )
@@ -409,40 +644,65 @@ _SYSTEM_PROMPT = """You are an expert valuation analyst reasoning in the style o
 You receive grounded financial data for a public company. Backend has ALREADY computed:
 - Risk-free rate (10y Treasury)
 - WACC via CAPM (using yfinance β + D/E weights + ERP=5.0%)
-- 5y buyback yield
-You DO NOT supply WACC. You supply a small `wacc_risk_adj_bps` offset per scenario (–100bp..+150bp) reflecting scenario-specific risk (e.g. Optimistic might subtract 25–50bp for execution certainty; Conservative adds 50–100bp for stress).
+- NET buyback yield (gross buybacks minus SBC-implied dilution)
+- ROIC (return on invested capital)
+You DO NOT supply WACC. You supply a small `wacc_risk_adj_bps` offset per scenario (–100bp..+150bp) reflecting scenario-specific risk.
 
 Output STRICT JSON matching the supplied schema. No markdown, no prose outside JSON fields.
 
-Stay within these decimal ranges:
-    revenue_growth:    -0.20 .. 0.60
-    operating_margin:  -0.20 .. 0.70
-    terminal_growth:   0.00  .. 0.045  (<= long-run nominal GDP)
-    capex_pct_revenue: 0.00  .. 0.30
-    wacc_risk_adj_bps: -100  .. +150   (integer)
+For EACH scenario you must supply:
+  revenue_growth        — Year-1 revenue growth, decimal (e.g. 0.08 = 8%)
+  operating_margin      — Year-1 operating margin
+  operating_margin_y5   — Year-5 operating margin. Backend interpolates linearly Y1→Y5.
+                          For mature names: ~= operating_margin (flat).
+                          For investment-phase growth names: meaningfully HIGHER than TTM,
+                          because the bull thesis is operating leverage.
+  mid_growth            — Y6–Y10 fade target (used ONLY when forecast extends to 10y; backend
+                          decides). Must be between terminal_growth and revenue_growth.
+                          For mature names you may set mid_growth ≈ (revenue_growth + terminal_growth)/2.
+  wacc_risk_adj_bps     — Integer bps offset around CAPM WACC.
+  terminal_growth       — Long-run growth, capped at 4.5% (≤ nominal GDP).
+  capex_pct_revenue     — 5-year average reinvestment.
+  rationale, strongest_driver, narrative.
+
+Range guardrails (decimal):
+    revenue_growth:        -0.20 .. 0.60
+    operating_margin:      -0.20 .. 0.70
+    operating_margin_y5:   -0.20 .. 0.70
+    mid_growth:            -0.10 .. 0.50  (must satisfy terminal_growth ≤ mid_growth ≤ revenue_growth)
+    terminal_growth:        0.00 .. 0.045
+    capex_pct_revenue:      0.00 .. 0.30
+    wacc_risk_adj_bps:    -100   .. +150  (integer)
 
 Discipline:
-- Conservative < Base < Optimistic for revenue_growth and operating_margin.
-- Conservative wacc_risk_adj_bps > Base > Optimistic.
-- Anchor BASE-CASE numbers to historical data: cite the 5y revenue CAGR, TTM operating margin, and beta in your narrative.
-- If your base-case revenue_growth is more than 300bp away from the 5y CAGR, justify why explicitly.
-- Damodaran style: focus on competitive moat, reinvestment efficiency, capital-allocation track record, behavioral biases. Tie story to numbers.
+- Conservative < Base < Optimistic for revenue_growth.
+- Conservative WACC adjustment > Base > Optimistic.
+- Anchor BASE-CASE to historical data: cite 5y revenue CAGR, TTM operating margin, gross margin,
+  and beta in your narrative.
+- USE the rich grounding signals: gross_margin distinguishes structural margin from temporary
+  investment burn; rnd_pct_revenue identifies investment phase; operating_margin_3y shows
+  trajectory; deferred_revenue_yoy is a forward-bookings tell for SaaS / subscriptions.
+- If TTM op margin is depressed but R&D % is elevated and gross margin is healthy, this is
+  investment phase — your operating_margin_y5 should reflect mid-cycle profitability, not TTM.
+- If base-case revenue_growth deviates >300bp from 5y CAGR, justify why explicitly.
 
 Monte Carlo distributions you must supply:
-- revenue_growth: normal(mean, sd). Mean ≈ Base. sd should be REALISTIC — at least ½ × |Optimistic − Conservative|, not ¼. Most stocks have wider true uncertainty than analysts admit.
-- operating_margin: normal(mean, sd). sd ≥ ½ × |Optimistic − Conservative|.
-- discount_rate: triangular(low, mode, high) — low=Optimistic-adjusted WACC, mode=Base WACC (=CAPM WACC), high=Conservative-adjusted. (You supply the bps offsets; backend converts.) Express the params here as ABSOLUTE wacc values you would assign — backend will reconcile.
-- terminal_growth: uniform(low, high) — low=Conservative, high=Optimistic.
+- revenue_growth: normal(mean, sd). Mean ≈ Base. sd ≥ ½ × |Optimistic − Conservative|.
+- operating_margin: normal(mean, sd) for Year-1 margin. sd ≥ ½ × |Optimistic − Conservative|.
+- operating_margin_y5: normal(mean, sd) for Year-5 margin. Same sd discipline.
+- discount_rate: triangular(low, mode, high). mode = Base WACC; low/high = Optimistic / Conservative WACC.
+- terminal_growth: uniform(low, high). low=Conservative, high=Optimistic.
 - capex_pct_revenue: normal(mean, sd).
 
-Verdict (the most important block — this drives trading):
-- recommendation: one of STRONG_BUY, BUY, HOLD, AVOID, STRONG_AVOID. Based on where current price sits vs your scenario distribution AND quality of the business.
-- suggested_entry_price: price below which you'd buy aggressively (typically near P25 fair value, possibly with a 10–15% margin-of-safety discount for low-confidence names).
-- suggested_exit_price: price at which thesis is "played out" (typically near P75 fair value).
-- confidence: 0..1 — how sure are you of this verdict? Lower for cyclicals, opaque accounting, or weak grounding data. Higher for stable compounders with rich filings.
-- key_assumption_to_monitor: the SINGLE variable whose disconfirmation would break the thesis (e.g. "iPhone unit growth turning negative", "AWS margin compression", "subscriber net adds decelerating").
+Verdict (drives trading decisions):
+- recommendation: STRONG_BUY | BUY | HOLD | AVOID | STRONG_AVOID
+- suggested_entry_price: typically near P25 fair value, with margin-of-safety discount for
+  low-confidence names.
+- suggested_exit_price: typically near P75 fair value.
+- confidence: 0..1. Lower for cyclicals/opaque accounting/sparse grounding.
+- key_assumption_to_monitor: the single thesis-killer variable.
 
-Risks: 4–7 concise items. Key drivers: 3–5 items.
+Risks: 4–7 items. Key drivers: 3–5 items.
 """
 
 
@@ -459,10 +719,21 @@ def _build_user_prompt(g: Grounding) -> str:
         "revenue_history": g.revenue_history,
         "revenue_cagr_5y": g.revenue_cagr_5y,
         "operating_margin_ttm": g.operating_margin_ttm,
+        "operating_margin_3y": g.operating_margin_3y,
+        "gross_margin_ttm": g.gross_margin_ttm,
+        "rnd_pct_revenue": g.rnd_pct_revenue,
+        "sbc_pct_revenue": g.sbc_pct_revenue,
+        "deferred_revenue_yoy": g.deferred_revenue_yoy,
+        "roic_ttm": g.roic_ttm,
         "tax_rate": g.tax_rate,
         "sector": g.sector,
         "industry": g.industry,
-        "buyback_yield_5y": g.buyback_yield,
+        "net_buyback_yield": g.buyback_yield,
+        "gross_buyback_yield": g.gross_buyback_yield,
+        "sbc_dilution_yield": g.sbc_dilution_yield,
+        "market_forward_pe": g.forward_pe,
+        "market_ev_ebitda": g.market_ev_ebitda,
+        "market_ev_revenue": g.market_ev_revenue,
         "wacc_capm": g.wacc_buildup.wacc,
         "wacc_buildup": asdict(g.wacc_buildup),
         "as_of": g.as_of,
@@ -486,6 +757,7 @@ _RESPONSE_SCHEMA = {
                     "additionalProperties": False,
                     "required": [
                         "label", "revenue_growth", "operating_margin",
+                        "operating_margin_y5", "mid_growth",
                         "wacc_risk_adj_bps", "terminal_growth", "capex_pct_revenue",
                         "rationale", "strongest_driver", "narrative",
                     ],
@@ -493,6 +765,8 @@ _RESPONSE_SCHEMA = {
                         "label": {"type": "string", "enum": ["Conservative", "Base", "Optimistic"]},
                         "revenue_growth": {"type": "number"},
                         "operating_margin": {"type": "number"},
+                        "operating_margin_y5": {"type": "number"},
+                        "mid_growth": {"type": "number"},
                         "wacc_risk_adj_bps": {"type": "integer"},
                         "terminal_growth": {"type": "number"},
                         "capex_pct_revenue": {"type": "number"},
@@ -526,8 +800,8 @@ _RESPONSE_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
-                    "revenue_growth", "operating_margin", "discount_rate",
-                    "terminal_growth", "capex_pct_revenue",
+                    "revenue_growth", "operating_margin", "operating_margin_y5",
+                    "discount_rate", "terminal_growth", "capex_pct_revenue",
                 ],
                 "properties": {
                     "revenue_growth": {
@@ -545,6 +819,20 @@ _RESPONSE_SCHEMA = {
                         },
                     },
                     "operating_margin": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["shape", "params"],
+                        "properties": {
+                            "shape": {"type": "string", "enum": ["normal"]},
+                            "params": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "required": ["mean", "sd"],
+                                "properties": {"mean": {"type": "number"}, "sd": {"type": "number"}},
+                            },
+                        },
+                    },
+                    "operating_margin_y5": {
                         "type": "object",
                         "additionalProperties": False,
                         "required": ["shape", "params"],
@@ -675,7 +963,8 @@ def _clip(name: str, v: float) -> float:
 def _validate_assumptions(d: dict, wacc_capm: float) -> dict:
     """Clip out-of-range numbers; convert wacc_risk_adj_bps -> discount_rate; enforce invariants."""
     for sc in d.get("scenarios", []):
-        for k in RANGES:
+        for k in ("revenue_growth", "operating_margin", "operating_margin_y5",
+                  "mid_growth", "terminal_growth", "capex_pct_revenue"):
             if k in sc:
                 sc[k] = _clip(k, float(sc[k]))
         # Convert risk-adjustment bps to absolute discount rate
@@ -687,13 +976,18 @@ def _validate_assumptions(d: dict, wacc_capm: float) -> dict:
         sc["discount_rate"] = float(dr)
         if sc["terminal_growth"] >= sc["discount_rate"]:
             sc["terminal_growth"] = max(0.0, sc["discount_rate"] - 0.02)
+        # mid_growth must satisfy terminal_growth <= mid_growth <= revenue_growth
+        mg = float(sc.get("mid_growth", (sc["revenue_growth"] + sc["terminal_growth"]) / 2.0))
+        mg = max(sc["terminal_growth"], min(sc["revenue_growth"], mg))
+        sc["mid_growth"] = float(mg)
 
     # Distribution clipping
     dists = d.get("distributions", {})
-    for var in ("revenue_growth", "operating_margin", "capex_pct_revenue"):
+    for var in ("revenue_growth", "operating_margin", "operating_margin_y5", "capex_pct_revenue"):
         p = dists.get(var, {}).get("params", {})
         if "mean" in p:
-            p["mean"] = _clip(var, float(p["mean"]))
+            clip_key = var if var in RANGES else "operating_margin"
+            p["mean"] = _clip(clip_key, float(p["mean"]))
         if "sd" in p:
             p["sd"] = max(1e-4, abs(float(p["sd"])))
     p = dists.get("discount_rate", {}).get("params", {})
@@ -714,10 +1008,51 @@ def _validate_assumptions(d: dict, wacc_capm: float) -> dict:
 
 
 # ---------------------------------------------------------- DCF math --------
+def _build_growth_path(
+    revenue_growth: float, mid_growth: float, terminal_growth: float, n_years: int
+) -> list[float]:
+    """Year-by-year revenue growth rates.
+
+    5y: linear fade revenue_growth -> terminal_growth.
+    10y: two-stage — Y1→Y5 fade revenue_growth→mid_growth, Y6→Y10 fade mid_growth→terminal_growth.
+    """
+    if n_years <= 5:
+        if n_years == 1:
+            return [revenue_growth]
+        return [
+            revenue_growth + (terminal_growth - revenue_growth) * t / (n_years - 1)
+            for t in range(n_years)
+        ]
+    # Two-stage 10y
+    stage1 = [
+        revenue_growth + (mid_growth - revenue_growth) * t / 4
+        for t in range(5)
+    ]
+    stage2 = [
+        mid_growth + (terminal_growth - mid_growth) * (t + 1) / 5
+        for t in range(5)
+    ]
+    return stage1 + stage2
+
+
+def _build_margin_path(
+    op_margin_y1: float, op_margin_y5: float, n_years: int
+) -> list[float]:
+    """Linear fade Y1→Y5; flat at op_margin_y5 thereafter (for 10y forecasts)."""
+    out: list[float] = []
+    for t in range(n_years):
+        if t < 5:
+            out.append(op_margin_y1 + (op_margin_y5 - op_margin_y1) * t / 4)
+        else:
+            out.append(op_margin_y5)
+    return out
+
+
 def _compute_dcf(
     revenue_ttm: float,
     revenue_growth: float,
     operating_margin: float,
+    operating_margin_y5: float,
     discount_rate: float,
     terminal_growth: float,
     capex_pct_revenue: float,
@@ -726,25 +1061,29 @@ def _compute_dcf(
     net_debt: float,
     buyback_yield: float = 0.0,
     forecast_years: int = FORECAST_YEARS,
+    mid_growth: Optional[float] = None,
 ) -> dict:
     """
-    FCFF DCF with explicit revenue-growth fade and share-count attrition from buybacks.
-    FCFF_t = NOPAT_t - capex_growth_t  (D&A ≈ maintenance capex assumption).
+    FCFF DCF with two-stage growth fade and explicit margin trajectory.
     Terminal value via Gordon Growth.
-
-    `buyback_yield` is the annual % decline in share count (positive = buybacks).
-    Per-share fair value uses post-attrition share count (snapshot at year `forecast_years`).
     """
     if discount_rate <= terminal_growth:
         discount_rate = terminal_growth + 0.01
 
-    fcfs = []
-    pvs = []
+    if mid_growth is None:
+        mid_growth = (revenue_growth + terminal_growth) / 2.0
+
+    growth_path = _build_growth_path(revenue_growth, mid_growth, terminal_growth, forecast_years)
+    margin_path = _build_margin_path(operating_margin, operating_margin_y5, forecast_years)
+
+    fcfs: list[float] = []
+    pvs: list[float] = []
     rev = revenue_ttm
     for yr in range(1, forecast_years + 1):
-        g = revenue_growth + (terminal_growth - revenue_growth) * (yr - 1) / max(1, forecast_years - 1)
+        g = growth_path[yr - 1]
+        m = margin_path[yr - 1]
         rev = rev * (1.0 + g)
-        ebit = rev * operating_margin
+        ebit = rev * m
         nopat = ebit * (1.0 - tax_rate)
         capex_growth = rev * capex_pct_revenue
         fcf = nopat - capex_growth
@@ -759,10 +1098,7 @@ def _compute_dcf(
     enterprise_value = pv_fcfs + pv_terminal
     equity_value = enterprise_value - (net_debt or 0.0)
 
-    # Apply buyback yield to per-share calc: average shares over forecast horizon
-    # (taking midpoint of decay schedule). Positive buyback_yield => fewer future shares.
     if buyback_yield and shares_out:
-        # average share count factor over years 1..forecast_years
         decay_factors = [(1.0 - buyback_yield) ** y for y in range(1, forecast_years + 1)]
         avg_decay = sum(decay_factors) / len(decay_factors)
         effective_shares = shares_out * avg_decay
@@ -777,11 +1113,13 @@ def _compute_dcf(
         "equity_value": equity_value,
         "pv_of_fcfs": pv_fcfs,
         "pv_of_terminal": pv_terminal,
+        "y1_revenue": revenue_ttm * (1.0 + growth_path[0]),
+        "y1_ebit": revenue_ttm * (1.0 + growth_path[0]) * margin_path[0],
     }
 
 
 # ---------------------------------------------------- Reverse DCF -----------
-def _reverse_dcf(g: Grounding, base: ScenarioAssumption) -> ReverseDcfResult:
+def _reverse_dcf(g: Grounding, base: ScenarioAssumption, forecast_years: int) -> ReverseDcfResult:
     """
     Solve for the year-1 revenue growth rate that makes FV == current price,
     holding all OTHER Base assumptions constant. Bisection over -10% .. +50%.
@@ -793,6 +1131,7 @@ def _reverse_dcf(g: Grounding, base: ScenarioAssumption) -> ReverseDcfResult:
             revenue_ttm=g.revenue_ttm or 0.0,
             revenue_growth=growth,
             operating_margin=base.operating_margin,
+            operating_margin_y5=base.operating_margin_y5,
             discount_rate=base.discount_rate,
             terminal_growth=base.terminal_growth,
             capex_pct_revenue=base.capex_pct_revenue,
@@ -800,6 +1139,8 @@ def _reverse_dcf(g: Grounding, base: ScenarioAssumption) -> ReverseDcfResult:
             shares_out=g.shares_out or 0.0,
             net_debt=g.net_debt or 0.0,
             buyback_yield=g.buyback_yield or 0.0,
+            forecast_years=forecast_years,
+            mid_growth=base.mid_growth,
         )
         return out["fair_value_per_share"]
 
@@ -854,7 +1195,7 @@ def _reverse_dcf(g: Grounding, base: ScenarioAssumption) -> ReverseDcfResult:
 
 
 # -------------------------------------------------- Sensitivity matrix ------
-def _sensitivity_matrix(g: Grounding, base: ScenarioAssumption) -> SensitivityMatrix:
+def _sensitivity_matrix(g: Grounding, base: ScenarioAssumption, forecast_years: int) -> SensitivityMatrix:
     """5x5 grid: WACC ±100bp × terminal_growth ±50bp around base."""
     wacc_axis = [base.discount_rate + d for d in (-0.010, -0.005, 0.0, 0.005, 0.010)]
     tg_axis = [base.terminal_growth + d for d in (-0.010, -0.005, 0.0, 0.005, 0.010)]
@@ -868,6 +1209,7 @@ def _sensitivity_matrix(g: Grounding, base: ScenarioAssumption) -> SensitivityMa
                 revenue_ttm=g.revenue_ttm or 0.0,
                 revenue_growth=base.revenue_growth,
                 operating_margin=base.operating_margin,
+                operating_margin_y5=base.operating_margin_y5,
                 discount_rate=max(MIN_WACC, min(MAX_WACC, w)),
                 terminal_growth=tg_eff,
                 capex_pct_revenue=base.capex_pct_revenue,
@@ -875,6 +1217,8 @@ def _sensitivity_matrix(g: Grounding, base: ScenarioAssumption) -> SensitivityMa
                 shares_out=g.shares_out or 0.0,
                 net_debt=g.net_debt or 0.0,
                 buyback_yield=g.buyback_yield or 0.0,
+                forecast_years=forecast_years,
+                mid_growth=base.mid_growth,
             )
             row.append(float(out["fair_value_per_share"]))
         grid.append(row)
@@ -904,14 +1248,21 @@ def _sample_dist(rng: np.random.Generator, name: str, dist: dict, n: int,
     return np.clip(out, lo, hi)
 
 
-def _run_monte_carlo(g: Grounding, distributions: dict, trials: int = MC_TRIALS) -> MonteCarloResult:
+def _run_monte_carlo(
+    g: Grounding,
+    distributions: dict,
+    base: ScenarioAssumption,
+    forecast_years: int,
+    trials: int = MC_TRIALS,
+) -> MonteCarloResult:
     if not g.shares_out or not g.revenue_ttm:
         raise ValueError("Insufficient grounding data for Monte Carlo (need shares_out and revenue_ttm).")
 
     trials = max(MC_TRIALS_MIN, min(MC_TRIALS_MAX, int(trials)))
     rng = np.random.default_rng(seed=42)
     rg = _sample_dist(rng, "revenue_growth", distributions["revenue_growth"], trials, RANGES["revenue_growth"])
-    om = _sample_dist(rng, "operating_margin", distributions["operating_margin"], trials, RANGES["operating_margin"])
+    om1 = _sample_dist(rng, "operating_margin", distributions["operating_margin"], trials, RANGES["operating_margin"])
+    om5 = _sample_dist(rng, "operating_margin_y5", distributions["operating_margin_y5"], trials, RANGES["operating_margin_y5"])
     dr = _sample_dist(rng, "discount_rate", distributions["discount_rate"], trials, (MIN_WACC, MAX_WACC))
     tg = _sample_dist(rng, "terminal_growth", distributions["terminal_growth"], trials, RANGES["terminal_growth"])
     cx = _sample_dist(rng, "capex_pct_revenue", distributions["capex_pct_revenue"], trials, RANGES["capex_pct_revenue"])
@@ -919,28 +1270,49 @@ def _run_monte_carlo(g: Grounding, distributions: dict, trials: int = MC_TRIALS)
     # Enforce tg < dr per trial
     tg = np.where(tg >= dr, np.maximum(0.0, dr - 0.01), tg)
 
-    # Vectorized DCF: build year-by-year revenue/FCFF arrays of shape (trials, years)
-    n_years = FORECAST_YEARS
+    n_years = forecast_years
     tax_rate = g.tax_rate or 0.21
     bb = g.buyback_yield or 0.0
     rev0 = g.revenue_ttm
     yrs = np.arange(1, n_years + 1)
+    mid_g = base.mid_growth
 
-    # Linear growth fade: g_t = rg + (tg - rg) * (t-1)/(n-1)
-    fade = (yrs - 1) / max(1, n_years - 1)  # shape (n_years,)
-    growth_path = rg[:, None] + (tg[:, None] - rg[:, None]) * fade[None, :]  # (trials, years)
+    # Growth path: 5y linear OR 10y two-stage (Y1->mid_g over Y1-Y5; mid_g->tg over Y6-Y10)
+    if n_years <= 5:
+        if n_years == 1:
+            growth_path = rg[:, None]
+        else:
+            t_idx = np.arange(n_years)
+            fade = t_idx / (n_years - 1)
+            growth_path = rg[:, None] + (tg[:, None] - rg[:, None]) * fade[None, :]
+    else:
+        # Stage 1: Y1..Y5 fade rg -> mid_g (mid_g fixed across trials per Base scenario)
+        fade1 = np.arange(5) / 4
+        stage1 = rg[:, None] + (mid_g - rg[:, None]) * fade1[None, :]
+        # Stage 2: Y6..Y10 fade mid_g -> tg
+        fade2 = (np.arange(5) + 1) / 5
+        stage2 = mid_g + (tg[:, None] - mid_g) * fade2[None, :]
+        growth_path = np.concatenate([stage1, stage2], axis=1)
+
+    # Margin path: linear Y1->Y5 from om1 to om5; flat at om5 thereafter
+    margin_path = np.zeros((trials, n_years))
+    for t in range(n_years):
+        if t < 5:
+            margin_path[:, t] = om1 + (om5 - om1) * t / 4
+        else:
+            margin_path[:, t] = om5
+
     growth_factor = np.cumprod(1.0 + growth_path, axis=1)
     revenue_path = rev0 * growth_factor
-    ebit_path = revenue_path * om[:, None]
+    ebit_path = revenue_path * margin_path
     nopat_path = ebit_path * (1.0 - tax_rate)
     capex_path = revenue_path * cx[:, None]
     fcf_path = nopat_path - capex_path
 
-    discount_factors = (1.0 + dr[:, None]) ** yrs[None, :]  # (trials, years)
+    discount_factors = (1.0 + dr[:, None]) ** yrs[None, :]
     pv_fcfs = (fcf_path / discount_factors).sum(axis=1)
 
     terminal_fcf = fcf_path[:, -1] * (1.0 + tg)
-    # Avoid zero division: tg already < dr
     terminal_value = terminal_fcf / (dr - tg)
     pv_terminal = terminal_value / ((1.0 + dr) ** n_years)
 
@@ -987,7 +1359,129 @@ def _run_monte_carlo(g: Grounding, distributions: dict, trials: int = MC_TRIALS)
     )
 
 
+# --------------------------------------- Multiples cross-check + franchise --
+def _compute_multiples(g: Grounding, base_value: ScenarioResult, base: ScenarioAssumption,
+                      forecast_years: int) -> MultiplesCrossCheck:
+    """Derive implied forward P/E, EV/EBITDA, EV/Revenue from the base scenario, compare to market."""
+    # Y1 numbers from base assumptions
+    y1_rev = (g.revenue_ttm or 0.0) * (1.0 + base.revenue_growth)
+    y1_ebit = y1_rev * base.operating_margin
+    tax = g.tax_rate or 0.21
+    y1_ni_proxy = y1_ebit * (1.0 - tax)  # ignores interest expense; rough proxy
+
+    # EBITDA approx = EBIT + capex (D&A ~= capex in mature steady state)
+    y1_ebitda = y1_ebit + y1_rev * base.capex_pct_revenue
+
+    implied_pe: Optional[float] = None
+    if y1_ni_proxy > 0 and g.shares_out:
+        eps_y1 = y1_ni_proxy / g.shares_out
+        if eps_y1 > 0:
+            implied_pe = base_value.fair_value_per_share / eps_y1
+
+    implied_ev_ebitda: Optional[float] = None
+    if y1_ebitda > 0:
+        implied_ev_ebitda = base_value.enterprise_value / y1_ebitda
+
+    implied_ev_rev: Optional[float] = None
+    if y1_rev > 0:
+        implied_ev_rev = base_value.enterprise_value / y1_rev
+
+    pe_delta = (implied_pe - g.forward_pe) / g.forward_pe if (implied_pe and g.forward_pe and g.forward_pe > 0) else None
+    ebitda_delta = (implied_ev_ebitda - g.market_ev_ebitda) / g.market_ev_ebitda if (
+        implied_ev_ebitda and g.market_ev_ebitda and g.market_ev_ebitda > 0
+    ) else None
+    rev_delta = (implied_ev_rev - g.market_ev_revenue) / g.market_ev_revenue if (
+        implied_ev_rev and g.market_ev_revenue and g.market_ev_revenue > 0
+    ) else None
+
+    # Diagnostic
+    parts: list[str] = []
+    if pe_delta is not None:
+        if pe_delta < -0.30:
+            parts.append(
+                f"Your model implies {abs(pe_delta)*100:.0f}% multiple compression vs market "
+                f"({implied_pe:.1f}x vs {g.forward_pe:.1f}x). Disagreement is on growth durability, not value."
+            )
+        elif pe_delta > 0.30:
+            parts.append(
+                f"Your model implies a richer P/E than the market "
+                f"({implied_pe:.1f}x vs {g.forward_pe:.1f}x) \u2014 your assumptions may be too bullish."
+            )
+        else:
+            parts.append(
+                f"Implied fwd P/E ({implied_pe:.1f}x) within ~30% of market ({g.forward_pe:.1f}x) \u2014 multiples and DCF rhyme."
+            )
+    if ebitda_delta is not None and abs(ebitda_delta) > 0.30:
+        parts.append(
+            f"EV/EBITDA gap: implied {implied_ev_ebitda:.1f}x vs market {g.market_ev_ebitda:.1f}x."
+        )
+    diagnostic = " ".join(parts) if parts else "Insufficient market multiples to cross-check."
+
+    return MultiplesCrossCheck(
+        base_fair_value=base_value.fair_value_per_share,
+        implied_forward_pe=implied_pe,
+        market_forward_pe=g.forward_pe,
+        pe_delta_pct=pe_delta,
+        implied_ev_ebitda=implied_ev_ebitda,
+        market_ev_ebitda=g.market_ev_ebitda,
+        ev_ebitda_delta_pct=ebitda_delta,
+        implied_ev_revenue=implied_ev_rev,
+        market_ev_revenue=g.market_ev_revenue,
+        ev_revenue_delta_pct=rev_delta,
+        diagnostic=diagnostic,
+    )
+
+
+def _compute_franchise_flag(g: Grounding, base: ScenarioAssumption) -> FranchiseFlag:
+    roic = g.roic_ttm
+    wacc = g.wacc_buildup.wacc
+    if roic is None:
+        return FranchiseFlag(
+            is_franchise=False, roic=None, wacc=wacc, spread=None,
+            terminal_growth_used=base.terminal_growth,
+            message="ROIC not available (insufficient grounding data).",
+        )
+    spread = roic - wacc
+    is_franchise = roic > wacc * 1.5 and base.terminal_growth < 0.03
+    if is_franchise:
+        msg = (
+            f"High-ROIC franchise: ROIC {roic*100:.0f}% vs WACC {wacc*100:.1f}% "
+            f"(spread {spread*100:.1f}pp). Base terminal growth of {base.terminal_growth*100:.1f}% "
+            f"likely UNDERSTATES franchise value \u2014 flat-perpetuity Gordon growth ignores reinvestment "
+            f"at above-WACC returns. Consider checking sensitivity at terminal_growth = 3.5\u20134.5%."
+        )
+    elif roic > wacc * 1.5:
+        msg = (
+            f"High-ROIC franchise (ROIC {roic*100:.0f}% vs WACC {wacc*100:.1f}%) but base "
+            f"terminal growth of {base.terminal_growth*100:.1f}% already reflects reinvestment value."
+        )
+    elif roic < wacc:
+        msg = (
+            f"WARNING: ROIC ({roic*100:.0f}%) below WACC ({wacc*100:.1f}%). Company is destroying "
+            f"value on each marginal dollar of capital \u2014 growth assumptions should be conservative."
+        )
+    else:
+        msg = (
+            f"ROIC {roic*100:.0f}% vs WACC {wacc*100:.1f}% \u2014 marginal franchise. "
+            f"Standard Gordon growth treatment is appropriate."
+        )
+    return FranchiseFlag(
+        is_franchise=is_franchise, roic=roic, wacc=wacc, spread=spread,
+        terminal_growth_used=base.terminal_growth, message=msg,
+    )
+
+
 # ----------------------------------------------------- Orchestration --------
+def _decide_forecast_years(scenarios_raw: list[dict], rev_cagr_5y: Optional[float]) -> int:
+    """Use 10-year forecast for high-growth names; 5-year otherwise."""
+    if rev_cagr_5y is not None and rev_cagr_5y > HIGH_GROWTH_THRESHOLD:
+        return FORECAST_YEARS_HIGH_GROWTH
+    for sc in scenarios_raw:
+        if float(sc.get("revenue_growth", 0)) > 0.20:
+            return FORECAST_YEARS_HIGH_GROWTH
+    return FORECAST_YEARS
+
+
 def get_dcf(ticker: str, refresh: bool = False, trials: int = MC_TRIALS) -> dict:
     key = f"{ticker.upper()}|{trials}"
     now = time.time()
@@ -1008,6 +1502,10 @@ def get_dcf(ticker: str, refresh: bool = False, trials: int = MC_TRIALS) -> dict
     raw = _call_llm(g)
     raw = _validate_assumptions(raw, wacc_capm=g.wacc_buildup.wacc)
 
+    forecast_years = _decide_forecast_years(raw.get("scenarios", []), g.revenue_cagr_5y)
+    logger.info("DCF for %s using %d-year forecast (rev_cagr_5y=%s)",
+                g.ticker, forecast_years, g.revenue_cagr_5y)
+
     scenarios: list[ScenarioAssumption] = []
     scenario_values: list[ScenarioResult] = []
     for sc in raw["scenarios"]:
@@ -1015,6 +1513,8 @@ def get_dcf(ticker: str, refresh: bool = False, trials: int = MC_TRIALS) -> dict
             label=sc["label"],
             revenue_growth=sc["revenue_growth"],
             operating_margin=sc["operating_margin"],
+            operating_margin_y5=sc["operating_margin_y5"],
+            mid_growth=sc["mid_growth"],
             wacc_risk_adj_bps=sc["wacc_risk_adj_bps"],
             discount_rate=sc["discount_rate"],
             terminal_growth=sc["terminal_growth"],
@@ -1028,6 +1528,7 @@ def get_dcf(ticker: str, refresh: bool = False, trials: int = MC_TRIALS) -> dict
             revenue_ttm=g.revenue_ttm,
             revenue_growth=assumption.revenue_growth,
             operating_margin=assumption.operating_margin,
+            operating_margin_y5=assumption.operating_margin_y5,
             discount_rate=assumption.discount_rate,
             terminal_growth=assumption.terminal_growth,
             capex_pct_revenue=assumption.capex_pct_revenue,
@@ -1035,6 +1536,8 @@ def get_dcf(ticker: str, refresh: bool = False, trials: int = MC_TRIALS) -> dict
             shares_out=g.shares_out,
             net_debt=g.net_debt or 0.0,
             buyback_yield=g.buyback_yield or 0.0,
+            forecast_years=forecast_years,
+            mid_growth=assumption.mid_growth,
         )
         scenario_values.append(ScenarioResult(
             label=assumption.label,
@@ -1047,9 +1550,13 @@ def get_dcf(ticker: str, refresh: bool = False, trials: int = MC_TRIALS) -> dict
         ))
 
     base = next((s for s in scenarios if s.label == "Base"), scenarios[0])
-    reverse = _reverse_dcf(g, base)
-    sensitivity = _sensitivity_matrix(g, base)
-    mc = _run_monte_carlo(g, raw["distributions"], trials=trials)
+    base_value = next((sv for sv in scenario_values if sv.label == base.label), scenario_values[0])
+    reverse = _reverse_dcf(g, base, forecast_years=forecast_years)
+    sensitivity = _sensitivity_matrix(g, base, forecast_years=forecast_years)
+    mc = _run_monte_carlo(g, raw["distributions"], base=base, forecast_years=forecast_years, trials=trials)
+
+    multiples = _compute_multiples(g, base_value, base, forecast_years)
+    franchise = _compute_franchise_flag(g, base)
 
     # Verdict from LLM, supplemented with margin-of-safety stat
     v_raw = raw["verdict"]
@@ -1073,6 +1580,9 @@ def get_dcf(ticker: str, refresh: bool = False, trials: int = MC_TRIALS) -> dict
         reverse_dcf=reverse,
         sensitivity=sensitivity,
         verdict=verdict,
+        multiples=multiples,
+        franchise_flag=franchise,
+        forecast_years_used=forecast_years,
         risks=raw.get("risks", []),
         key_drivers=raw.get("key_drivers", []),
         model=AZURE_OPENAI_DEPLOYMENT,

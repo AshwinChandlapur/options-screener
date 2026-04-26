@@ -1,0 +1,14 @@
+Status: 200  Elapsed: 29.071446s
+current_price: 147.16
+fcf_ttm: 
+revenue_ttm: 529800000
+revenue_growth_3y: 
+operating_margin_history:
+null
+scenarios:
+  Conservative: -17.1817344804269
+  Base: -21.4709974162732
+  Optimistic: -5.88133405605079
+verdict: AVOID entry=18 exit=45
+multiples_check:  - 
+roic_flag:  - 

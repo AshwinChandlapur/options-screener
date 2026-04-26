@@ -11,18 +11,22 @@ import type {
   Verdict,
   WaccBuildup,
   Recommendation,
+  MultiplesCrossCheck,
+  FranchiseFlag,
 } from '../types/dcf'
 
 // ----------------------------------------------------------------- Utils ---
 const ASSUMPTION_LABELS: Record<AssumptionKey, string> = {
   revenue_growth: 'Revenue Growth (Y1)',
-  operating_margin: 'Operating Margin',
+  operating_margin: 'Operating Margin (Y1)',
+  operating_margin_y5: 'Operating Margin (Y5)',
   discount_rate: 'Discount Rate (WACC)',
   terminal_growth: 'Terminal Growth',
   capex_pct_revenue: 'Capex % of Revenue',
 }
 const ASSUMPTION_ORDER: AssumptionKey[] = [
-  'revenue_growth', 'operating_margin', 'discount_rate', 'terminal_growth', 'capex_pct_revenue',
+  'revenue_growth', 'operating_margin', 'operating_margin_y5',
+  'discount_rate', 'terminal_growth', 'capex_pct_revenue',
 ]
 const SCENARIO_COLORS: Record<string, string> = {
   Conservative: '#f87171', Base: '#60a5fa', Optimistic: '#4ade80',
@@ -129,11 +133,24 @@ function HeaderCard({ d }: { d: DcfData }) {
       <Stat label="Revenue TTM" value={fmtBigCur(g.revenue_ttm)} />
       <Stat label="5y Rev CAGR" value={g.revenue_cagr_5y == null ? '—' : fmtPct(g.revenue_cagr_5y)} />
       <Stat label="Op Margin TTM" value={g.operating_margin_ttm == null ? '—' : fmtPct(g.operating_margin_ttm)} />
+      <Stat label="Gross Margin" value={g.gross_margin_ttm == null ? '—' : fmtPct(g.gross_margin_ttm)} />
+      <Stat label="R&D % Rev" value={g.rnd_pct_revenue == null ? '—' : fmtPct(g.rnd_pct_revenue)} />
       <Stat
-        label="Buyback Yield"
+        label="ROIC"
+        value={g.roic_ttm == null ? '—' : fmtPct(g.roic_ttm)}
+        highlight={g.roic_ttm == null ? undefined : g.roic_ttm > g.wacc_buildup.wacc * 1.5 ? '#4ade80' : g.roic_ttm < g.wacc_buildup.wacc ? '#f87171' : undefined}
+      />
+      <Stat
+        label="Net Buyback"
         value={g.buyback_yield == null ? '—' : fmtPct(g.buyback_yield)}
         highlight={g.buyback_yield && g.buyback_yield > 0 ? '#4ade80' : g.buyback_yield && g.buyback_yield < 0 ? '#f87171' : undefined}
       />
+      <Stat
+        label="SBC Dilution"
+        value={g.sbc_dilution_yield == null ? '—' : fmtPct(g.sbc_dilution_yield)}
+        highlight={g.sbc_dilution_yield && g.sbc_dilution_yield > 0.02 ? '#f87171' : undefined}
+      />
+      <Stat label="Forward P/E (mkt)" value={g.forward_pe == null ? '—' : `${g.forward_pe.toFixed(1)}x`} />
     </div>
   )
 }
@@ -235,9 +252,14 @@ function ScenarioCards({ d }: { d: DcfData }) {
 }
 
 // ===================================================== ASSUMPTIONS TABLE
-function AssumptionsTable({ scenarios }: { scenarios: ScenarioAssumption[] }) {
+function AssumptionsTable({ scenarios, forecastYears }: { scenarios: ScenarioAssumption[]; forecastYears: number }) {
+  const showMidGrowth = forecastYears >= 10
   return (
     <div style={{ overflowX: 'auto' }}>
+      <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
+        Forecast horizon: <strong style={{ color: '#fbbf24' }}>{forecastYears} years</strong>
+        {forecastYears === 10 && <span> (high-growth: two-stage fade with mid-period growth)</span>}
+      </div>
       <table style={{
         width: '100%', borderCollapse: 'collapse', fontSize: 13,
         background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
@@ -276,6 +298,16 @@ function AssumptionsTable({ scenarios }: { scenarios: ScenarioAssumption[] }) {
               })}
             </tr>
           ))}
+          {showMidGrowth && (
+            <tr style={{ borderTop: '1px solid #334155' }}>
+              <td style={{ ...td, color: '#cbd5e1', fontWeight: 600 }}>Mid Growth (Y6–Y10)</td>
+              {scenarios.map((s) => (
+                <td key={s.label} style={{ ...td, color: '#e2e8f0' }}>
+                  {fmtPct(s.mid_growth, 1)}
+                </td>
+              ))}
+            </tr>
+          )}
         </tbody>
       </table>
       <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Hover any cell for the rationale.</div>
@@ -460,6 +492,75 @@ function RisksAndDrivers({ d }: { d: DcfData }) {
   )
 }
 
+// ============================================== MULTIPLES CROSS-CHECK ==
+function MultiplesPanel({ m }: { m: MultiplesCrossCheck }) {
+  const rows: Array<{ label: string; implied: number | null; market: number | null; delta: number | null; suffix: string }> = [
+    { label: 'Forward P/E', implied: m.implied_forward_pe, market: m.market_forward_pe, delta: m.pe_delta_pct, suffix: 'x' },
+    { label: 'EV / EBITDA', implied: m.implied_ev_ebitda, market: m.market_ev_ebitda, delta: m.ev_ebitda_delta_pct, suffix: 'x' },
+    { label: 'EV / Revenue', implied: m.implied_ev_revenue, market: m.market_ev_revenue, delta: m.ev_revenue_delta_pct, suffix: 'x' },
+  ]
+  const fmtMul = (v: number | null, s: string) => v == null ? '—' : `${v.toFixed(1)}${s}`
+  const deltaTone = (d: number | null) =>
+    d == null ? '#94a3b8' : Math.abs(d) < 0.15 ? '#4ade80' : Math.abs(d) < 0.30 ? '#fbbf24' : '#f87171'
+  return (
+    <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '12px 16px' }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>
+        Multiples Cross-Check · DCF vs Market
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr style={{ color: '#94a3b8', fontSize: 11, textTransform: 'uppercase' }}>
+            <th style={{ ...th, textAlign: 'left' }}>Metric</th>
+            <th style={{ ...th, textAlign: 'right' }}>DCF Implied</th>
+            <th style={{ ...th, textAlign: 'right' }}>Market</th>
+            <th style={{ ...th, textAlign: 'right' }}>Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.label} style={{ borderTop: '1px solid #334155' }}>
+              <td style={{ ...td, color: '#cbd5e1', fontWeight: 600 }}>{r.label}</td>
+              <td style={{ ...td, textAlign: 'right', color: '#e2e8f0' }}>{fmtMul(r.implied, r.suffix)}</td>
+              <td style={{ ...td, textAlign: 'right', color: '#e2e8f0' }}>{fmtMul(r.market, r.suffix)}</td>
+              <td style={{ ...td, textAlign: 'right', color: deltaTone(r.delta), fontWeight: 700 }}>
+                {r.delta == null ? '—' : `${r.delta >= 0 ? '+' : ''}${(r.delta * 100).toFixed(0)}%`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 10, lineHeight: 1.5 }}>
+        {m.diagnostic}
+      </div>
+    </div>
+  )
+}
+
+// ================================================ FRANCHISE BANNER ==
+function FranchiseBanner({ f }: { f: FranchiseFlag }) {
+  const tone = f.is_franchise ? '#fbbf24' : (f.roic != null && f.roic < f.wacc ? '#f87171' : '#475569')
+  return (
+    <div style={{
+      background: f.is_franchise ? '#3f2f0a' : '#1e293b',
+      border: `1px solid ${tone}66`,
+      borderLeft: `4px solid ${tone}`,
+      borderRadius: 6, padding: '10px 14px',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: tone, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+          {f.is_franchise ? '★ Franchise flag' : 'ROIC vs WACC'}
+        </div>
+        <div style={{ fontSize: 12, color: '#cbd5e1' }}>
+          ROIC <strong>{f.roic == null ? '—' : fmtPct(f.roic, 0)}</strong>{' '}
+          · WACC <strong>{fmtPct(f.wacc, 1)}</strong>{' '}
+          {f.spread != null && <>· Spread <strong style={{ color: tone }}>{(f.spread * 100).toFixed(1)}pp</strong></>}
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 6, lineHeight: 1.5 }}>{f.message}</div>
+    </div>
+  )
+}
+
 function Bulletbox({ title, items, accent }: { title: string; items: string[]; accent: string }) {
   return (
     <div style={{
@@ -551,12 +652,14 @@ export function DcfView() {
         <>
           <VerdictBanner v={orderedData.verdict} price={orderedData.grounding.current_price} />
           <HeaderCard d={orderedData} />
+          <FranchiseBanner f={orderedData.franchise_flag} />
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) minmax(260px, 1fr)', gap: 10 }}>
             <WaccPanel b={orderedData.grounding.wacc_buildup} />
             <ReverseDcfPanel r={orderedData.reverse_dcf} />
           </div>
           <ScenarioCards d={orderedData} />
-          <AssumptionsTable scenarios={orderedData.scenarios} />
+          <AssumptionsTable scenarios={orderedData.scenarios} forecastYears={orderedData.forecast_years_used} />
+          <MultiplesPanel m={orderedData.multiples} />
           <SensitivityHeatmap s={orderedData.sensitivity} currentPrice={orderedData.grounding.current_price} />
           <MonteCarloPanel mc={orderedData.monte_carlo} currentPrice={orderedData.grounding.current_price} />
           <Narratives scenarios={orderedData.scenarios} />
