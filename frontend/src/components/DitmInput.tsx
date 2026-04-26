@@ -352,6 +352,9 @@ export function DitmInput({ onScan, onCustom, loading }: Props) {
                     )}
                   </div>
             ))}
+            <div style={{ marginTop: '6px', padding: '5px 8px', background: '#0f172a', borderRadius: '5px', fontSize: '11px', color: '#64748b', borderLeft: '3px solid #334155' }}>
+              <strong style={{ color: '#94a3b8' }}>Tie-break:</strong> equal scores → closest to <strong>0.82 delta</strong> wins. If also equal → lower <strong>Extrinsic%</strong> wins.
+            </div>
           </div>
         </div>
       )}

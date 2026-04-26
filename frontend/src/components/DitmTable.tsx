@@ -46,6 +46,26 @@ const ENV_MAX: Record<string, number> = {
 const STRIKE_MAX: Record<string, number> = {
   'Δ': 22, Ext: 28, Th: 17, IV: 10, BA: 18, Cap: 5,
 }
+const DRAG_LABELS: Record<string, string> = {
+  Tr: 'Trend', HV: 'HV Rank', WRSI: 'Weekly RSI',
+  '52W': '52W Dist', R2: '200d Return', Ea: 'Earnings',  LQ: 'Liquidity',
+  'Δ': 'Delta', Ext: 'Extrinsic%', Th: 'Theta/yr',
+  IV: 'IV Pctile', BA: 'Bid-Ask Spread', Cap: 'Cap Efficiency',
+}
+function topDrags(envDetail: string, strikeDetail: string, n = 2) {
+  const envPts = parseDetail(envDetail)
+  const strikePts = parseDetail(strikeDetail)
+  const all: { key: string; drag: number }[] = []
+  for (const [k, max] of Object.entries(ENV_MAX)) {
+    const v = envPts[k] ?? 0
+    if (v >= 0) all.push({ key: k, drag: max - v })
+  }
+  for (const [k, max] of Object.entries(STRIKE_MAX)) {
+    const v = strikePts[k] ?? 0
+    if (v >= 0) all.push({ key: k, drag: max - v })
+  }
+  return all.sort((a, b) => b.drag - a.drag).slice(0, n)
+}
 
 function subScore(pts: Record<string, number>, key: string, maxMap: Record<string, number>) {
   const v = pts[key], max = maxMap[key]
@@ -141,6 +161,7 @@ function groupResults(results: DitmResult[]): GroupedDitmResult[] {
         ret_200d: r.ret_200d,
         dist_from_52w_high_pct: r.dist_from_52w_high_pct,
         earnings_date: r.earnings_date,
+        days_to_earnings: r.days_to_earnings,
         earnings_within_dte: false,
         gap_3d_pct: r.gap_3d_pct,
         macro_hold: false,
@@ -329,6 +350,9 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                 </span>
                 {scoreSorted === 'asc' && ' ↑'}
                 {scoreSorted === 'desc' && ' ↓'}
+              </th>
+              <th>
+                <span className="col-tip" title="Top 2 factors with the largest point gap from their maximum · (max − actual)">Drags ⓘ</span>
               </th>
             </tr>
           ))}
@@ -572,6 +596,13 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                 <td>
                   {scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.ditm_score, true)}
                 </td>
+                <td>
+                  {topDrags(bestStrike.env_detail ?? '', bestStrike.strike_detail ?? '').map(d => (
+                    <span key={d.key} style={{ display: 'block', fontSize: '12px', color: d.drag >= 15 ? '#f87171' : '#fb923c' }}>
+                      {DRAG_LABELS[d.key] ?? d.key} −{Math.round(d.drag)}
+                    </span>
+                  ))}
+                </td>
               </tr>
             )
             absRowIdx++
@@ -632,6 +663,13 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                     </td>
                     <td>
                       {scoreFmt(s.env_score, s.strike_score, s.ditm_score)}
+                    </td>
+                    <td>
+                      {topDrags(s.env_detail ?? '', s.strike_detail ?? '').map(d => (
+                        <span key={d.key} style={{ display: 'block', fontSize: '12px', color: d.drag >= 15 ? '#f87171' : '#fb923c' }}>
+                          {DRAG_LABELS[d.key] ?? d.key} −{Math.round(d.drag)}
+                        </span>
+                      ))}
                     </td>
                   </tr>
                 )

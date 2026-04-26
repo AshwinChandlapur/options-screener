@@ -283,7 +283,11 @@ def process_cc_symbol(
                 if not strike_results:
                     continue
 
-                best_idx = max(range(len(strike_results)), key=lambda i: strike_results[i].cc_score)
+                # Tie-break by ROC (higher = better)
+                best_idx = max(range(len(strike_results)), key=lambda i: (
+                    strike_results[i].cc_score,
+                    strike_results[i].roc_annualized or 0.0,
+                ))
                 strike_results[best_idx].is_best = True
                 best_score_val = strike_results[best_idx].cc_score
                 expected_move = round(current_price * hv_sigma * math.sqrt(dte / 365.0), 2)

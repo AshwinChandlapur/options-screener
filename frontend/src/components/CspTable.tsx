@@ -35,6 +35,26 @@ function parseEnvDetail(detail: string): Record<string, number> {
 }
 const ENV_MAX: Record<string, number> = { HV: 22, IH: 28, SMA: 15, '52W': 10, RSI: 10, OI: 8, DTE: 7 }
 const STRIKE_MAX: Record<string, number> = { 'Δ': 15, 'Sup': 18, 'EM': 20, 'OTM': 9, 'BA': 23, 'LQ': 5, 'ROC': 10 }
+const DRAG_LABELS: Record<string, string> = {
+  HV: 'HV Rank', IH: 'IV/HV Ratio', SMA: 'Trend (SMA)',
+  '52W': '52W Dist', RSI: 'RSI', OI: 'Chain OI', DTE: 'DTE',
+  'Δ': 'Delta', Sup: 'Support Dist', EM: 'Exp Move Buffer',
+  OTM: 'OTM%', BA: 'Bid-Ask Spread', LQ: 'Liquidity', ROC: 'Ann. ROC',
+}
+function topDrags(envDetail: string, strikeDetail: string, n = 2) {
+  const envPts = parseEnvDetail(envDetail)
+  const strikePts = parseEnvDetail(strikeDetail)
+  const all: { key: string; drag: number }[] = []
+  for (const [k, max] of Object.entries(ENV_MAX)) {
+    const v = envPts[k] ?? 0
+    if (v >= 0) all.push({ key: k, drag: max - v })
+  }
+  for (const [k, max] of Object.entries(STRIKE_MAX)) {
+    const v = strikePts[k] ?? 0
+    if (v >= 0) all.push({ key: k, drag: max - v })
+  }
+  return all.sort((a, b) => b.drag - a.drag).slice(0, n)
+}
 function strikeSub(detail: string, key: string) {
   const pts = parseEnvDetail(detail)
   const v = pts[key], max = STRIKE_MAX[key]
@@ -345,6 +365,9 @@ export function CspTable({ data }: Props) {
                 {scoreSorted === 'asc' && ' ↑'}
                 {scoreSorted === 'desc' && ' ↓'}
               </th>
+              <th>
+                <span className="col-tip" title="Top 2 factors with the largest point gap from their maximum · (max − actual)">Drags ⓘ</span>
+              </th>
             </tr>
           ))}
         </thead>
@@ -509,6 +532,13 @@ export function CspTable({ data }: Props) {
                   {strikeSub(bestStrike.strike_detail, 'ROC')}
                 </td>
                 <td>{scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.csp_score, bestStrike.env_detail, bestStrike.strike_detail, true)}</td>
+                <td>
+                  {topDrags(bestStrike.env_detail ?? '', bestStrike.strike_detail ?? '').map(d => (
+                    <span key={d.key} style={{ display: 'block', fontSize: '12px', color: d.drag >= 15 ? '#f87171' : '#fb923c' }}>
+                      {DRAG_LABELS[d.key] ?? d.key} −{Math.round(d.drag)}
+                    </span>
+                  ))}
+                </td>
               </tr>
             )
             absRowIdx++
@@ -553,6 +583,13 @@ export function CspTable({ data }: Props) {
                       {strikeSub(s.strike_detail, 'ROC')}
                     </td>
                     <td>{scoreFmt(s.env_score, s.strike_score, s.csp_score, s.env_detail, s.strike_detail)}</td>
+                    <td>
+                      {topDrags(s.env_detail ?? '', s.strike_detail ?? '').map(d => (
+                        <span key={d.key} style={{ display: 'block', fontSize: '12px', color: d.drag >= 15 ? '#f87171' : '#fb923c' }}>
+                          {DRAG_LABELS[d.key] ?? d.key} −{Math.round(d.drag)}
+                        </span>
+                      ))}
+                    </td>
                   </tr>
                 )
                 absRowIdx++

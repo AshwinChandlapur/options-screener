@@ -296,6 +296,9 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
                     )}
                   </div>
             ))}
+            <div style={{ marginTop: '6px', padding: '5px 8px', background: '#0f172a', borderRadius: '5px', fontSize: '11px', color: '#64748b', borderLeft: '3px solid #334155' }}>
+              <strong style={{ color: '#94a3b8' }}>Tie-break:</strong> equal scores → higher <strong>Ann. ROC</strong> wins.
+            </div>
           </div>
         </div>
       )}

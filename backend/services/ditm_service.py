@@ -651,8 +651,12 @@ def process_symbol(
                 if not strike_results:
                     continue
 
-                # Mark best
-                best_idx = max(range(len(strike_results)), key=lambda i: strike_results[i].ditm_score)
+                # Mark best; tie-break by delta proximity to ideal (0.82), then by extrinsic_pct (lower = better)
+                best_idx = max(range(len(strike_results)), key=lambda i: (
+                    strike_results[i].ditm_score,
+                    -abs(strike_results[i].delta - 0.82),  # closer to ideal delta wins
+                    -(strike_results[i].extrinsic_pct),    # lower time decay as final fallback
+                ))
                 strike_results[best_idx].is_best = True
                 best_score_val = strike_results[best_idx].ditm_score
 

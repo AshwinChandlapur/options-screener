@@ -58,6 +58,7 @@ export interface GroupedDitmResult {
   ret_200d: number
   dist_from_52w_high_pct: number
   earnings_date: string | null
+  days_to_earnings: number | null
   earnings_within_dte: boolean
   gap_3d_pct: number
   macro_hold: boolean

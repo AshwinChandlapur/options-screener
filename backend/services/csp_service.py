@@ -286,8 +286,11 @@ def process_symbol(
                 if not strike_results:
                     continue
 
-                # Mark the highest-scoring strike as best
-                best_idx = max(range(len(strike_results)), key=lambda i: strike_results[i].csp_score)
+                # Mark the highest-scoring strike as best; tie-break by ROC (higher = better)
+                best_idx = max(range(len(strike_results)), key=lambda i: (
+                    strike_results[i].csp_score,
+                    strike_results[i].roc_annualized or 0.0,
+                ))
                 strike_results[best_idx].is_best = True
                 best_score_val = strike_results[best_idx].csp_score
 
