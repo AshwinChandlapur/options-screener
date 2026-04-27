@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import math
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -99,8 +98,11 @@ def test_rsi_nan_when_insufficient_data():
 def test_rsi_uptrend_above_50():
     df = _linear_uptrend(start=100.0, step=1.0, n=50)
     rsi = compute_rsi(df)
+    # Strict monotonic uptrend means avg_loss is 0 / near-zero, RSI saturates
+    # near 100. Use a tight upper-bound assertion so a regression that softens
+    # the indicator's responsiveness is caught.
     assert 0.0 <= rsi <= 100.0
-    assert rsi > 50.0  # monotonic uptrend → strong RSI
+    assert rsi > 90.0
 
 
 # --- compute_iv_rank_percentile ---------------------------------------------
@@ -110,16 +112,15 @@ def test_iv_rank_percentile_nan_when_insufficient_data():
     assert math.isnan(iv_rank) and math.isnan(iv_pct)
 
 
-def test_iv_rank_percentile_zero_volatility_returns_midpoint_rank():
-    """Constant series → HV is 0 / NaN; function should return the documented
-    fallback (50.0 when min == max)."""
+def test_iv_rank_percentile_constant_series_uses_midpoint_fallback():
+    """Constant series → log-returns are all 0, HV is 0 every day, so
+    HV_min == HV_max. The function's documented fallback for that degenerate
+    case is iv_rank = 50.0 and iv_percentile = 0.0 (no day had HV strictly
+    less than today's)."""
     df = _flat_series(100.0, 30 + 252 + 5)
     iv_rank, iv_pct = compute_iv_rank_percentile(df)
-    # Constant series: all log-returns are 0, HV is 0 throughout. Function
-    # returns NaN early (HV series collapses) OR 50.0 fallback. Either is a
-    # valid contract — we just want it to not crash and to be in [0, 100] or NaN.
-    assert math.isnan(iv_rank) or 0.0 <= iv_rank <= 100.0
-    assert math.isnan(iv_pct) or 0.0 <= iv_pct <= 100.0
+    assert iv_rank == 50.0
+    assert iv_pct == 0.0
 
 
 # --- compute_volume_support / resistance ------------------------------------

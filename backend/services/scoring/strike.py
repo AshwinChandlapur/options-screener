@@ -1,11 +1,26 @@
 """
-Strike-quality scorers + final-blend helpers.
+Strike-quality scorers + final-blend helpers for the CSP and CC screeners.
 
-CSP and CC scorers share the same factor structure (Δ, distance to S/R, EM,
-OTM, BA, LQ, ROC) but with direction-specific math. DITM is a different beast
-(extrinsic % matters more than EM, no S/R distance factor).
+Both scorers share the same factor structure (Δ, distance to S/R, EM, OTM, BA,
+LQ, ROC) but with direction-specific math: CSP wants short puts below strong
+support, CC wants short calls below stiff resistance.
+
+DITM strike scoring is intentionally *not* in this module yet — the live
+implementation lives inline in `services.ditm_service.py` (its factor mix
+is fundamentally different: extrinsic % matters more than EM, no S/R
+distance factor). Phase 4 of the screener refactor will migrate it here
+once `ScreenerConfig` exists (see ADR-0002).
 """
 from __future__ import annotations
+
+import math
+
+__all__ = [
+    "compute_csp_strike_score",
+    "compute_csp_final_score",
+    "compute_cc_strike_score",
+    "compute_cc_final_score",
+]
 
 
 def compute_csp_strike_score(
@@ -29,13 +44,12 @@ def compute_csp_strike_score(
 
     Weights: Δ 15 + Sup 18 + EM 20 + OTM 9 + BA 23 + LQ 5 + ROC 10 = 100
     """
-    import math as _math
     score = 0.0
     bk: dict[str, float] = {}
 
     # --- Delta bell-curve (15 pts — rescaled from 18 by ×15/18) ---
     p = 0.0
-    if not _math.isnan(delta):
+    if not math.isnan(delta):
         if -0.25 <= delta <= -0.20:
             p = 15.0
         elif (-0.30 <= delta < -0.25) or (-0.20 < delta <= -0.15):
@@ -68,9 +82,9 @@ def compute_csp_strike_score(
     # --- Expected Move Buffer (20 pts) — unchanged ---
     p = 0.0
     _em_buffer_pct: float = float('nan')
-    if not _math.isnan(iv_used) and iv_used > 0 and dte > 0:
+    if not math.isnan(iv_used) and iv_used > 0 and dte > 0:
         T = dte / 365.0
-        em = current_price * iv_used * _math.sqrt(T)
+        em = current_price * iv_used * math.sqrt(T)
         em_lower = current_price - em
         sigmas_outside = (em_lower - strike) / em
         _em_buffer_pct = round(sigmas_outside * 100, 2)
@@ -97,7 +111,7 @@ def compute_csp_strike_score(
 
     # --- Bid-Ask Spread % (23 pts — rescaled from 27 by ×23/27) ---
     p = 0.0
-    if bid_ask_spread_pct is not None and not _math.isnan(bid_ask_spread_pct):
+    if bid_ask_spread_pct is not None and not math.isnan(bid_ask_spread_pct):
         if bid_ask_spread_pct <= 1.0:
             p = 23.0
         elif bid_ask_spread_pct <= 3.0:
@@ -178,13 +192,12 @@ def compute_cc_strike_score(
 
     Weights: Δ 15 + Res 18 + EM 20 + OTM 9 + BA 23 + LQ 5 + ROC 10 = 100
     """
-    import math as _math
     score = 0.0
     bk: dict[str, float] = {}
 
     # --- Delta bell-curve (15 pts — rescaled from 18 by ×15/18) ---
     p = 0.0
-    if not _math.isnan(delta):
+    if not math.isnan(delta):
         if 0.20 <= delta <= 0.25:
             p = 15.0
         elif (0.15 <= delta < 0.20) or (0.25 < delta <= 0.30):
@@ -221,9 +234,9 @@ def compute_cc_strike_score(
     # --- Expected Move Buffer (20 pts) — unchanged ---
     p = 0.0
     _cc_em_buffer_pct: float = float('nan')
-    if not _math.isnan(iv_used) and iv_used > 0 and dte > 0:
+    if not math.isnan(iv_used) and iv_used > 0 and dte > 0:
         T = dte / 365.0
-        em = current_price * iv_used * _math.sqrt(T)
+        em = current_price * iv_used * math.sqrt(T)
         em_upper = current_price + em
         sigmas_outside = (strike - em_upper) / em
         _cc_em_buffer_pct = round(sigmas_outside * 100, 2)
@@ -250,7 +263,7 @@ def compute_cc_strike_score(
 
     # --- Bid-Ask Spread % (23 pts — rescaled from 27 by ×23/27) ---
     p = 0.0
-    if bid_ask_spread_pct is not None and not _math.isnan(bid_ask_spread_pct):
+    if bid_ask_spread_pct is not None and not math.isnan(bid_ask_spread_pct):
         if bid_ask_spread_pct <= 1.0:
             p = 23.0
         elif bid_ask_spread_pct <= 3.0:

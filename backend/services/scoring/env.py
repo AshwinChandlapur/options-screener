@@ -1,14 +1,22 @@
 """
-Environment scorers — compute the 0–100 "environment" half of each screener's
-final score from a bundle of indicator values.
+Environment scorers — compute the 0–100 "environment" half of the CSP/CC
+screeners' final score from a bundle of indicator values.
 
-CSP/CC use `compute_env_score` (direction-aware via the `direction` arg).
-DITM uses its own `compute_ditm_env_score` because its weights and gates are
-fundamentally different (LEAPS-buying is a different thesis than premium-selling).
+`compute_env_score` is direction-aware via the `direction` arg ('csp' | 'cc');
+it shapes the 52W and RSI curves accordingly.
+
+DITM environment scoring is intentionally *not* in this module yet — the live
+implementation lives inline in `services.ditm_service.py`. Phase 4 of the
+screener refactor will migrate it here once `ScreenerConfig` exists
+(see ADR-0002).
 """
 from __future__ import annotations
 
+import math
+
 from .config import EARNINGS_PENALTY
+
+__all__ = ["compute_env_score"]
 
 
 def compute_env_score(
@@ -35,14 +43,13 @@ def compute_env_score(
     Note: parameter `iv_rank` is the HV Rank value (30d HV ranked over 252d).
     The name is preserved for call-site compatibility but the field is HV-derived.
     """
-    import math as _math
     direction = direction.lower()
     score = 0.0
     bk: dict[str, float] = {}
 
     # --- HV Rank (22 pts) — rescaled from 30 by ×22/30 ---
     p = 0.0
-    if iv_rank is not None and not _math.isnan(iv_rank):
+    if iv_rank is not None and not math.isnan(iv_rank):
         if iv_rank >= 80:
             p = 22.0
         elif iv_rank >= 60:
@@ -56,7 +63,7 @@ def compute_env_score(
     # --- IV / HV Ratio (28 pts) — rescaled from 25 by ×28/25 = 1.12 ---
     # Stale-IV: when iv_stale=True (IV NaN or ≤0.01), award 0 pts and let UI flag the row.
     p = 0.0
-    if not iv_stale and iv_hv_ratio is not None and not _math.isnan(iv_hv_ratio):
+    if not iv_stale and iv_hv_ratio is not None and not math.isnan(iv_hv_ratio):
         if iv_hv_ratio >= 1.7:
             p = 28.0
         elif iv_hv_ratio >= 1.4:
@@ -81,7 +88,7 @@ def compute_env_score(
 
     # --- 52W High Distance (10 pts) — direction-aware ---
     p = 0.0
-    if not _math.isnan(dist_from_52w_high_pct):
+    if not math.isnan(dist_from_52w_high_pct):
         pct_below = abs(min(dist_from_52w_high_pct, 0.0))
         if direction == 'cc':
             # CC: reward consolidation (5–15% below). Smooth ramps, no plateaus.
@@ -108,7 +115,7 @@ def compute_env_score(
 
     # --- RSI(14) (10 pts) — direction-aware ---
     p = 0.0
-    if not _math.isnan(rsi):
+    if not math.isnan(rsi):
         if direction == 'cc':
             # CC sweet spot 38–58 (mild weakness favors call sellers)
             # Steeper ceiling decay — overheated stocks blow through call strikes
@@ -133,8 +140,8 @@ def compute_env_score(
 
     # --- Chain Median OI (8 pts — circuit breaker, rescaled from 5 by ×8/5) ---
     p = 0.0
-    if not _math.isnan(chain_median_oi) and chain_median_oi > 0:
-        p = min(_math.log10(chain_median_oi) / _math.log10(5000), 1.0) * 8.0
+    if not math.isnan(chain_median_oi) and chain_median_oi > 0:
+        p = min(math.log10(chain_median_oi) / math.log10(5000), 1.0) * 8.0
     score += p; bk['OI'] = p
 
     # --- DTE Sweet Spot (7 pts) ---
