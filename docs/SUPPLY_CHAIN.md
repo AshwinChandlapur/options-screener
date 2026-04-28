@@ -16,37 +16,42 @@ User ticker (e.g. AAPL)
 [Backend] routers/supply_chain.py  (rate-limited 3/min)
         │
         ▼
-[services/supply_chain_service.get_supply_chain]
-   1. SEC: ticker → CIK → latest 10-K + recent 8-Ks
-   2. Extract Item 1 / 1A / 7 text (cap 600 KB) + 8-K text (cap 30 KB each)
-   3. LLM Pass 1 — filing extraction (gpt-4.1, T=0.1)
-   4. LLM Pass 2 — industry augmentation (T=0.2, opt-in)
-   5. LLM Pass 3 — verifier audit (T=0.0)
-   6. Merge + dedupe by name OR ticker (case-insensitive)
+[services/supply_chain/pipeline.get_supply_chain]
+   1. SecDataClient: ticker → CIK → latest 10-K + recent 8-Ks
+      • retries on transport errors (tenacity, 3 attempts, 0.5–4 s backoff)
+      • 8-K corpus fetched in parallel (ThreadPoolExecutor, max 4 workers)
+   2. text_extraction: Item 1 / 2 / 7 / 8 slices (cap 600 KB) + 8-K text (cap 30 KB each)
+   3. LlmSupplyChainExtractor.extract_filing  (gpt-4.1, T=0.1)
+   4. LlmSupplyChainExtractor.enrich_industry (T=0.2, opt-in)
+   5. LlmSupplyChainExtractor.verify          (T=0.0, short-circuits on empty candidates)
+   6. Pipeline merge + dedupe by ticker (case-insensitive) or name fallback
+   7. Pydantic validation at every LLM-pass boundary; failures → RuntimeError
         │
         ▼
-SupplyChainGraph → JSON
+SupplyChainGraph (incl. eight_k_failed_count) → JSON
         │
         ▼
-[Frontend] makeNodes(data) → ReactFlow DAG
+[Frontend] components/SupplyChain/* → useSupplyChainGraph(data) → ReactFlow DAG
    • focal node (center)
    • suppliers (left lane)   • customers (right lane)
    • competitors (bottom row)
    • multi-segment companies → vertical lanes per reportable segment
+   • MetadataBar surfaces partial-corpus warning when eight_k_failed_count > 0
 ```
 
 ---
 
 ## 2. Data sourcing
 
-### SEC pipeline
-- **Ticker → CIK** via `https://www.sec.gov/files/company_tickers.json` (cached in-memory).
+### SEC pipeline ([backend/services/supply_chain/sec_client.py](../backend/services/supply_chain/sec_client.py))
+- **Ticker → CIK** via `https://www.sec.gov/files/company_tickers.json` (cached on the `SecDataClient` instance).
 - **Latest 10-K** via `https://data.sec.gov/submissions/CIK{cik}.json`.
-- **Recent 8-Ks**: up to **8 filings** filed on/after the 10-K date.
+- **Recent 8-Ks**: up to **8 filings** filed on/after the 10-K date, fetched in parallel via `ThreadPoolExecutor(max_workers=4)`. Per-URL failures are counted, not silenced — the count is surfaced on `SupplyChainGraph.eight_k_failed_count` so the UI can flag a partial corpus.
 - **User-Agent header required** by SEC (set per `SEC_USER_AGENT` env).
+- **Retry policy**: every external HTTP call is wrapped with `tenacity` — 3 attempts, exponential backoff 0.5 → 4 s, retries only `httpx.TransportError` / `httpx.TimeoutException`. HTTP status errors propagate unchanged so the orchestrator can raise `ValueError` (404) or surface 5xx without re-trying. `httpx.Client` is shared across worker threads (thread-safe for concurrent sync use).
 
-### Text extraction (`_extract_relevant_text`)
-Targets only:
+### Text extraction ([backend/services/supply_chain/text_extraction.py](../backend/services/supply_chain/text_extraction.py))
+Pure module — zero I/O, unit-tested without mocks. Targets only:
 | Section | Why |
 |---|---|
 | Item 1 — Business | Names suppliers, customers, segments |
@@ -62,7 +67,7 @@ Targets only:
 
 ## 3. Three-pass LLM pipeline
 
-All passes use **Azure OpenAI `gpt-4.1`**, `response_format={"type": "json_object"}`.
+All passes use **Azure OpenAI `gpt-4.1`**, `response_format={"type": "json_object"}`, and live on [LlmSupplyChainExtractor](../backend/services/supply_chain/llm_extractor.py). Each pass validates the response against a Pydantic model defined in [types.py](../backend/services/supply_chain/types.py) — `pydantic.ValidationError` is wrapped as `RuntimeError` so the router maps it to a 5xx instead of silently dropping fields.
 
 | Pass | Purpose | Temp | Source tag |
 |---|---|---|---|
@@ -103,7 +108,7 @@ Sees the focal company name, segments, and Pass-1 lists (compact JSON). Asked to
 Each addition must include `notes` citing a basis. Caps: 15 / 15 / **5** competitors.
 
 ### Pass 3 — verifier audit
-Auditor persona, T=0. Reviews each Pass-2 candidate:
+Auditor persona, T=0. **Short-circuits to a typed empty result with no API call when there are zero candidates** (keeps the pipeline call site uniform). When candidates are present, reviews each Pass-2 candidate:
 - DROP if no credible public basis. "When in doubt, DROP."
 - DROP if final confidence < 0.6.
 - ADJUST confidence downward if overstated.
@@ -126,7 +131,7 @@ Filing source always wins over industry on collision.
 
 ## 4. Data shapes
 
-### Backend (`supply_chain_service.py`)
+### Backend ([backend/services/supply_chain/types.py](../backend/services/supply_chain/types.py))
 ```python
 SourceTag = Literal["10-K", "8-K", "industry"]
 
@@ -152,12 +157,25 @@ class SupplyChainGraph:
     customers: list[CompanyNode]
     competitors: list[CompanyNode]
     summary: str
+    cached: bool
     eight_k_count: int
     eight_k_dates: list[str]
     segments: list[str]
     concentration_note: str        # verbatim from 10-K
-    enrichment_used: list[str]     # ["filing"] or ["filing","industry","verified"]
-    cached: bool
+    enrichment_used: list[str]     # ["filing"], ["filing","industry"], or ["filing","verified","industry"]
+    eight_k_failed_count: int      # 0 unless one or more 8-K fetches failed (added 2026-04-28)
+
+# Pydantic models for the LLM pass responses. extra="ignore" so future
+# prompt extensions don't crash old code.
+class LlmCompanyEntry(BaseModel): ...
+class LlmFilingResult(BaseModel): ...
+class LlmIndustryResult(BaseModel): ...
+class LlmVerifierResult(BaseModel): ...
+
+@dataclass(frozen=True)
+class EightKFetchResult:
+    successful: list[tuple[dict, str]]
+    failed_count: int
 ```
 
 ### Frontend ([frontend/src/types/supplyChain.ts](frontend/src/types/supplyChain.ts))
@@ -195,7 +213,7 @@ TypeScript mirror of the dataclass — exact same field names so JSON deserializ
 | `industry` | **dashed** amber (`#fbbf24`) | dashed amber | `INF` |
 
 ### Multi-segment layout
-When `segments.length >= 2`, suppliers and customers are bucketed into **vertical lanes per reportable segment**, plus a `Cross-segment` lane for nodes with no explicit segment attribution. Layout constants (in [frontend/src/components/SupplyChainView.tsx](frontend/src/components/SupplyChainView.tsx)):
+When `segments.length >= 2`, suppliers and customers are bucketed into **vertical lanes per reportable segment**, plus a `Cross-segment` lane for nodes with no explicit segment attribution. Layout math is centralised in [frontend/src/components/SupplyChain/layout.ts](../frontend/src/components/SupplyChain/layout.ts) (no React deps — unit-tested directly under vitest):
 
 ```ts
 FOCAL_X = 600        SUPPLIER_X = 100      CUSTOMER_X = 1100
@@ -252,10 +270,13 @@ Response: `SupplyChainResponse` (Pydantic model — flat serialization of `Suppl
 
 1. **Required env**: `AZURE_OPENAI_KEY`, `AZURE_OPENAI_ENDPOINT`, `SEC_USER_AGENT`.
 2. **Ticker resolution** — fail-fast with 404 if not in SEC map.
-3. **Filing length** — warn if Item 1 slice < 5 KB (probably bad parse).
+3. **Filing length** — warn if Item 1 slice < 5 KB (probably bad parse) and fall back to full-text.
 4. **JSON enforcement** — Azure `json_object` mode + `json.loads` raises on malformed output.
-5. **Graceful degradation** — if Pass 2 fails, skip industry enrichment and return filing-only graph (`enrichment_used = ["filing"]`). If Pass 3 fails, fall back to unverified Pass-2 output and log a warning.
-6. **Hard caps** applied after merge (`suppliers[:15]`, etc.) to bound payload size.
+5. **Pydantic validation** — each LLM-pass response is `model_validate`d against [types.py](../backend/services/supply_chain/types.py); shape mismatches raise `RuntimeError` (router maps to 5xx). `extra="ignore"` on the models so future prompt extensions don't crash old code.
+6. **Tenacity retry** — every SEC HTTP call retries 3× with 0.5–4 s exponential backoff on `httpx.TransportError` / `httpx.TimeoutException`. HTTP status errors are not retried (callers convert 4xx into `ValueError`).
+7. **Graceful degradation** — if Pass 2 fails, skip industry enrichment and return filing-only graph (`enrichment_used = ["filing"]`). If Pass 3 fails, fall back to unverified Pass-2 output and log a warning (`enrichment_used = ["filing","industry"]`).
+8. **Partial 8-K corpus** — per-URL fetch failures from `fetch_8ks_parallel` are counted on `SupplyChainGraph.eight_k_failed_count` rather than silenced. The frontend `MetadataBar` surfaces the count as a warning chip.
+9. **Hard caps** applied after merge (`suppliers[:15]`, etc.) to bound payload size.
 
 ---
 
@@ -275,21 +296,44 @@ Response: `SupplyChainResponse` (Pydantic model — flat serialization of `Suppl
 
 ## 10. Files
 
-| File | Lines (approx.) | Purpose |
-|---|---|---|
-| [backend/services/supply_chain_service.py](../backend/services/supply_chain_service.py) | ~630 | Dataclasses, SEC fetch, text extraction, 3-pass LLM, merge |
-| [backend/routers/supply_chain.py](../backend/routers/supply_chain.py) | ~40 | FastAPI route + response model + rate limit |
-| [frontend/src/types/supplyChain.ts](../frontend/src/types/supplyChain.ts) | ~30 | TypeScript contract |
-| [frontend/src/hooks/useSupplyChain.ts](../frontend/src/hooks/useSupplyChain.ts) | ~33 | Fetch hook with error / loading state |
-| [frontend/src/components/SupplyChainView.tsx](../frontend/src/components/SupplyChainView.tsx) | ~620 | ReactFlow render, layout, detail panel |
+### Backend ([backend/services/supply_chain/](../backend/services/supply_chain/))
+
+| File | Purpose |
+|---|---|
+| [types.py](../backend/services/supply_chain/types.py) | `CompanyNode`, `SupplyChainGraph`, `EightKFetchResult`, plus the four Pydantic LLM-result models |
+| [text_extraction.py](../backend/services/supply_chain/text_extraction.py) | Pure `extract_10k_relevant_text` / `extract_8k_text` helpers |
+| [sec_client.py](../backend/services/supply_chain/sec_client.py) | `SecDataClient` HTTP adapter + tenacity retry + parallel 8-K fetch |
+| [llm_extractor.py](../backend/services/supply_chain/llm_extractor.py) | `LlmSupplyChainExtractor` with the three system prompts and Pydantic validation |
+| [pipeline.py](../backend/services/supply_chain/pipeline.py) | `get_supply_chain` orchestrator + merge / dedup helpers |
+| [supply_chain_service.py](../backend/services/supply_chain_service.py) | 14-line shim re-exporting `get_supply_chain` (legacy import path) |
+| [routers/supply_chain.py](../backend/routers/supply_chain.py) | FastAPI route, response model, rate limit |
+
+### Frontend ([frontend/src/components/SupplyChain/](../frontend/src/components/SupplyChain/))
+
+| File | Purpose |
+|---|---|
+| [layout.ts](../frontend/src/components/SupplyChain/layout.ts) | Pure layout math (constants, lane builder, focal-Y, competitor row, edge stroke). Unit-tested in [layout.test.ts](../frontend/src/components/SupplyChain/__tests__/layout.test.ts) |
+| [nodes.tsx](../frontend/src/components/SupplyChain/nodes.tsx) | `nodeLabel` JSX + `nodeStyle` CSS |
+| [SourceBadge.tsx](../frontend/src/components/SupplyChain/SourceBadge.tsx) | Provenance pill |
+| [useSupplyChainGraph.tsx](../frontend/src/components/SupplyChain/useSupplyChainGraph.tsx) | Hook composing `layout` + `nodes` into ReactFlow `Node[]` / `Edge[]` |
+| [Legend.tsx](../frontend/src/components/SupplyChain/Legend.tsx) | Top-right overlay legend |
+| [MetadataBar.tsx](../frontend/src/components/SupplyChain/MetadataBar.tsx) | Header strip; surfaces `eight_k_failed_count` as a warning chip |
+| [NodeDetailPanel.tsx](../frontend/src/components/SupplyChain/NodeDetailPanel.tsx) | Right sidebar shown when a node is clicked |
+| [SupplyChainView.tsx](../frontend/src/components/SupplyChainView.tsx) | Top-level shell (form, state, ReactFlow canvas) |
+| [types/supplyChain.ts](../frontend/src/types/supplyChain.ts) | TypeScript contract mirroring `SupplyChainGraph` |
+| [hooks/useSupplyChain.ts](../frontend/src/hooks/useSupplyChain.ts) | Fetch hook with error / loading state |
 
 ---
 
 ## 11. Known limitations / future work
 
-1. **No persistent cache** — `cached` is always `false`; every request re-runs the full pipeline. Add Redis or file-based cache keyed on ticker + 10-K accession (invalidate when a newer 10-K appears).
+1. **No persistent cache** — `cached` is always `false`; every request re-runs the full pipeline. `force_refresh=True` is documented but a no-op pending a follow-up ADR. Recommendation: file-based JSON cache keyed on `(ticker, accession)` under `backend/cache/supply_chain/` with a TTL.
 2. **Modern 10-Ks rarely disclose customer %** — `revenue_pct` / `cost_pct` are mostly null. Could enrich from Bloomberg-style supplier-relationship datasets if licensed.
 3. **Industry pass is recall-bounded by the model's training cutoff.** Recent partnerships (post training) won't appear unless they showed up in 8-Ks.
 4. **Verifier is itself an LLM** — drops false positives well but cannot truly *verify*. A future pass could ground each industry candidate against a web-search snippet.
 5. **No tier-2 expansion** — graph is one hop deep (focal → direct supplier). Multi-tier (focal → TSMC → ASML) would require recursive expansion and is bounded by token cost.
 6. **Edges carry no flow magnitude** — width / opacity could encode `cost_pct` or `revenue_pct` when present.
+
+## 12. Architecture decision records
+
+- [ADR-0003: Supply-Chain Adapter Pattern](adr/0003-supply-chain-adapter-pattern.md) — rationale for the package decomposition, retry / validation / parallel-fetch additions, and the frontend split.

@@ -65,7 +65,7 @@ Live under [backend/services/](../backend/services/). The strategy services cons
 | [cc_service.py](../backend/services/cc_service.py) | CC orchestration; exports `CC_CONFIG` |
 | [ditm_service.py](../backend/services/ditm_service.py) | DITM orchestration; exports `DITM_CONFIG` |
 | [dcf_service.py](../backend/services/dcf_service.py) | DCF valuation math |
-| [supply_chain_service.py](../backend/services/supply_chain_service.py) | Supply-chain graph assembly |
+| [supply_chain_service.py](../backend/services/supply_chain_service.py) | 14-line shim re-exporting `get_supply_chain` from the [supply_chain/](../backend/services/supply_chain/) package — see [§3.1](#31-the-supply-chain-package) and [ADR-0003](adr/0003-supply-chain-adapter-pattern.md) |
 | [data_service.py](../backend/services/data_service.py) | OHLC + fundamentals adapter (yfinance / SEC) |
 | [options_service.py](../backend/services/options_service.py) | Option-chain + IV adapter |
 | [greeks_service.py](../backend/services/greeks_service.py) | Black–Scholes greeks |
@@ -156,6 +156,33 @@ This is the property the refactor was designed to preserve; breaking it puts the
 The pre-refactor per-symbol functions are retained in-file as `_legacy_process_symbol` / `_legacy_process_cc_symbol` for one-commit revert. They are **not wired in** — production calls go through the runner. They will be deleted in a follow-up cleanup phase once the new path has accumulated enough production miles.
 
 Reference: [ADR-0002](adr/0002-unified-screener-service.md).
+
+### 3.1 The supply-chain package
+
+The supply-chain feature ships a sibling adapter-pattern package at [backend/services/supply_chain/](../backend/services/supply_chain/). It applies the same layering decision as the screener runner — one adapter per external boundary, pure helpers for I/O-free math, an orchestrator that composes them with declared dependencies — for a different problem shape (network + LLM rather than chain math).
+
+#### Package layout
+
+| File | Role |
+|------|------|
+| [types.py](../backend/services/supply_chain/types.py) | `CompanyNode`, `SupplyChainGraph`, `EightKFetchResult`; Pydantic models for the three LLM result shapes |
+| [text_extraction.py](../backend/services/supply_chain/text_extraction.py) | Pure `extract_10k_relevant_text` / `extract_8k_text` (zero I/O, unit-testable without mocks) |
+| [sec_client.py](../backend/services/supply_chain/sec_client.py) | `SecDataClient` — `httpx.Client` wrapper, tenacity retry on transport errors, `ThreadPoolExecutor` for parallel 8-K fetch, instance-level ticker→CIK cache |
+| [llm_extractor.py](../backend/services/supply_chain/llm_extractor.py) | `LlmSupplyChainExtractor` — three Azure OpenAI passes (filing / industry / verifier), Pydantic validation per response |
+| [pipeline.py](../backend/services/supply_chain/pipeline.py) | `get_supply_chain` orchestrator; merge / dedup helpers; graceful fallback when an LLM pass fails |
+
+The legacy [supply_chain_service.py](../backend/services/supply_chain_service.py) is now a 14-line re-export shim so the router import path is unchanged.
+
+#### Cross-cutting concerns
+
+- **Retry policy** — `tenacity` (3 attempts, 0.5 → 4 s exponential backoff) on every SEC HTTP call. Retries only `httpx.TransportError` / `httpx.TimeoutException`; HTTP status errors propagate so the orchestrator can map 404s to `ValueError`.
+- **LLM response validation** — Pydantic `extra="ignore"` models in `types.py`; `ValidationError` is wrapped as `RuntimeError`. Replaces the legacy silent-degradation behaviour where malformed JSON yielded a row with empty fields.
+- **Parallel 8-K fetch** — `ThreadPoolExecutor(max_workers=4)` shares one `httpx.Client` across worker threads. Per-URL failures are counted on `SupplyChainGraph.eight_k_failed_count` rather than silenced; the frontend `MetadataBar` surfaces the count as a partial-corpus warning.
+- **Frontend split** — pure layout math in [frontend/src/components/SupplyChain/layout.ts](../frontend/src/components/SupplyChain/layout.ts) is unit-tested under vitest's node environment. JSX helpers (`SourceBadge`, `nodeLabel`) and presentational subcomponents (`Legend`, `MetadataBar`, `NodeDetailPanel`) are siblings; the shell at [SupplyChainView.tsx](../frontend/src/components/SupplyChainView.tsx) shrank from 543 to ~190 lines.
+
+Layering rules match the rest of the backend: adapters never import FastAPI types; `pipeline.get_supply_chain` raises `ValueError` / `RuntimeError`; the router maps to HTTP. The orchestrator declares its dependencies (`sec_client`, `llm`) as keyword-only parameters so tests inject fakes via the same seam as production.
+
+Methodology: [docs/SUPPLY_CHAIN.md](SUPPLY_CHAIN.md). Decision record: [ADR-0003](adr/0003-supply-chain-adapter-pattern.md).
 
 ## 4. Scoring discipline
 
