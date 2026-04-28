@@ -12,22 +12,16 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
 from typing import Optional
 
-import httpx
 from openai import AzureOpenAI
 
-from services.supply_chain.text_extraction import (
-    extract_8k_text as _extract_8k_text,
-)
-from services.supply_chain.text_extraction import (
-    extract_10k_relevant_text as _extract_relevant_text,
-)
+from services.supply_chain.sec_client import SecDataClient, get_default_client
 from services.supply_chain.types import CompanyNode, SourceTag, SupplyChainGraph
 
 __all__ = [
     "CompanyNode",
+    "SecDataClient",
     "SourceTag",
     "SupplyChainGraph",
     "get_supply_chain",
@@ -37,6 +31,8 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- Config -----
+# Retained for back-compat: a handful of tests / callers still read these
+# constants. SEC HTTP access is now owned by ``SecDataClient``.
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "Options Screener app@example.com")
 SEC_HEADERS = {"User-Agent": SEC_USER_AGENT, "Accept-Encoding": "gzip, deflate"}
 
@@ -46,103 +42,32 @@ AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
 
 
-# ------------------------------------------------------------ Ticker -> CIK ----
-_TICKER_CACHE: dict[str, str] | None = None
-
-
-def _load_ticker_map() -> dict[str, str]:
-    """Load ticker -> CIK map from SEC (cached in-memory)."""
-    global _TICKER_CACHE
-    if _TICKER_CACHE is not None:
-        return _TICKER_CACHE
-    url = "https://www.sec.gov/files/company_tickers.json"
-    with httpx.Client(timeout=30, headers=SEC_HEADERS) as c:
-        r = c.get(url)
-        r.raise_for_status()
-        data = r.json()
-    mapping: dict[str, str] = {}
-    for entry in data.values():
-        t = entry["ticker"].upper()
-        cik = str(entry["cik_str"]).zfill(10)
-        mapping[t] = cik
-    _TICKER_CACHE = mapping
-    return mapping
-
-
+# ------------------------------------------------------------ SEC delegates --
+# Thin wrappers around the singleton ``SecDataClient`` so the public
+# module-level surface (and the Phase 0 monkeypatch points in
+# ``backend/tests/fixtures/supply_chain/_mocks.py``) stays unchanged.
 def resolve_cik(ticker: str) -> Optional[str]:
-    return _load_ticker_map().get(ticker.upper())
+    return get_default_client().resolve_cik(ticker)
 
 
-# --------------------------------------------------- SEC filings index -----
 def _fetch_filings_index(cik: str) -> tuple[str, list[dict]]:
-    """Return (company_name, list of recent filings with form/accession/date/primary_doc_url)."""
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-    with httpx.Client(timeout=30, headers=SEC_HEADERS) as c:
-        r = c.get(url)
-        r.raise_for_status()
-        data = r.json()
-    company_name = data.get("name", "")
-    recent = data.get("filings", {}).get("recent", {})
-    forms = recent.get("form", [])
-    accessions = recent.get("accessionNumber", [])
-    dates = recent.get("filingDate", [])
-    primary_docs = recent.get("primaryDocument", [])
-    items = []
-    for i, form in enumerate(forms):
-        accession_clean = accessions[i].replace("-", "")
-        items.append({
-            "form": form,
-            "accession": accessions[i],
-            "filing_date": dates[i],
-            "primary_doc_url": (
-                f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/"
-                f"{accession_clean}/{primary_docs[i]}"
-            ),
-        })
-    return company_name, items
+    return get_default_client().get_filings_index(cik)
 
 
 def _fetch_latest_10k(cik: str) -> Optional[dict]:
-    """Return {accession, filing_date, primary_doc_url, company_name} for the latest 10-K."""
-    company_name, items = _fetch_filings_index(cik)
-    for item in items:
-        if item["form"] == "10-K":
-            return {**item, "company_name": company_name}
-    return None
+    return get_default_client().get_latest_10k(cik)
 
 
 def _fetch_recent_8ks(cik: str, since_date: str, max_count: int = 8) -> list[dict]:
-    """Return up to max_count 8-K filings filed on/after since_date (YYYY-MM-DD)."""
-    _, items = _fetch_filings_index(cik)
-    cutoff = datetime.strptime(since_date, "%Y-%m-%d").date()
-    out: list[dict] = []
-    for item in items:
-        if item["form"] != "8-K":
-            continue
-        try:
-            d = datetime.strptime(item["filing_date"], "%Y-%m-%d").date()
-        except ValueError:
-            continue
-        if d >= cutoff:
-            out.append(item)
-        if len(out) >= max_count:
-            break
-    return out
+    return get_default_client().get_recent_8ks(cik, since_date, max_count=max_count)
 
 
-# ---------------------------------------------------- Filing text extract ----
 def _fetch_filing_text(url: str) -> str:
-    with httpx.Client(timeout=60, headers=SEC_HEADERS, follow_redirects=True) as c:
-        r = c.get(url)
-        r.raise_for_status()
-        return _extract_relevant_text(r.text)
+    return get_default_client().fetch_filing_text(url)
 
 
 def _fetch_8k_text(url: str, max_chars: int = 30_000) -> str:
-    with httpx.Client(timeout=30, headers=SEC_HEADERS, follow_redirects=True) as c:
-        r = c.get(url)
-        r.raise_for_status()
-    return _extract_8k_text(r.text, max_chars=max_chars)
+    return get_default_client().fetch_8k_text(url, max_chars=max_chars)
 
 
 # ----------------------------------------------- LLM structured extraction --
