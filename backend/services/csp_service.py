@@ -499,13 +499,13 @@ def _csp_strike_scorer_adapter(ctx: StrikeContext) -> tuple[float, str, dict]:
     )
 
 
-def _csp_tie_break(bundle) -> float:
+def _csp_tie_break(bundle) -> tuple[float, ...]:
     """Tie-break by ROC annualised (higher is better)."""
     raw = bundle.strike_raw
     val = raw.get("roc_annualized")
     if val is None or (isinstance(val, float) and math.isnan(val)):
-        return 0.0
-    return float(val)
+        return (0.0,)
+    return (float(val),)
 
 
 def _csp_result_factory(
@@ -592,6 +592,7 @@ CSP_CONFIG = ScreenerConfig(
     strike_filter=lambda price, strike: strike < price * 1.02,
     delta_range=(-0.35, -0.10),
     ideal_delta=-0.225,
+    strike_sort="desc",
     oi_delta_band=(-0.40, -0.10),
     symbol_factory=_csp_symbol_factory,
     strike_context_builder=_csp_strike_context_builder,

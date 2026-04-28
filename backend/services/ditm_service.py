@@ -461,6 +461,43 @@ def process_symbol(
     macro_context: Optional[dict] = None,
 ) -> tuple[list[DitmResult], Optional[DitmError]]:
     """
+    DITM per-symbol entry point. Now a thin wrapper around the unified
+    `services.screener.runner.run` driven by `DITM_CONFIG`. Behaviour is
+    preserved bit-for-bit relative to the legacy implementation
+    (kept as `_legacy_process_symbol` for one-commit revert).
+
+    `macro_context` is render-only — applied on the resulting DitmResult
+    rows here, NOT threaded through the runner. This keeps the runner
+    signature uniform across screeners.
+    """
+    from services.screener.runner import run as _run
+
+    rows, err = _run(
+        symbol,
+        DITM_CONFIG,
+        min_dte=min_dte,
+        max_dte=max_dte,
+        rf_rate=rf_rate,
+    )
+    if err is not None:
+        return [], DitmError(symbol=err.symbol, reason=err.reason)
+    if rows and macro_context is not None:
+        # Match legacy subscript semantics: KeyError on a malformed
+        # macro_context propagates and is caught by the caller (router).
+        macro_hold = not macro_context["macro_pass"]
+        for r in rows:
+            r.macro_hold = macro_hold
+    return rows, None
+
+
+def _legacy_process_symbol(
+    symbol: str,
+    min_dte: int = 90,
+    max_dte: int = 180,
+    rf_rate: float = 0.045,
+    macro_context: Optional[dict] = None,
+) -> tuple[list[DitmResult], Optional[DitmError]]:
+    """
     Processes a single symbol across all valid expirations in [min_dte, max_dte].
     Returns (list_of_results, None) on success or ([], error) on failure.
     """
@@ -698,3 +735,263 @@ def process_symbol(
     except Exception as exc:
         logger.warning("Failed to process symbol %s: %s", sym, exc)
         return [], DitmError(symbol=sym, reason=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: ScreenerConfig adapters
+# ---------------------------------------------------------------------------
+
+from services.options_service import get_implied_volatility  # noqa: E402
+from services.screener import (  # noqa: E402
+    Indicators,
+    ScreenerConfig,
+    StrikeBuildInputs,
+    StrikeContext,
+    SymbolMetrics,
+)
+from services.screener.runner import (  # noqa: E402
+    Candidate,
+    ExpirationContext,
+    StrikeBundle,
+)
+
+
+def _ditm_symbol_factory(_sym: str, df, current_price: float) -> tuple[Indicators, SymbolMetrics]:
+    """Build symbol-level Indicators + render-only SymbolMetrics for DITM.
+
+    Computes trend (sma50/sma200/flags), HV-rank, IV-percentile,
+    dist-from-52w, weekly RSI, 200d return, hv_sigma (annualised), and
+    the 3-day overnight gap.
+    """
+    trend = compute_trend_data(df)
+    dist_52w = compute_price_vs_52w_high(df)
+    iv_rank_raw, iv_pct_raw = compute_iv_rank_percentile(df)
+    hv_rank: Optional[float] = None if math.isnan(iv_rank_raw) else iv_rank_raw
+    iv_percentile: Optional[float] = None if math.isnan(iv_pct_raw) else iv_pct_raw
+
+    close = df["Close"]
+    log_ret = np.log(close / close.shift(1)).dropna()
+    hv_sigma = float(log_ret.iloc[-30:].std(ddof=1) * np.sqrt(252)) if len(log_ret) >= 30 else 0.25
+
+    w_rsi = _compute_weekly_rsi(df)
+    ret_200d_frac = _compute_200d_return(df)
+    gap_3d = _compute_gap_3d(df)
+
+    sma50 = trend.get("sma50") or 0.0
+    sma200 = trend.get("sma200") or 0.0
+
+    indicators = Indicators(
+        price=current_price,
+        sma50=float(sma50),
+        sma200=float(sma200) if not math.isnan(float(sma200)) else 0.0,
+        price_above_sma50=trend["price_above_sma50"],
+        sma50_above_sma200=trend["sma50_above_sma200"],
+        dist_from_52w_high_pct=dist_52w if not math.isnan(dist_52w) else 0.0,
+        chain_median_oi=0.0,        # filled per-expiration
+        earnings_within_dte=False,  # filled per-expiration
+        days_to_earnings=None,      # filled per-expiration
+        dte=0,                      # filled per-expiration
+        hv_rank=hv_rank,
+        weekly_rsi=None if math.isnan(w_rsi) else w_rsi,
+        ret_200d_frac=None if math.isnan(ret_200d_frac) else ret_200d_frac,
+    )
+    metrics = SymbolMetrics(
+        sma_ratio=(
+            round(float(trend["sma_ratio"]), 4)
+            if trend.get("sma_ratio") is not None and not math.isnan(float(trend["sma_ratio"]))
+            else None
+        ),
+        hv_sigma=hv_sigma,
+        iv_percentile=iv_percentile,
+        gap_3d_pct=gap_3d,
+    )
+    return indicators, metrics
+
+
+def _ditm_strike_context_builder(
+    inputs: StrikeBuildInputs,
+    indicators: Indicators,
+) -> StrikeContext:
+    """Assemble the per-strike StrikeContext for DITM. Computes intrinsic /
+    extrinsic / theta inline (so the strike scorer receives precomputed
+    fields). Spread is strict: bid>0 AND ask>0, no last-price fallback
+    (matches legacy DITM)."""
+    cand: Candidate = inputs.candidate
+    current_price = inputs.current_price
+    sp = cand.strike
+
+    # Mid is `cand.premium` (already (bid+ask)/2 when bid&ask>0, else last).
+    mid_price = cand.premium if cand.premium is not None else 0.0
+
+    # Strict spread: only when bid>0 AND ask>0
+    spread: Optional[float] = None
+    if cand.bid > 0 and cand.ask > 0:
+        m = (cand.bid + cand.ask) / 2.0
+        if m > 0:
+            spread = round((cand.ask - cand.bid) / m * 100, 2)
+
+    # Intrinsic / extrinsic
+    intrinsic = max(current_price - sp, 0.0)
+    extrinsic = max(mid_price - intrinsic, 0.0)
+    ext_pct_frac = extrinsic / sp if sp > 0 else 0.0
+
+    # Annualised theta as % of strike
+    theta_annual = _bs_call_theta(current_price, sp, inputs.rf_rate, inputs.T, cand.iv_used)
+    theta_ann_pct = abs(theta_annual) / sp * 100 if sp > 0 else 0.0
+
+    return StrikeContext(
+        delta=cand.delta,
+        strike=sp,
+        current_price=current_price,
+        bid_ask_spread_pct=spread,
+        open_interest=cand.open_interest,
+        volume=cand.volume,
+        market_open=inputs.market_open,
+        iv_used=cand.iv_used,
+        dte=indicators.dte,
+        mid=mid_price,
+        extrinsic_pct_of_strike_frac=ext_pct_frac,
+        theta_annualized_pct=theta_ann_pct,
+        iv_percentile=inputs.metrics.iv_percentile,
+    )
+
+
+def _ditm_env_scorer(ind: Indicators) -> tuple[float, str]:
+    """Adapter: Indicators → legacy `compute_ditm_env_score`. Hard-gate
+    zeroing happens inside the legacy function; the breakdown detail
+    string is preserved either way."""
+    return compute_ditm_env_score(
+        price_above_sma50=ind.price_above_sma50,
+        sma50_above_sma200=ind.sma50_above_sma200,
+        price=ind.price,
+        sma200=ind.sma200,
+        hv_rank=ind.hv_rank,
+        weekly_rsi=ind.weekly_rsi if ind.weekly_rsi is not None else float("nan"),
+        dist_from_52w_high_pct=ind.dist_from_52w_high_pct,
+        ret_200d_frac=ind.ret_200d_frac if ind.ret_200d_frac is not None else 0.0,
+        days_to_earnings=ind.days_to_earnings,
+        chain_median_oi=ind.chain_median_oi,
+    )
+
+
+def _ditm_strike_scorer_adapter(ctx: StrikeContext) -> tuple[float, str, dict]:
+    """Adapter: StrikeContext → legacy `compute_ditm_strike_score` kwargs.
+    Returns the (score, detail, raw) triple expected by the runner; raw
+    carries the per-strike numeric metrics used by the result_factory."""
+    score, detail = compute_ditm_strike_score(
+        delta=ctx.delta,
+        strike=ctx.strike,
+        mid=ctx.mid or 0.0,
+        current_price=ctx.current_price,
+        theta_annualized_pct=ctx.theta_annualized_pct or 0.0,
+        extrinsic_pct_of_strike_frac=ctx.extrinsic_pct_of_strike_frac or 0.0,
+        bid_ask_spread_pct=ctx.bid_ask_spread_pct,
+        iv_percentile=ctx.iv_percentile,
+    )
+    raw = {
+        "extrinsic_pct": round((ctx.extrinsic_pct_of_strike_frac or 0.0) * 100, 2),
+        "theta_annualized_pct": round(ctx.theta_annualized_pct or 0.0, 2),
+        "mid": ctx.mid or 0.0,
+    }
+    return score, detail, raw
+
+
+def _ditm_tie_break(bundle: StrikeBundle) -> tuple[float, ...]:
+    """Tie-break: closer to ideal delta (0.82) wins, then lower extrinsic %.
+    Mirrors legacy `(score, -|delta-0.82|, -extrinsic_pct)`."""
+    delta_proximity = -abs(bundle.candidate.delta - 0.82)
+    extrinsic_neg = -float(bundle.strike_raw.get("extrinsic_pct", 0.0))
+    return (delta_proximity, extrinsic_neg)
+
+
+def _ditm_result_factory(
+    ctx: ExpirationContext,
+    bundles: list[StrikeBundle],
+) -> DitmResult:
+    """Build DitmResult + DitmStrikeResult list from runner bundle data.
+    `macro_hold` is left False here; the wrapper sets it from the
+    caller-supplied `macro_context` after the runner returns."""
+    ind = ctx.indicators
+    metrics = ctx.metrics
+
+    strike_results: list[DitmStrikeResult] = []
+    for b in bundles:
+        c = b.candidate
+        mid_price = c.premium if c.premium is not None else 0.0
+        intrinsic = max(ctx.current_price - c.strike, 0.0)
+        extrinsic = max(mid_price - intrinsic, 0.0)
+        ext_pct_frac = extrinsic / c.strike if c.strike > 0 else 0.0
+        be_pct = ((c.strike + mid_price - ctx.current_price) / ctx.current_price * 100
+                  if ctx.current_price > 0 else 0.0)
+        cap_eff_pct = mid_price / ctx.current_price * 100 if ctx.current_price > 0 else 0.0
+        theta_ann_pct = float(b.strike_raw.get("theta_annualized_pct", 0.0))
+
+        strike_results.append(DitmStrikeResult(
+            strike=c.strike,
+            delta=round(c.delta, 4),
+            mid=round(mid_price, 4),
+            extrinsic_pct=round(ext_pct_frac * 100, 2),
+            theta_annualized_pct=round(theta_ann_pct, 2),
+            breakeven_pct=round(be_pct, 2),
+            capital_efficiency_pct=round(cap_eff_pct, 2),
+            bid_ask_spread_pct=b.bid_ask_spread_pct,
+            chain_oi=c.open_interest,
+            env_score=b.env_score,
+            strike_score=b.strike_score,
+            ditm_score=b.final_score,
+            env_detail=b.env_detail,
+            strike_detail=b.strike_detail,
+            is_best=b.is_best,
+            iv_fallback=c.iv_fallback,
+        ))
+
+    best_score = max((s.ditm_score for s in strike_results), default=0.0)
+
+    hv30_pct = round((metrics.hv_sigma or 0.0) * 100, 2)
+    return DitmResult(
+        symbol=ctx.symbol,
+        price=round(ctx.current_price, 4),
+        sma_ratio=metrics.sma_ratio if metrics.sma_ratio is not None else 0.0,
+        hv_rank=ind.hv_rank if ind.hv_rank is not None else 0.0,
+        hv30=hv30_pct,
+        weekly_rsi=ind.weekly_rsi if ind.weekly_rsi is not None else 0.0,
+        ret_200d=round((ind.ret_200d_frac * 100) if ind.ret_200d_frac is not None else 0.0, 2),
+        dist_from_52w_high_pct=ind.dist_from_52w_high_pct,
+        earnings_date=ctx.earnings_date,
+        days_to_earnings=ind.days_to_earnings,
+        earnings_within_dte=ctx.earnings_within_dte,
+        dte=ctx.dte,
+        expiration=ctx.expiration,
+        strikes=strike_results,
+        best_ditm_score=best_score,
+        gap_3d_pct=metrics.gap_3d_pct or 0.0,
+        macro_hold=False,
+        chain_median_oi=ctx.chain_median_oi,
+    )
+
+
+# DITM-specific symbol-level prep: handled inline in _ditm_symbol_factory.
+
+
+DITM_CONFIG = ScreenerConfig(
+    name="ditm",
+    direction="long_call",
+    chain_fetcher=lambda s, lo, hi: get_all_expirations_calls_data(s, lo, hi),
+    delta_fn=black_scholes_call_delta,
+    ohlc_fetcher=lambda s, **kw: get_ohlc(s, **kw),
+    iv_lookup=lambda chain_df, strike: get_implied_volatility(chain_df, strike),
+    strike_filter=lambda price, strike: strike < price,
+    delta_range=(0.70, 0.90),
+    ideal_delta=0.82,
+    oi_delta_band=(0.60, 0.95),
+    oi_delta_band_inclusive=True,
+    symbol_factory=_ditm_symbol_factory,
+    strike_context_builder=_ditm_strike_context_builder,
+    env_scorer=_ditm_env_scorer,
+    strike_scorer=_ditm_strike_scorer_adapter,
+    final_blend=(0.5, 0.5),
+    strike_sort="desc",
+    candidate_delta_predicate=lambda d: d >= 0.60,
+    tie_break_key=_ditm_tie_break,
+    result_factory=_ditm_result_factory,
+)

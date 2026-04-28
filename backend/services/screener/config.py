@@ -20,11 +20,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .types import (
+    CandidateDeltaPredicate,
     ChainFetcher,
     DeltaFn,
     Direction,
     EnvScorer,
-    HardGate,
     IvLookup,
     OhlcFetcher,
     PreProcessor,
@@ -32,6 +32,7 @@ from .types import (
     StrikeContextBuilder,
     StrikeFilter,
     StrikeScorer,
+    StrikeSort,
     SymbolFactory,
     TieBreakKey,
 )
@@ -75,20 +76,26 @@ class ScreenerConfig:
     final_blend: tuple[float, float]       # (env_weight, strike_weight); must sum to ~1.0
 
     # --- Variant hooks ----------------------------------------------------
+    strike_sort: StrikeSort = "asc"        # 'asc' (CC) | 'desc' (CSP, DITM)
+
+    oi_delta_band_inclusive: bool = False
+    """If True, the OI-band predicate is `lo <= |delta| <= hi` (DITM legacy);
+    if False (default), it is `lo < |delta| < hi` (CSP/CC legacy)."""
+
     pre_processors: tuple[PreProcessor, ...] = field(default_factory=tuple)
     """Run on the indicator bundle after base computation, before scoring.
-    DITM uses these for macro_context / weekly_rsi / ret_200d enrichment.
-    CSP/CC supply ()."""
+    DITM uses these for weekly_rsi / ret_200d enrichment. CSP/CC supply ()."""
 
-    hard_gates: tuple[HardGate, ...] = field(default_factory=tuple)
-    """Short-circuit gates applied to `Indicators`. If any returns
-    `passed=False`, env_score is forced to 0 with the gate's reason recorded.
-    DITM uses these (trend / hv_rank / earnings); CSP/CC supply ()."""
+    candidate_delta_predicate: Optional[CandidateDeltaPredicate] = None
+    """Optional gate applied to each `Candidate.delta` AFTER extraction and
+    BEFORE the primary `delta_range` filter. DITM uses this to enforce
+    `delta >= 0.60` so the |delta−0.82|-nearest fallback never picks a
+    strike legacy excluded. CSP/CC pass None."""
 
     tie_break_key: Optional[TieBreakKey] = None
-    """Sort key for picking the 'best' strike. None defaults to descending
-    final_score. CSP/CC use roc_annualized; DITM uses delta-proximity to
-    `ideal_delta`."""
+    """Sort key tuple for picking the 'best' strike. Returns a tuple of
+    floats compared lexicographically after `final_score`. None defaults
+    to descending `final_score` only."""
 
     # --- Result construction ---------------------------------------------
     result_factory: Optional[ResultFactory] = None

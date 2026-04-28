@@ -70,8 +70,6 @@ class Indicators:
     # DITM only
     weekly_rsi: Optional[float] = None
     ret_200d_frac: Optional[float] = None  # 200-day median-anchored return as fraction
-    trend_pts: Optional[float] = None      # legacy trend strength (used by DITM hard gate)
-    macro_hold: bool = False               # macro-context flag (DITM only)
 
     # Per-symbol levels consumed by strike scorers via strike_context_builder.
     vol_support_1: Optional[float] = None
@@ -85,12 +83,13 @@ class Indicators:
 @dataclass(frozen=True)
 class SymbolMetrics:
     """
-    Render-only per-symbol metadata.
+    Render-only-ish per-symbol metadata.
 
-    Fields here are NOT read by any scorer; they exist so a screener's
-    `result_factory` can populate its concrete result dataclass (BB bands,
-    sma_ratio, hv_sigma, iv_percentile, etc.) without bloating `Indicators`.
-    The runner threads `SymbolMetrics` through `ExpirationContext`.
+    Fields here are not read by env scorers; they MAY be consumed at
+    strike-build time (e.g. DITM strike scoring reads `iv_percentile`)
+    via `StrikeBuildInputs.metrics`. The runner threads `SymbolMetrics`
+    through `ExpirationContext`; `result_factory` reads BB / sma_ratio /
+    hv_sigma / iv_percentile / gap_3d_pct from here.
     """
 
     bb_upper: Optional[float] = None
@@ -100,6 +99,7 @@ class SymbolMetrics:
     hv_sigma: Optional[float] = None       # 30d log-return volatility (annualised)
     iv_percentile: Optional[float] = None
     earnings_date: Optional[str] = None    # ISO YYYY-MM-DD; per-expiration view available on ctx
+    gap_3d_pct: Optional[float] = None     # DITM: max overnight gap last 3 sessions (%)
 
 
 @dataclass(frozen=True)
@@ -141,17 +141,6 @@ class StrikeContext:
     iv_percentile: Optional[float] = None
 
 
-# --- Hard gate result ------------------------------------------------------
-
-@dataclass(frozen=True)
-class GateResult:
-    """Outcome of a hard gate. `passed=False` short-circuits the env score
-    to 0 with the supplied `reason` recorded in the env detail string."""
-
-    passed: bool
-    reason: str = ""
-
-
 @dataclass(frozen=True)
 class StrikeBuildInputs:
     """
@@ -172,6 +161,7 @@ class StrikeBuildInputs:
     market_open: bool
     rf_rate: float
     T: float                  # dte / 365.0
+    metrics: "SymbolMetrics"  # render-bag; DITM reads iv_percentile from here
 
 
 # --- Generic result base classes -------------------------------------------
@@ -229,20 +219,26 @@ EnvScorer = Callable[[Indicators], tuple[float, str]]
 # etc. so the result_factory can stash them on the concrete result.
 StrikeScorer = Callable[[StrikeContext], tuple[float, str, dict[str, Any]]]
 
-# (Indicators) -> GateResult. DITM uses these for trend / hv_rank / earnings
-# short-circuits. CSP / CC pass `()` (no gates).
-HardGate = Callable[[Indicators], GateResult]
-
 # (symbol, raw_ohlc_df, indicators_in_progress) -> Indicators (mutated copy).
-# DITM uses these for macro_context, weekly_rsi, ret_200d enrichment.
+# DITM uses these for weekly_rsi / ret_200d enrichment.
 PreProcessor = Callable[[str, Any, Indicators], Indicators]
 
-# (StrikeBundle) -> sort key used to pick the best strike.
-# CSP / CC: roc_annualized (descending). DITM: -|delta - ideal_delta|.
-# Typed as Callable[[Any], float] because the bundle type lives in `runner`
-# and importing it here would create a cycle. Concrete tie-breakers should
-# read `bundle.candidate.delta` / `bundle.strike_raw["roc_annualized"]`.
-TieBreakKey = Callable[[Any], float]
+# (StrikeBundle) -> orderable tuple used to break ties on equal final_score.
+# Compared lexicographically AFTER `final_score` by the runner. Concrete
+# tie-breakers return floats wrapped in a tuple; e.g. CSP / CC return
+# `(roc_annualized,)`, DITM returns `(-|delta-0.82|, -extrinsic_pct)`.
+TieBreakKey = Callable[[Any], tuple[float, ...]]
+
+# (delta) -> bool. Optional gate applied to each Candidate after extraction
+# and BEFORE the primary delta_range filter. DITM enforces `delta >= 0.60`
+# so the |delta-ideal|-nearest fallback never picks a strike legacy excluded.
+CandidateDeltaPredicate = Callable[[float], bool]
+
+# Strike-iteration order on the chain. CSP / DITM iterate descending
+# (nearest-ATM-first for short puts; nearest-ITM-first for long DITM calls);
+# CC iterates ascending. Decoupled from `direction` per architect feedback
+# so future directions don't have to re-derive sort intent.
+StrikeSort = Literal["asc", "desc"]
 
 # Builds the concrete strike-result dataclass from runner-side bundle.
 ResultFactory = Callable[..., Any]
@@ -268,12 +264,11 @@ StrikeContextBuilder = Callable[["StrikeBuildInputs", "Indicators"], "StrikeCont
 __all__ = [
     "BaseScreenerResult",
     "BaseStrikeResult",
+    "CandidateDeltaPredicate",
     "ChainFetcher",
     "DeltaFn",
     "Direction",
     "EnvScorer",
-    "GateResult",
-    "HardGate",
     "Indicators",
     "IvLookup",
     "OhlcFetcher",
@@ -284,6 +279,7 @@ __all__ = [
     "StrikeContextBuilder",
     "StrikeFilter",
     "StrikeScorer",
+    "StrikeSort",
     "SymbolFactory",
     "SymbolMetrics",
     "TieBreakKey",

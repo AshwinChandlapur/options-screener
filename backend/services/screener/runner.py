@@ -28,7 +28,6 @@ import pytz
 
 from .config import ScreenerConfig
 from .types import (
-    GateResult,
     Indicators,
     StrikeBuildInputs,
     StrikeContext,
@@ -340,15 +339,12 @@ def _process_expiration(
     T = dte / 365.0
     hv_sigma = metrics.hv_sigma or 0.0
 
-    # Strike ordering: legacy sorts descending (ATM-first for OTM puts) for
-    # CSP and ascending for CC/DITM. We sort by direction: puts → desc, calls
-    # (short or long) → asc. The strike_filter then prunes to the screener's
-    # OTM/ITM region.
+    # Strike ordering: declared explicitly per-screener via `strike_sort`.
+    # CSP / DITM iterate descending (nearest-ATM-first / nearest-ITM-first);
+    # CC iterates ascending. The `strike_filter` then prunes to the
+    # screener's OTM/ITM region.
     strikes_unique = chain_df["strike"].unique()
-    if config.direction == "short_put":
-        strikes_sorted = sorted(strikes_unique, reverse=True)
-    else:
-        strikes_sorted = sorted(strikes_unique)
+    strikes_sorted = sorted(strikes_unique, reverse=(config.strike_sort == "desc"))
 
     filtered = [s for s in strikes_sorted if config.strike_filter(current_price, s)]
 
@@ -371,8 +367,16 @@ def _process_expiration(
             # OI aggregation uses absolute delta range; matches legacy
             # `0.1 < abs(d) < 0.4` style guard but parameterised.
             abs_d = abs(cand.delta)
-            if oi_lo_abs < abs_d < oi_hi_abs:
+            if config.oi_delta_band_inclusive:
+                in_oi_band = oi_lo_abs <= abs_d <= oi_hi_abs
+            else:
+                in_oi_band = oi_lo_abs < abs_d < oi_hi_abs
+            if in_oi_band:
                 oi_band.append(cand.open_interest)
+            # Candidate-retention gate (DITM enforces delta >= 0.60). Runs
+            # AFTER OI aggregation so chain_median_oi is unaffected by it.
+            if config.candidate_delta_predicate is not None and not config.candidate_delta_predicate(cand.delta):
+                continue
             if cand.premium is not None:
                 candidates.append(cand)
         except Exception:
@@ -404,14 +408,6 @@ def _process_expiration(
         days_to_earnings=days_to_earnings,
     )
 
-    # Hard gates (DITM uses these; CSP/CC pass empty tuple).
-    gate_failure: Optional[GateResult] = None
-    for gate in config.hard_gates:
-        gr = gate(exp_indicators)
-        if not gr.passed:
-            gate_failure = gr
-            break
-
     # Score every in-range candidate.
     bundles: list[StrikeBundle] = []
     env_w, strike_w = config.final_blend
@@ -421,10 +417,10 @@ def _process_expiration(
                 config=config,
                 cand=cand,
                 exp_indicators=exp_indicators,
+                metrics=metrics,
                 market_open=market_open,
                 current_price=current_price,
                 hv_sigma=hv_sigma,
-                gate_failure=gate_failure,
                 env_w=env_w,
                 strike_w=strike_w,
                 chain_df=chain_df,
@@ -445,7 +441,7 @@ def _process_expiration(
     else:
         best_idx = max(
             range(len(bundles)),
-            key=lambda i: (bundles[i].final_score, tb(bundles[i])),
+            key=lambda i: (bundles[i].final_score, *tb(bundles[i])),
         )
     bundles[best_idx].is_best = True
 
@@ -476,10 +472,10 @@ def _score_candidate(
     config: ScreenerConfig,
     cand: Candidate,
     exp_indicators: Indicators,
+    metrics: SymbolMetrics,
     market_open: bool,
     current_price: float,
     hv_sigma: float,
-    gate_failure: Optional[GateResult],
     env_w: float,
     strike_w: float,
     chain_df: Any,
@@ -494,14 +490,11 @@ def _score_candidate(
         iv_stale=cand.iv_stale,
     )
 
-    if gate_failure is not None:
-        env_score: float = 0.0
-        env_detail = f"Gate:{gate_failure.reason}"
-    else:
-        env_score, env_detail = config.env_scorer(cand_indicators)
+    env_score, env_detail = config.env_scorer(cand_indicators)
 
     # Strike context — screener-specific (vol_supports vs resistances vs DITM
-    # extrinsic / theta). Builder pulls per-symbol levels from cand_indicators.
+    # extrinsic / theta). Builder pulls per-symbol levels from cand_indicators
+    # and per-symbol render fields (e.g. iv_percentile) from `metrics`.
     inputs = StrikeBuildInputs(
         candidate=cand,
         current_price=current_price,
@@ -510,6 +503,7 @@ def _score_candidate(
         market_open=market_open,
         rf_rate=rf_rate,
         T=T,
+        metrics=metrics,
     )
     strike_ctx: StrikeContext = config.strike_context_builder(inputs, cand_indicators)
 
