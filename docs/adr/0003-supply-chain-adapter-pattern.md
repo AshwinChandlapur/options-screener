@@ -113,7 +113,6 @@ Bit-for-bit parity was preserved on the six deterministic fixtures from Phase 0 
 
 ## References
 
-- [Phase plan](../../memories/session/plan.md) — full phase breakdown and decisions.
 - [docs/SUPPLY_CHAIN.md](../SUPPLY_CHAIN.md) — methodology + post-refactor file map.
 - [ADR-0002](0002-unified-screener-service.md) — sibling adapter-pattern decision for the screener runner.
 - Phase 0 fixtures: [backend/tests/fixtures/supply_chain/](../../backend/tests/fixtures/supply_chain/).
