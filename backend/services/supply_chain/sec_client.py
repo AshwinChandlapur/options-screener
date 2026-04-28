@@ -12,13 +12,23 @@ Phase 2 wires tenacity around the single ``httpx.Client``.
 """
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from typing import Optional
 
 import httpx
+from tenacity import (
+    RetryCallState,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from .text_extraction import extract_8k_text, extract_10k_relevant_text
+
+logger = logging.getLogger(__name__)
 
 
 def _default_user_agent() -> str:
@@ -26,6 +36,32 @@ def _default_user_agent() -> str:
     # deploys must set SEC_USER_AGENT; the literal default exists only
     # so dev runs without env config don't crash.
     return os.getenv("SEC_USER_AGENT", "Options Screener app@example.com")
+
+
+def _log_retry(state: RetryCallState) -> None:
+    if state.outcome is None or state.next_action is None:
+        return
+    exc = state.outcome.exception()
+    logger.warning(
+        "SEC fetch attempt %d failed (%s: %s); retrying in %.1fs",
+        state.attempt_number,
+        type(exc).__name__,
+        exc,
+        state.next_action.sleep,
+    )
+
+
+# Retry on transport-layer + 5xx-ish failures only. We deliberately do NOT
+# retry on httpx.HTTPStatusError because callers convert 4xx into ValueError
+# at higher layers (e.g. resolve_cik returning None).
+_RETRY_EXCEPTIONS = (httpx.TransportError, httpx.TimeoutException)
+_sec_retry = retry(
+    reraise=True,
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4.0),
+    retry=retry_if_exception_type(_RETRY_EXCEPTIONS),
+    before_sleep=_log_retry,
+)
 
 
 class SecDataClient:
@@ -65,6 +101,7 @@ class SecDataClient:
         self.close()
 
     # ------------------------------------------------------------- ticker map
+    @_sec_retry
     def get_company_tickers(self) -> dict[str, str]:
         """Return cached ticker→CIK map; fetches once per instance."""
         if self._ticker_map is not None:
@@ -85,6 +122,7 @@ class SecDataClient:
         return self.get_company_tickers().get(ticker.upper())
 
     # ----------------------------------------------------------- filings index
+    @_sec_retry
     def get_filings_index(self, cik: str) -> tuple[str, list[dict]]:
         """Return (company_name, list of recent filings) for a CIK."""
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
@@ -140,6 +178,7 @@ class SecDataClient:
         return out
 
     # ------------------------------------------------------------- filing text
+    @_sec_retry
     def fetch_filing_text(self, url: str) -> str:
         """Fetch a 10-K primary document and return the relevant slice."""
         # 10-K bodies can be large; honour the per-call 60s ceiling that
@@ -148,6 +187,7 @@ class SecDataClient:
         r.raise_for_status()
         return extract_10k_relevant_text(r.text)
 
+    @_sec_retry
     def fetch_8k_text(self, url: str, max_chars: int = 30_000) -> str:
         """Fetch an 8-K primary document and return its stripped text."""
         r = self._http.get(url)
