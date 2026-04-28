@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
+from pydantic import BaseModel, ConfigDict, Field
+
 SourceTag = Literal["10-K", "8-K", "industry"]
 
 
@@ -44,3 +46,67 @@ class SupplyChainGraph:
     segments: list[str] = field(default_factory=list)
     concentration_note: str = ""
     enrichment_used: list[str] = field(default_factory=list)
+
+
+# --------------------------------------------------------- LLM result types --
+# Pydantic models live here (rather than in ``llm_extractor.py``) because the
+# legacy delegates in ``services/supply_chain_service.py`` import them, and we
+# want a single types module for cross-collaborator use. Each model is the
+# typed shape of one LLM pass response — names match the JSON keys the
+# corresponding system prompt enumerates. Extra keys are tolerated so future
+# prompt extensions don't crash old code.
+
+_LLM_MODEL_CONFIG = ConfigDict(extra="ignore")
+
+
+class LlmCompanyEntry(BaseModel):
+    """One supplier / customer / competitor row inside an LLM response."""
+
+    model_config = _LLM_MODEL_CONFIG
+
+    name: str
+    ticker: Optional[str] = None
+    relationship: str = ""
+    revenue_pct: Optional[float] = None
+    cost_pct: Optional[float] = None
+    notes: str = ""
+    # ``source`` is intentionally optional with no default so dumps via
+    # ``exclude_unset=True`` don't fabricate a "10-K" tag for industry-pass
+    # rows that omit the field.
+    source: Optional[str] = None
+    segment: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class LlmFilingResult(BaseModel):
+    """Output of the focal-company 10-K + 8-K extraction pass."""
+
+    model_config = _LLM_MODEL_CONFIG
+
+    segments: list[str] = Field(default_factory=list)
+    concentration_note: str = ""
+    suppliers: list[LlmCompanyEntry] = Field(default_factory=list)
+    customers: list[LlmCompanyEntry] = Field(default_factory=list)
+    competitors: list[LlmCompanyEntry] = Field(default_factory=list)
+    summary: str = ""
+
+
+class LlmIndustryResult(BaseModel):
+    """Output of the industry-knowledge enrichment pass."""
+
+    model_config = _LLM_MODEL_CONFIG
+
+    suppliers: list[LlmCompanyEntry] = Field(default_factory=list)
+    customers: list[LlmCompanyEntry] = Field(default_factory=list)
+    competitors: list[LlmCompanyEntry] = Field(default_factory=list)
+
+
+class LlmVerifierResult(BaseModel):
+    """Output of the audit/verifier pass over the industry candidates."""
+
+    model_config = _LLM_MODEL_CONFIG
+
+    suppliers: list[LlmCompanyEntry] = Field(default_factory=list)
+    customers: list[LlmCompanyEntry] = Field(default_factory=list)
+    competitors: list[LlmCompanyEntry] = Field(default_factory=list)
+    audit_summary: str = ""

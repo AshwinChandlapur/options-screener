@@ -9,18 +9,31 @@ Pipeline:
 """
 from __future__ import annotations
 
-import json
+import json  # noqa: F401  # retained for back-compat (re-exported by some callers)
 import logging
 import os
 from typing import Optional
 
-from openai import AzureOpenAI
-
+from services.supply_chain.llm_extractor import (
+    LlmSupplyChainExtractor,
+    get_default_extractor,
+)
 from services.supply_chain.sec_client import SecDataClient, get_default_client
-from services.supply_chain.types import CompanyNode, SourceTag, SupplyChainGraph
+from services.supply_chain.types import (
+    CompanyNode,
+    LlmFilingResult,
+    LlmIndustryResult,
+    LlmVerifierResult,
+    SourceTag,
+    SupplyChainGraph,
+)
 
 __all__ = [
     "CompanyNode",
+    "LlmFilingResult",
+    "LlmIndustryResult",
+    "LlmSupplyChainExtractor",
+    "LlmVerifierResult",
     "SecDataClient",
     "SourceTag",
     "SupplyChainGraph",
@@ -70,132 +83,21 @@ def _fetch_8k_text(url: str, max_chars: int = 30_000) -> str:
     return get_default_client().fetch_8k_text(url, max_chars=max_chars)
 
 
-# ----------------------------------------------- LLM structured extraction --
-_SYSTEM_PROMPT = """You are a financial analyst extracting supply chain relationships from SEC filings.
-
-You will receive the focal company's latest 10-K plus any recent 8-K filings (material event disclosures).
-Merge information from BOTH sources into a single consolidated graph.
-- Use 10-K as the foundation (suppliers, customers, competitors)
-- Use 8-K filings to add NEW relationships announced since the 10-K (new contracts, customer wins, supplier changes)
-- If 8-K info contradicts the 10-K, prefer the more recent 8-K
-- Do NOT duplicate the same relationship across sources
-
-Return a JSON object with this exact schema:
-{
-  "segments": ["<reportable business segment names from the filing, e.g. 'Intelligent Cloud', 'Productivity & Business Processes'>"],
-  "concentration_note": "<verbatim or near-verbatim sentence describing customer/supplier concentration, e.g. 'No single customer accounted for more than 10% of net sales in fiscal 2024.' Empty string if not disclosed.>",
-  "suppliers": [
-    {
-      "name": "<company name>",
-      "ticker": "<stock ticker if publicly traded, else null>",
-      "relationship": "<what they supply, e.g. 'Foundry/chip fab', 'Memory chips'>",
-      "cost_pct": <% of focal company COGS/spending if disclosed, else null>,
-      "segment": "<which segment this supplier serves, or null>",
-      "source": "<'10-K' or '8-K'>",
-      "notes": "<contract terms / 8-K filing date if applicable / qualitative info>"
-    }
-  ],
-  "customers": [
-    {
-      "name": "...",
-      "ticker": "...",
-      "relationship": "<what they buy>",
-      "revenue_pct": <% of focal company revenue if disclosed, else null>,
-      "segment": "<which segment this customer buys from, or null>",
-      "source": "<'10-K' or '8-K'>",
-      "notes": "..."
-    }
-  ],
-  "competitors": [
-    {
-      "name": "...",
-      "ticker": "...",
-      "relationship": "<segment/market they compete in>",
-      "segment": "<which segment of focal company they compete with, or null>",
-      "source": "<'10-K' or '8-K'>",
-      "notes": "..."
-    }
-  ],
-  "summary": "<2-3 sentences on the focal company's supply chain, mentioning notable shifts from recent 8-Ks>"
-}
-
-Rules:
-- Only include companies clearly named in the filings
-- Use the company's common name (e.g. "Taiwan Semiconductor Manufacturing" not "TSMC Holdings")
-- If a ticker isn't standard (e.g. foreign-listed), still include it (e.g. "TSM", "005930.KS")
-- Prefer publicly traded companies but include major private suppliers (e.g. "Foxconn")
-- If a percentage is mentioned, extract it as a number (e.g. "represents 22% of revenue" -> 22.0)
-- For `segment`: only fill if the filing explicitly attributes the relationship to a reportable segment; otherwise null
-- For `source`: "10-K" unless the relationship is announced/disclosed only in an 8-K (then "8-K" with the date in `notes`)
-- For `concentration_note`: capture customer-concentration disclosures (e.g. "top 5 customers = 41% of net sales", "no customer >10%"). This explains gaps in the customer list.
-- Limit to top 15 suppliers, 15 customers, 10 competitors
-- Return ONLY valid JSON, no markdown fences"""
-
-
-_INDUSTRY_SYSTEM_PROMPT = """You are a financial analyst augmenting a supply-chain graph for a public company.
-
-You will receive:
-- The focal company name + ticker
-- The reportable business segments
-- The list of suppliers/customers/competitors already extracted from the company's SEC filings
-
-Your task: ADD additional supplier/customer/competitor relationships that are PUBLICLY KNOWN but NOT mentioned in the filing-derived list. Use only widely reported, credible relationships from your training knowledge:
-- Major announced partnerships, multi-year contracts covered in trade press
-- Well-known customer relationships discussed in earnings calls or industry analysis
-- Standard sector-typical suppliers (e.g. for a hyperscaler: NVIDIA for GPUs, Cisco/Arista for networking, Vertiv for power)
-- Established competitors widely recognized in the industry
-
-Return a JSON object with this exact schema:
-{
-  "suppliers": [{"name": "...", "ticker": "...", "relationship": "...", "cost_pct": null, "segment": "<segment served, or null>", "confidence": <0.0-1.0>, "notes": "<basis: e.g. 'Widely reported partnership announced 2023', 'Standard hyperscaler GPU supplier'>"}],
-  "customers": [{"name": "...", "ticker": "...", "relationship": "...", "revenue_pct": null, "segment": "...", "confidence": <0.0-1.0>, "notes": "..."}],
-  "competitors": [{"name": "...", "ticker": "...", "relationship": "...", "segment": "...", "confidence": <0.0-1.0>, "notes": "..."}]
-}
-
-CRITICAL rules:
-- DO NOT duplicate any relationship that is already in the filing-derived list (match on name OR ticker, case-insensitive)
-- DO NOT fabricate. If you are unsure or cannot recall a credible basis, OMIT the entry. Empty arrays are fine.
-- `confidence`: 0.9+ for textbook/uncontested relationships (e.g. TSMC supplies NVIDIA), 0.7-0.9 for widely reported, 0.5-0.7 for likely but not certain. Below 0.5 = omit.
-- Hard caps: at most 15 suppliers, 15 customers, 5 competitors
-- For diversified companies, distribute additions across segments
-- `notes` MUST cite the basis (e.g. 'Reported partnership 2023', 'Standard sector supplier', 'Discussed in Q3 2024 earnings call')
-- Return ONLY valid JSON, no markdown fences"""
-
-
-def _call_llm(filing_text: str, ticker: str, company_name: str, recent_8k_text: str = "") -> dict:
-    if not AZURE_OPENAI_KEY or not AZURE_OPENAI_ENDPOINT:
-        raise RuntimeError(
-            "Azure OpenAI not configured. Set AZURE_OPENAI_KEY and AZURE_OPENAI_ENDPOINT in backend/.env"
-        )
-    client = AzureOpenAI(
-        api_key=AZURE_OPENAI_KEY,
-        azure_endpoint=AZURE_OPENAI_ENDPOINT,
-        api_version=AZURE_OPENAI_API_VERSION,
+# -------------------------------------------------- LLM delegates -----
+# The prompts and structured-output validation live in
+# ``services.supply_chain.llm_extractor``. The functions below preserve
+# the legacy module-level surface (and the Phase 0 monkeypatch points)
+# while routing all real API traffic through ``LlmSupplyChainExtractor``.
+def _call_llm(
+    filing_text: str, ticker: str, company_name: str, recent_8k_text: str = ""
+) -> dict:
+    result = get_default_extractor().extract_filing(
+        ticker=ticker,
+        company_name=company_name,
+        filing_text=filing_text,
+        recent_8k_text=recent_8k_text,
     )
-    user_parts = [
-        f"Focal company: {company_name} ({ticker})",
-        "",
-        "=== 10-K excerpt (Item 1 Business + Risk Factors) ===",
-        filing_text,
-    ]
-    if recent_8k_text:
-        user_parts += [
-            "",
-            "=== Recent 8-K filings (material events since 10-K) ===",
-            recent_8k_text,
-        ]
-    user_msg = "\n".join(user_parts)
-    resp = client.chat.completions.create(
-        model=AZURE_OPENAI_DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.1,
-        response_format={"type": "json_object"},
-    )
-    raw = resp.choices[0].message.content or "{}"
-    return json.loads(raw)
+    return result.model_dump(exclude_none=False)
 
 
 def _call_industry_llm(
@@ -205,72 +107,14 @@ def _call_industry_llm(
     existing: dict,
 ) -> dict:
     """Second-pass call: ask the LLM to add publicly-known relationships not in the filing."""
-    if not AZURE_OPENAI_KEY or not AZURE_OPENAI_ENDPOINT:
-        raise RuntimeError(
-            "Azure OpenAI not configured. Set AZURE_OPENAI_KEY and AZURE_OPENAI_ENDPOINT in backend/.env"
-        )
-    client = AzureOpenAI(
-        api_key=AZURE_OPENAI_KEY,
-        azure_endpoint=AZURE_OPENAI_ENDPOINT,
-        api_version=AZURE_OPENAI_API_VERSION,
+    existing_model = LlmFilingResult.model_validate(existing)
+    result = get_default_extractor().enrich_industry(
+        ticker=ticker,
+        company_name=company_name,
+        segments=segments,
+        existing=existing_model,
     )
-    # Compact summary of existing list so the model can de-dupe
-    def _compact(items: list[dict]) -> list[dict]:
-        return [
-            {"name": x.get("name"), "ticker": x.get("ticker")}
-            for x in items
-        ]
-    payload = {
-        "focal_company": company_name,
-        "focal_ticker": ticker,
-        "segments": segments,
-        "existing_suppliers": _compact(existing.get("suppliers", [])),
-        "existing_customers": _compact(existing.get("customers", [])),
-        "existing_competitors": _compact(existing.get("competitors", [])),
-    }
-    user_msg = json.dumps(payload, indent=2)
-    resp = client.chat.completions.create(
-        model=AZURE_OPENAI_DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": _INDUSTRY_SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.2,
-        response_format={"type": "json_object"},
-    )
-    raw = resp.choices[0].message.content or "{}"
-    return json.loads(raw)
-
-
-_VERIFIER_SYSTEM_PROMPT = """You are an audit reviewer for a supply-chain analyst.
-
-You will receive a list of CANDIDATE supplier/customer/competitor relationships that another analyst proposed for a focal public company, based on industry knowledge (NOT from the company's SEC filings). Your job is to AUDIT this list and return a filtered, calibrated version.
-
-For EACH candidate, evaluate:
-1. Is the relationship publicly known and credibly reported (press releases, earnings calls, mainstream tech/business press, partnership announcements)?
-2. Is the proposed `confidence` score appropriate? Apply this calibration:
-   - 0.9+ : Textbook / uncontested / officially announced multi-year relationship
-   - 0.7-0.89 : Widely reported, multiple credible sources
-   - 0.5-0.69 : Likely / sector-typical but not specifically confirmed
-   - <0.5 : Unsupported / speculation
-3. Is the basis citation in `notes` specific enough? (Vague notes like "industry standard" are weak; "Announced 2023 partnership" or "Disclosed in Q3 2024 earnings call" are strong.)
-
-ACTIONS to take:
-- DROP any candidate where you cannot recall a credible public basis. Be strict — when in doubt, DROP.
-- DROP any candidate whose final confidence falls below 0.6.
-- ADJUST `confidence` downward if the original was overstated.
-- IMPROVE `notes` to cite a specific basis where possible (e.g., year of announcement, type of source). Never invent a citation; if you can only say "widely reported", that's fine.
-- DO NOT add new candidates. DO NOT change `name`, `ticker`, `relationship`, `revenue_pct`, `cost_pct`, or `segment`.
-
-Return JSON in this exact shape (same as input minus dropped entries):
-{
-  "suppliers": [ ... ],
-  "customers": [ ... ],
-  "competitors": [ ... ],
-  "audit_summary": "<1 sentence: how many dropped, common reason>"
-}
-
-Return ONLY valid JSON, no markdown fences."""
+    return result.model_dump(exclude_none=False)
 
 
 def _call_verifier_llm(
@@ -279,44 +123,13 @@ def _call_verifier_llm(
     candidates: dict,
 ) -> dict:
     """Audit the industry-pass output: drop unsupportable entries, calibrate confidence."""
-    if not AZURE_OPENAI_KEY or not AZURE_OPENAI_ENDPOINT:
-        raise RuntimeError(
-            "Azure OpenAI not configured. Set AZURE_OPENAI_KEY and AZURE_OPENAI_ENDPOINT in backend/.env"
-        )
-    # Skip API call if there are no candidates to audit
-    total = (
-        len(candidates.get("suppliers", []))
-        + len(candidates.get("customers", []))
-        + len(candidates.get("competitors", []))
+    candidates_model = LlmIndustryResult.model_validate(candidates)
+    result = get_default_extractor().verify(
+        ticker=ticker,
+        company_name=company_name,
+        candidates=candidates_model,
     )
-    if total == 0:
-        return candidates
-
-    client = AzureOpenAI(
-        api_key=AZURE_OPENAI_KEY,
-        azure_endpoint=AZURE_OPENAI_ENDPOINT,
-        api_version=AZURE_OPENAI_API_VERSION,
-    )
-    payload = {
-        "focal_company": company_name,
-        "focal_ticker": ticker,
-        "candidates": {
-            "suppliers": candidates.get("suppliers", []),
-            "customers": candidates.get("customers", []),
-            "competitors": candidates.get("competitors", []),
-        },
-    }
-    resp = client.chat.completions.create(
-        model=AZURE_OPENAI_DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": _VERIFIER_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(payload, indent=2)},
-        ],
-        temperature=0.0,  # audit step: deterministic
-        response_format={"type": "json_object"},
-    )
-    raw = resp.choices[0].message.content or "{}"
-    return json.loads(raw)
+    return result.model_dump(exclude_none=False)
 
 
 # ----------------------------------------------------- Merge / dedupe utils ---
