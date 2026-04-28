@@ -11,9 +11,9 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
+from services.cc_service import CcResult, process_cc_symbol
 from services.data_service import get_risk_free_rate
-from services.cc_service import CcError, CcResult, CcStrikeResult, process_cc_symbol
-from services.universe import MOMENTUM_UNIVERSE, UNIVERSE_SIZE, UNIVERSES, get_universe
+from services.universe import UNIVERSES, get_universe
 
 logger = logging.getLogger(__name__)
 

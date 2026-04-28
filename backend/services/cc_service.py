@@ -12,11 +12,6 @@ from typing import Optional
 
 from services.data_service import get_ohlc
 from services.greeks_service import black_scholes_call_delta
-from services.options_service import (
-    get_bid_ask_spread_pct,
-    get_implied_volatility,
-    get_all_expirations_calls_data,
-)
 from services.indicators import (
     compute_bollinger,
     compute_iv_rank_percentile,
@@ -26,10 +21,30 @@ from services.indicators import (
     compute_trend_data,
     compute_volume_resistance,
 )
+from services.options_service import (
+    get_all_expirations_calls_data,
+    get_bid_ask_spread_pct,
+    get_implied_volatility,
+)
 from services.scoring.env import compute_env_score
 from services.scoring.strike import (
     compute_cc_final_score,
     compute_cc_strike_score,
+)
+from services.screener import (
+    Indicators,
+    ScreenerConfig,
+    StrikeBuildInputs,
+    StrikeContext,
+    SymbolMetrics,
+)
+from services.screener.runner import (
+    Candidate,
+    ExpirationContext,
+    StrikeBundle,
+)
+from services.screener.runner import (
+    run as _run,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,8 +118,6 @@ def process_cc_symbol(
     preserved bit-for-bit relative to the legacy implementation
     (kept as `_legacy_process_cc_symbol` for one-commit revert).
     """
-    from services.screener.runner import run as _run
-
     rows, err = _run(
         symbol,
         CC_CONFIG,
@@ -145,8 +158,9 @@ def _legacy_process_cc_symbol(
         vol_resistances_126 = compute_volume_resistance(df, lookback=126)
 
         # Pre-compute HV sigma fallback once
-        import numpy as np
         from datetime import datetime as _dt
+
+        import numpy as np
         import pytz as _pytz
         log_ret = np.log(df["Close"] / df["Close"].shift(1)).dropna()
         hv_sigma = float(log_ret.iloc[-30:].std(ddof=1) * np.sqrt(252)) if len(log_ret) >= 30 else 0.25
@@ -361,19 +375,6 @@ def _legacy_process_cc_symbol(
 # ---------------------------------------------------------------------------
 # Phase 4: ScreenerConfig adapters
 # ---------------------------------------------------------------------------
-
-from services.screener import (  # noqa: E402
-    Indicators,
-    ScreenerConfig,
-    StrikeBuildInputs,
-    StrikeContext,
-    SymbolMetrics,
-)
-from services.screener.runner import (  # noqa: E402
-    Candidate,
-    ExpirationContext,
-    StrikeBundle,
-)
 
 
 def _cc_symbol_factory(_sym: str, df, current_price: float) -> tuple[Indicators, SymbolMetrics]:

@@ -23,7 +23,7 @@ import logging
 import math
 import os
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from typing import Literal, Optional
 
 import numpy as np

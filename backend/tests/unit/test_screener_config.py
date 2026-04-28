@@ -31,7 +31,6 @@ from services.screener import (
     SymbolMetrics,
 )
 
-
 # --- Indicator + StrikeContext shape ---------------------------------------
 
 def _csp_indicators() -> Indicators:

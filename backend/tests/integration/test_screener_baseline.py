@@ -25,15 +25,13 @@ from __future__ import annotations
 
 import json
 import pickle
-from pathlib import Path
 from typing import Any
 
 import pytest
 from freezegun import freeze_time
 
 # Local fixture helpers from conftest.
-from tests.conftest import FIXTURES_ROOT, fixture_path  # type: ignore
-
+from tests.conftest import FIXTURES_ROOT  # type: ignore
 
 SCREENER_ROOT = FIXTURES_ROOT / "screener"
 INPUTS_DIR = SCREENER_ROOT / "inputs"

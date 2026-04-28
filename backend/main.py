@@ -15,11 +15,11 @@ from slowapi.middleware import SlowAPIMiddleware
 load_dotenv()
 
 from limiter import limiter
-from routers.csp import router as csp_router
 from routers.cc import router as cc_router
+from routers.csp import router as csp_router
+from routers.dcf import router as dcf_router
 from routers.ditm import router as ditm_router
 from routers.supply_chain import router as supply_chain_router
-from routers.dcf import router as dcf_router
 
 logging.basicConfig(
     level=logging.INFO,

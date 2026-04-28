@@ -20,7 +20,6 @@ matching updates to `SCORING_REFERENCE.md` and the frontend legend.
 """
 from __future__ import annotations
 
-
 # Environment-score factor weights (CSP/CC). Sum = 100.
 # Mirror of the per-factor caps inside `compute_env_score` in `env.py`.
 ENV_WEIGHTS: dict[str, float] = {

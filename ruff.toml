@@ -1,0 +1,44 @@
+# Ruff configuration for Options Screener backend.
+# Lint-only (formatter not enabled yet — separate decision).
+#
+# Scope: backend/. Frontend has its own toolchain (Vite + tsc).
+
+line-length = 120
+target-version = "py312"
+
+# Skip generated / vendored / not-our-code paths.
+extend-exclude = [
+    "backend/venv",
+    "backend/.venv",
+    "backend/antenv",
+    "backend/__pycache__",
+    "backend/cache",
+    "frontend",
+    ".pytest_cache",
+]
+
+[lint]
+# Conservative starter set: pyflakes (F) + pycodestyle errors (E) + warnings (W) + import-order (I).
+# Add B (bugbear), UP (pyupgrade), SIM (simplify) once the team agrees.
+select = ["E", "F", "W", "I"]
+
+# Codebase-specific exceptions — documented, not stylistic drift:
+ignore = [
+    # main.py loads .env before importing routers, so router imports MUST come
+    # after `load_dotenv()`. Treating this as an error would force ugly noqa.
+    "E402",
+    # `score += p; bk['KEY'] = p` is a deliberate one-liner idiom across
+    # backend/services/scoring/{env,strike}.py — splitting would create
+    # 21 sites of mechanical noise without improving readability.
+    "E702",
+    # Long lines in scoring tables / weight comments are tolerated; the
+    # 120-char limit handles the remaining cases.
+    "E501",
+]
+
+[lint.per-file-ignores]
+# Test files may shadow names from conftest fixtures.
+"backend/tests/**/*.py" = ["F811"]
+
+[lint.isort]
+known-first-party = ["services", "routers", "limiter"]

@@ -12,12 +12,6 @@ from typing import Optional
 
 from services.data_service import get_ohlc
 from services.greeks_service import black_scholes_put_delta
-from services.options_service import (
-    get_bid_ask_spread_pct,
-    get_implied_volatility,
-    get_all_expirations_data,
-    get_premium,
-)
 from services.indicators import (
     compute_bollinger,
     compute_iv_rank_percentile,
@@ -27,10 +21,30 @@ from services.indicators import (
     compute_trend_data,
     compute_volume_support,
 )
+from services.options_service import (
+    get_all_expirations_data,
+    get_bid_ask_spread_pct,
+    get_implied_volatility,
+)
 from services.scoring.env import compute_env_score
 from services.scoring.strike import (
     compute_csp_final_score,
     compute_csp_strike_score,
+)
+from services.screener import (
+    Indicators,
+    ScreenerConfig,
+    StrikeBuildInputs,
+    StrikeContext,
+    SymbolMetrics,
+)
+from services.screener.runner import (
+    Candidate,
+    ExpirationContext,
+    StrikeBundle,
+)
+from services.screener.runner import (
+    run as _run,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,8 +118,6 @@ def process_symbol(
     preserved bit-for-bit relative to the legacy implementation
     (kept as `_legacy_process_symbol` for one-commit revert).
     """
-    from services.screener.runner import run as _run
-
     rows, err = _run(
         symbol,
         CSP_CONFIG,
@@ -149,8 +161,9 @@ def _legacy_process_symbol(
         vol_supports_126 = compute_volume_support(df, lookback=126)
 
         # Pre-compute HV sigma fallback once
-        import numpy as np
         from datetime import datetime as _dt
+
+        import numpy as np
         import pytz as _pytz
         log_ret = np.log(df["Close"] / df["Close"].shift(1)).dropna()
         hv_sigma = float(log_ret.iloc[-30:].std(ddof=1) * np.sqrt(252)) if len(log_ret) >= 30 else 0.25
@@ -210,7 +223,7 @@ def _legacy_process_symbol(
                         bid = float(row["bid"].iloc[0]) if not __import__('pandas').isna(row["bid"].iloc[0]) else 0.0
                         ask = float(row["ask"].iloc[0]) if not __import__('pandas').isna(row["ask"].iloc[0]) else 0.0
                         last = float(row["lastPrice"].iloc[0]) if not __import__('pandas').isna(row["lastPrice"].iloc[0]) else 0.0
-                        market_closed_row = (bid == 0.0 and ask == 0.0)
+                        _market_closed_row = (bid == 0.0 and ask == 0.0)
                         oi_val = int(row["openInterest"].iloc[0]) if not __import__('pandas').isna(row["openInterest"].iloc[0]) else 0
                         vol_val = int(row["volume"].iloc[0]) if not __import__('pandas').isna(row["volume"].iloc[0]) else 0
                         sig_raw = get_implied_volatility(puts_df, sp)
@@ -370,19 +383,6 @@ def _legacy_process_symbol(
 # driven by `CSP_CONFIG`. The legacy body is preserved as
 # `_legacy_process_symbol` for one-commit revert; remove after CC + DITM
 # migrations land in Phase 4.
-
-from services.screener import (  # noqa: E402  (late import keeps wrapper at top)
-    Indicators,
-    ScreenerConfig,
-    StrikeBuildInputs,
-    StrikeContext,
-    SymbolMetrics,
-)
-from services.screener.runner import (  # noqa: E402
-    Candidate,
-    ExpirationContext,
-    StrikeBundle,
-)
 
 
 def _csp_symbol_factory(_sym: str, df, current_price: float) -> tuple[Indicators, SymbolMetrics]:

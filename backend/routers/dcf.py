@@ -5,17 +5,17 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from limiter import limiter
 from services.dcf_service import (
-    get_dcf,
-    EQUITY_RISK_PREMIUM,
-    DEFAULT_RISK_FREE,
     DEFAULT_PRETAX_COST_OF_DEBT,
-    MIN_WACC,
-    MAX_WACC,
-    MC_TRIALS,
-    HIGH_GROWTH_THRESHOLD,
+    DEFAULT_RISK_FREE,
+    EQUITY_RISK_PREMIUM,
     FORECAST_YEARS,
     FORECAST_YEARS_HIGH_GROWTH,
+    HIGH_GROWTH_THRESHOLD,
+    MAX_WACC,
+    MC_TRIALS,
+    MIN_WACC,
     _fetch_risk_free_rate,
+    get_dcf,
 )
 
 logger = logging.getLogger(__name__)

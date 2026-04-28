@@ -7,7 +7,6 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 
-import math
 import pandas as pd
 import yfinance as yf
 

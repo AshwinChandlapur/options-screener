@@ -15,13 +15,11 @@ from pydantic import BaseModel, field_validator
 
 from services.data_service import get_risk_free_rate
 from services.ditm_service import (
-    DitmError,
     DitmResult,
-    DitmStrikeResult,
     get_macro_context,
     process_symbol,
 )
-from services.universe import MOMENTUM_UNIVERSE, UNIVERSE_SIZE, UNIVERSES, get_universe
+from services.universe import UNIVERSES, get_universe
 
 logger = logging.getLogger(__name__)
 

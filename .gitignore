@@ -34,3 +34,6 @@ Thumbs.db
 backend/cache/
 frontend/build_log.txt
 frontend/tsconfig.tsbuildinfo
+
+# Local test scratch
+test_output.txt

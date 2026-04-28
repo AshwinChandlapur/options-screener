@@ -18,11 +18,29 @@ from scipy.stats import norm  # type: ignore
 
 from services.data_service import get_ohlc
 from services.greeks_service import black_scholes_call_delta
-from services.options_service import get_all_expirations_calls_data
 from services.indicators import (
     compute_iv_rank_percentile,
     compute_price_vs_52w_high,
     compute_trend_data,
+)
+from services.options_service import (
+    get_all_expirations_calls_data,
+    get_implied_volatility,
+)
+from services.screener import (
+    Indicators,
+    ScreenerConfig,
+    StrikeBuildInputs,
+    StrikeContext,
+    SymbolMetrics,
+)
+from services.screener.runner import (
+    Candidate,
+    ExpirationContext,
+    StrikeBundle,
+)
+from services.screener.runner import (
+    run as _run,
 )
 
 logger = logging.getLogger(__name__)
@@ -470,8 +488,6 @@ def process_symbol(
     rows here, NOT threaded through the runner. This keeps the runner
     signature uniform across screeners.
     """
-    from services.screener.runner import run as _run
-
     rows, err = _run(
         symbol,
         DITM_CONFIG,
@@ -740,20 +756,6 @@ def _legacy_process_symbol(
 # ---------------------------------------------------------------------------
 # Phase 4: ScreenerConfig adapters
 # ---------------------------------------------------------------------------
-
-from services.options_service import get_implied_volatility  # noqa: E402
-from services.screener import (  # noqa: E402
-    Indicators,
-    ScreenerConfig,
-    StrikeBuildInputs,
-    StrikeContext,
-    SymbolMetrics,
-)
-from services.screener.runner import (  # noqa: E402
-    Candidate,
-    ExpirationContext,
-    StrikeBundle,
-)
 
 
 def _ditm_symbol_factory(_sym: str, df, current_price: float) -> tuple[Indicators, SymbolMetrics]:

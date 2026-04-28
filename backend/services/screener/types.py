@@ -19,7 +19,7 @@ Design notes (see plan-screener-refactor.md, Phase 2):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional
 
 # --- Literals --------------------------------------------------------------
