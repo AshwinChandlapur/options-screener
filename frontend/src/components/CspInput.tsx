@@ -113,7 +113,7 @@ interface Props {
 }
 
 export function CspInput({ onScan, onCustom, loading }: Props) {
-  const [mode, setMode] = useState<'scan' | 'custom'>('scan')
+  const [mode, setMode] = useState<'scan' | 'custom'>('custom')
   const [showLegend, setShowLegend] = useState(false)
   const [expandedFactor, setExpandedFactor] = useState<string | null>(null)
 
@@ -185,18 +185,18 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
       {/* Mode toggle */}
       <div className="momentum-mode-toggle">
         <button
-          className={`mode-btn${mode === 'scan' ? ' mode-btn-active' : ''}`}
-          onClick={() => setMode('scan')}
-          disabled={loading}
-        >
-          ⚡ Auto Scan
-        </button>
-        <button
           className={`mode-btn${mode === 'custom' ? ' mode-btn-active' : ''}`}
           onClick={() => setMode('custom')}
           disabled={loading}
         >
           Custom Symbols
+        </button>
+        <button
+          className={`mode-btn${mode === 'scan' ? ' mode-btn-active' : ''}`}
+          onClick={() => setMode('scan')}
+          disabled={loading}
+        >
+          ⚡ Auto Scan
         </button>
         <button
           className="mode-btn score-legend-toggle"

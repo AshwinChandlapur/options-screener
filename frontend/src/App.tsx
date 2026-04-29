@@ -168,7 +168,7 @@ export default function App() {
             <CspTable data={filteredCsp} />
             {!cspLoading && cspResults.length === 0 && !cspErrorMessage && (
               <div className="empty-state">
-                <p>Click <strong>⚡ Scan Now</strong> to automatically find the top CSP opportunities, or switch to Custom Symbols.</p>
+                <p>Enter symbols and click <strong>🚀 Run</strong> to screen CSP opportunities, or switch to <strong>⚡ Auto Scan</strong> for the curated universe.</p>
               </div>
             )}
           </>
@@ -212,7 +212,7 @@ export default function App() {
             <CcTable data={filteredCc} />
             {!ccLoading && ccResults.length === 0 && !ccErrorMessage && (
               <div className="empty-state">
-                <p>Click <strong>⚡ Scan Now</strong> to automatically find top Covered Call opportunities, or switch to Custom Symbols.</p>
+                <p>Enter symbols and click <strong>🚀 Run</strong> to screen Covered Call opportunities, or switch to <strong>⚡ Auto Scan</strong> for the curated universe.</p>
               </div>
             )}
           </>
@@ -256,7 +256,7 @@ export default function App() {
             <DitmTable data={filteredDitm} macroPass={macroPass} vixLevel={vixLevel} vix5dChange={vix5dChange} spyAboveSma200={spyAboveSma200} />
             {!ditmLoading && ditmResults.length === 0 && !ditmErrorMessage && (
               <div className="empty-state">
-                <p>Click <strong>⚡ Scan Now</strong> to automatically find top DITM Long Call opportunities, or switch to Custom Symbols.</p>
+                <p>Enter symbols and click <strong>🚀 Run</strong> to screen DITM Long Call opportunities, or switch to <strong>⚡ Auto Scan</strong> for the curated universe.</p>
               </div>
             )}
           </>
