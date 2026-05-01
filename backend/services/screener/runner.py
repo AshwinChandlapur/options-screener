@@ -250,6 +250,7 @@ def run(
     min_dte: int = 30,
     max_dte: int = 60,
     rf_rate: float = 0.045,
+    max_capital: Optional[float] = None,
 ) -> tuple[list[Any], Optional[ScreenerError]]:
     """
     Process one symbol end-to-end. Returns (results, None) on success or
@@ -295,6 +296,7 @@ def run(
                     metrics=metrics,
                     opts=opts,
                     rf_rate=rf_rate,
+                    max_capital=max_capital,
                 )
                 if row is not None:
                     results.append(row)
@@ -322,6 +324,7 @@ def _process_expiration(
     metrics: SymbolMetrics,
     opts: dict,
     rf_rate: float,
+    max_capital: Optional[float] = None,
 ) -> Optional[Any]:
     """One expiration's worth of work. Returns the result_factory output or
     None when no usable strikes survive."""
@@ -358,6 +361,10 @@ def _process_expiration(
 
     for sp in filtered:
         try:
+            # Capital gate: CSP collateral = strike × 100 per contract.
+            # CC/DITM pass max_capital=None so this is a no-op for them.
+            if max_capital is not None and sp * 100 > max_capital:
+                continue
             cand = _extract_candidate(
                 chain_df, sp, current_price, T, rf_rate, hv_sigma,
                 config.delta_fn, config.iv_lookup,

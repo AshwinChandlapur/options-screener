@@ -133,8 +133,8 @@ export default function App() {
         {activeTab === 'csp' && (
           <>
             <CspInput
-              onScan={(topN, minDTE, maxDTE, universe) => scanCsp(topN, minDTE, maxDTE, universe)}
-              onCustom={(symbols, minDTE, maxDTE) => runCsp({ symbols, minDTE, maxDTE })}
+              onScan={(topN, minDTE, maxDTE, universe, maxCapital) => scanCsp(topN, minDTE, maxDTE, universe, maxCapital)}
+              onCustom={(symbols, minDTE, maxDTE, maxCapital) => runCsp({ symbols, minDTE, maxDTE, ...(maxCapital !== undefined && { maxCapital }) })}
               loading={cspLoading}
             />
             {cspResults.length > 0 && (

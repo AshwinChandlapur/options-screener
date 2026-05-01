@@ -107,8 +107,8 @@ const EXIT_STRATEGY: ExitBranch[] = [
 ]
 
 interface Props {
-  onScan: (topN: number, minDTE: number, maxDTE: number, universe: UniverseKey) => void
-  onCustom: (symbols: string[], minDTE: number, maxDTE: number) => void
+  onScan: (topN: number, minDTE: number, maxDTE: number, universe: UniverseKey, maxCapital?: number) => void
+  onCustom: (symbols: string[], minDTE: number, maxDTE: number, maxCapital?: number) => void
   loading: boolean
 }
 
@@ -129,6 +129,7 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
   const [minDTE, setMinDTE] = useState(30)
   const [maxDTE, setMaxDTE] = useState(60)
   const [dteError, setDteError] = useState<string | null>(null)
+  const [maxCapital, setMaxCapital] = useState<number | ''>('')
   const inputRef = useRef<HTMLInputElement>(null)
 
   function addSymbol(raw: string) {
@@ -162,7 +163,7 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
 
   function handleScan() {
     if (scanMinDTE > scanMaxDTE) return
-    onScan(topN, scanMinDTE, scanMaxDTE, universe)
+    onScan(topN, scanMinDTE, scanMaxDTE, universe, maxCapital !== '' ? maxCapital : undefined)
   }
 
   function handleCustomSubmit() {
@@ -177,7 +178,7 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
       : chips
     const unique = [...new Set(allSymbols.map(s => s.trim().toUpperCase()).filter(Boolean))]
     if (unique.length === 0) return
-    onCustom(unique.slice(0, 20), minDTE, maxDTE)
+    onCustom(unique.slice(0, 20), minDTE, maxDTE, maxCapital !== '' ? maxCapital : undefined)
   }
 
   return (
@@ -364,6 +365,19 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
                 disabled={loading}
               />
             </label>
+            <label className="filter-item">
+              Max Capital ($)
+              <input
+                type="number"
+                className="dte-input"
+                value={maxCapital}
+                placeholder="No limit"
+                min={100}
+                step={100}
+                onChange={e => setMaxCapital(e.target.value === '' ? '' : Number(e.target.value))}
+                disabled={loading}
+              />
+            </label>
             <button
               className="btn btn-primary"
               onClick={handleScan}
@@ -428,6 +442,19 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
                   min={1}
                   max={90}
                   onChange={e => setMaxDTE(Number(e.target.value))}
+                  disabled={loading}
+                />
+              </label>
+              <label>
+                Max Capital ($)
+                <input
+                  type="number"
+                  className="dte-input"
+                  value={maxCapital}
+                  placeholder="No limit"
+                  min={100}
+                  step={100}
+                  onChange={e => setMaxCapital(e.target.value === '' ? '' : Number(e.target.value))}
                   disabled={loading}
                 />
               </label>

@@ -111,6 +111,7 @@ def process_symbol(
     min_dte: int = 30,
     max_dte: int = 60,
     rf_rate: float = 0.045,
+    max_capital: Optional[float] = None,
 ) -> tuple[list[CspResult], Optional[CspError]]:
     """
     CSP per-symbol entry point. Now a thin wrapper around the unified
@@ -124,6 +125,7 @@ def process_symbol(
         min_dte=min_dte,
         max_dte=max_dte,
         rf_rate=rf_rate,
+        max_capital=max_capital,
     )
     if err is not None:
         return [], CspError(symbol=err.symbol, reason=err.reason)

@@ -89,6 +89,7 @@ export interface CspRequest {
   symbols: string[]
   minDTE: number
   maxDTE: number
+  maxCapital?: number
 }
 
 export interface CspResponse {

@@ -33,6 +33,14 @@ class CspRequest(BaseModel):
     symbols: List[str]
     minDTE: int = 30
     maxDTE: int = 60
+    maxCapital: Optional[float] = None  # strike × 100 collateral cap; None = no constraint
+
+    @field_validator("maxCapital")
+    @classmethod
+    def validate_max_capital(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v < 100:
+            raise ValueError("maxCapital must be at least 100 (minimum $100 collateral)")
+        return v
 
     @field_validator("symbols")
     @classmethod
@@ -151,7 +159,7 @@ async def run_csp_screener(request: CspRequest) -> CspResponse:
     async def process_one(symbol: str):
         async with sem:
             return await asyncio.to_thread(
-                process_symbol, symbol, request.minDTE, request.maxDTE, rf_rate
+                process_symbol, symbol, request.minDTE, request.maxDTE, rf_rate, request.maxCapital
             )
 
     pairs = await asyncio.gather(*[process_one(s) for s in request.symbols])
@@ -174,6 +182,7 @@ async def run_csp_scan(
     min_dte: int = Query(default=30, ge=1, le=90),
     max_dte: int = Query(default=60, ge=1, le=90),
     universe: str = Query(default="all", description=f"Universe key: one of {sorted(UNIVERSES)}"),
+    max_capital: Optional[float] = Query(default=None, ge=100, description="Max capital per contract ($); only strikes where strike\u00d7100 \u2264 max_capital are returned"),
 ) -> CspResponse:
     """
     Scans the selected universe and returns the top_n results ranked by CSP composite score.
@@ -183,7 +192,7 @@ async def run_csp_scan(
 
     universe_key, symbols = get_universe(universe)
 
-    cache_key = f"{universe_key}:{top_n}:{min_dte}:{max_dte}"
+    cache_key = f"{universe_key}:{top_n}:{min_dte}:{max_dte}:{max_capital}"
     cached = csp_scan_cache.get(cache_key)
     if cached is not None:
         logger.info("CSP scan cache hit: %s", cache_key)
@@ -199,7 +208,7 @@ async def run_csp_scan(
 
     async def process_one(symbol: str):
         async with sem:
-            return await asyncio.to_thread(process_symbol, symbol, min_dte, max_dte, rf_rate)
+            return await asyncio.to_thread(process_symbol, symbol, min_dte, max_dte, rf_rate, max_capital)
 
     pairs = await asyncio.gather(*[process_one(s) for s in symbols])
 
