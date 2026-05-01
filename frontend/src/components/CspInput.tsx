@@ -163,13 +163,15 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
 
   function handleScan() {
     if (scanMinDTE > scanMaxDTE) return
-    onScan(topN, scanMinDTE, scanMaxDTE, universe, maxCapital !== '' ? maxCapital : undefined)
+    if (maxCapital !== '' && (!Number.isFinite(maxCapital) || maxCapital < 100)) return
+    onScan(topN, scanMinDTE, scanMaxDTE, universe, maxCapital !== '' && Number.isFinite(maxCapital) ? maxCapital : undefined)
   }
 
   function handleCustomSubmit() {
     let err: string | null = null
     if (minDTE > maxDTE) err = 'Min DTE must be \u2264 Max DTE'
     else if (minDTE < 1 || maxDTE > 90) err = 'DTE must be between 1 and 90'
+    else if (maxCapital !== '' && (!Number.isFinite(maxCapital) || maxCapital < 100)) err = 'Max Capital must be at least $100'
     setDteError(err)
     if (err) return
 
@@ -178,7 +180,7 @@ export function CspInput({ onScan, onCustom, loading }: Props) {
       : chips
     const unique = [...new Set(allSymbols.map(s => s.trim().toUpperCase()).filter(Boolean))]
     if (unique.length === 0) return
-    onCustom(unique.slice(0, 20), minDTE, maxDTE, maxCapital !== '' ? maxCapital : undefined)
+    onCustom(unique.slice(0, 20), minDTE, maxDTE, maxCapital !== '' && Number.isFinite(maxCapital) ? maxCapital : undefined)
   }
 
   return (

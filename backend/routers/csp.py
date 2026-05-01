@@ -159,7 +159,9 @@ async def run_csp_screener(request: CspRequest) -> CspResponse:
     async def process_one(symbol: str):
         async with sem:
             return await asyncio.to_thread(
-                process_symbol, symbol, request.minDTE, request.maxDTE, rf_rate, request.maxCapital
+                process_symbol, symbol,
+                min_dte=request.minDTE, max_dte=request.maxDTE,
+                rf_rate=rf_rate, max_capital=request.maxCapital,
             )
 
     pairs = await asyncio.gather(*[process_one(s) for s in request.symbols])
@@ -208,7 +210,11 @@ async def run_csp_scan(
 
     async def process_one(symbol: str):
         async with sem:
-            return await asyncio.to_thread(process_symbol, symbol, min_dte, max_dte, rf_rate, max_capital)
+            return await asyncio.to_thread(
+                process_symbol, symbol,
+                min_dte=min_dte, max_dte=max_dte,
+                rf_rate=rf_rate, max_capital=max_capital,
+            )
 
     pairs = await asyncio.gather(*[process_one(s) for s in symbols])
 

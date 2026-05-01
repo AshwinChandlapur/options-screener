@@ -361,10 +361,6 @@ def _process_expiration(
 
     for sp in filtered:
         try:
-            # Capital gate: CSP collateral = strike × 100 per contract.
-            # CC/DITM pass max_capital=None so this is a no-op for them.
-            if max_capital is not None and sp * 100 > max_capital:
-                continue
             cand = _extract_candidate(
                 chain_df, sp, current_price, T, rf_rate, hv_sigma,
                 config.delta_fn, config.iv_lookup,
@@ -380,6 +376,11 @@ def _process_expiration(
                 in_oi_band = oi_lo_abs < abs_d < oi_hi_abs
             if in_oi_band:
                 oi_band.append(cand.open_interest)
+            # Capital gate: CSP collateral = strike × 100 per contract.
+            # Runs AFTER OI aggregation so chain_median_oi is unaffected.
+            # CC/DITM pass max_capital=None so this is a no-op for them.
+            if max_capital is not None and sp * 100 > max_capital:
+                continue
             # Candidate-retention gate (DITM enforces delta >= 0.60). Runs
             # AFTER OI aggregation so chain_median_oi is unaffected by it.
             if config.candidate_delta_predicate is not None and not config.candidate_delta_predicate(cand.delta):
