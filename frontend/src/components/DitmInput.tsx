@@ -10,105 +10,97 @@ const PRESET_BASKET = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL', 
 const SCORE_LEGEND = [
   { factor: '— ENV SCORE (×0.5) —', weight: null, detail: '', definition: '', why: '', formula: '' },
   {
-    factor: 'Trend Strength', weight: 30, detail: 'P>SMA50>SMA200=30 ✓ · P>SMA50 only=18 ✗ · SMA50>SMA200 only=10 ✗ · above SMA200=5 ✗ · else=0 ✗  (✗ = hard gate fires)',
-    definition: 'Whether price is above SMA50 and SMA50 is above SMA200 — full three-level alignment is required. Only 30 pts clears the hard gate (threshold = 22). All lower tiers are computed for transparency but trigger ENV = 0.',
-    why: 'DITM long calls are pure directional bets. The strongest trend (all three in sequence) minimises the risk the stock reverses through your strike before expiry. Partial alignment (e.g. price above SMA50 but SMA50 below SMA200) is not sufficient — the broader trend is not confirmed.',
-    formula: 'SMA50 = rolling mean of Close over last 50 days\nSMA200 = rolling mean of Close over last 200 days\nP>SMA50>SMA200 → 30 pts  ← only tier that clears the hard gate (≥ 22)\nP>SMA50 only   → 18 pts  ← hard gate fires (18 < 22) → ENV = 0\nSMA50>SMA200   → 10 pts  ← hard gate fires\nAbove SMA200   →  5 pts  ← hard gate fires\nElse           →  0 pts  ← hard gate fires',
+    factor: 'Trend Strength', weight: 25, detail: 'P>SMA50>SMA200=25 · P>SMA50 only=15 · SMA50>SMA200 only=8 · above SMA200=4 · else=0.',
+    definition: 'Whether price is above SMA50 and SMA50 is above SMA200. v3: soft factor (no longer a hard gate). Full alignment is still the strongest tier; partial alignment earns proportional pts.',
+    why: 'DITM long calls are pure directional bets. The strongest trend (P>SMA50>SMA200) confirms the broader uptrend. v2 used Trend < 22 pts as a hard gate that zeroed ENV — v3 keeps Trend as the highest-weighted ENV factor instead, so failing alignment costs ~17 pts but doesn\'t crater the whole score.',
+    formula: 'P>SMA50>SMA200 → 25 pts\nP>SMA50 only   → 15 pts\nSMA50>SMA200   →  8 pts\nAbove SMA200   →  4 pts\nElse           →  0 pts',
   },
   {
-    factor: 'HV Rank (inv.)', weight: 12, detail: '≤20=12 · 20–40→8–12 · 40–60→4–8 · 60–80→1–4 · >80=0.',
-    definition: 'Inverted HV Rank: low HV rank means options are historically cheap — better for buyers.',
-    why: "Buying DITM calls when vol is elevated means paying up for time value you don't need. Low HV rank = cheap extrinsic on the option, which is what we want.",
-    formula: 'hv_rank = (HV_today − HV_min_252) / (HV_max_252 − HV_min_252) × 100\nInverted: ≤20=12 (cheapest), ≥80=0 (most expensive)',
+    factor: '200d Return', weight: 25, detail: '≥25%=25 · 15–25%→18–25 · 5–15%→10–18 · 0–5%→2–10 · <0%=0.',
+    definition: 'How much the stock has appreciated vs. its price approximately 200 days ago (median-anchored to smooth noise). Sustained long-term momentum.',
+    why: 'A +15–25% gain over 200 days is the ideal DITM environment: confirmed uptrend with room left. Negative returns mean you are trying to catch a falling knife.',
+    formula: 'anchor   = median(Close[-205:-200])\nret_200d = Close_today / anchor − 1',
   },
   {
-    factor: 'Weekly RSI(14)', weight: 10, detail: '50–65=10 · 45–50 or 65–70→7 · 40–45 or 70–75→4 · 35–40+strong trend→6 · else=0.',
-    definition: 'RSI computed on weekly closes (resample daily to weekly, Wilder smoothing). Measures medium-term momentum — a cleaner signal for multi-month DITM positions.',
-    why: 'Weekly momentum in the sweet spot (50–65) confirms sustained uptrend without being overextended. A weekly RSI in oversold territory (35–40) plus a confirmed trend can signal a strong pullback-entry point.',
-    formula: 'Resample daily Close to weekly (last close of each week)\nWilder RSI(14) on weekly series\nScore: 50–65=10, 45–50 or 65–70=7, 40–45 or 70–75=4, 35–40+Trend≥22=6, else=0',
+    factor: '52W High Dist.', weight: 20, detail: '≤5%=20 · 5–10%→17–20 · 10–20%→10–17 · 20–30%→0–10 · >30%=0.',
+    definition: 'How far below the 52-week high the stock is currently trading. v3 curve flipped (audit fix #6): full credit at the high, smooth taper through 30%.',
+    why: 'In v2 the curve awarded only 7 pts at 0–3% below high and 12 pts at 3–10%, so a fresh-ATH stock lost 5 pts vs an 8%-pulled-back stock — mean-reversion logic embedded in a momentum screener. v3 flips it: closest to the 52W high earns full credit because that\'s the cleanest possible DITM trend confirmation.',
+    formula: 'dist      = (Close − max_252d_close) / max_252d_close × 100\npct_below = abs(min(dist, 0))\n≤5%=20 · 5–10%→17–20 · 10–20%→10–17 · 20–30%→0–10 · >30%=0',
   },
   {
-    factor: '52W High Dist.', weight: 12, detail: '3–10%=12 · 0–3%=7 · 10–20%=9 · 20–30%=4 · >30%=0.',
-    definition: 'How far below the 52-week high the stock is currently trading.',
-    why: 'DITM calls need a trend. 3–10% below the high is the sweet spot: the stock has momentum and is pulling back slightly, not overextended at the exact top. Stocks >30% below their high are in a downtrend.',
-    formula: 'dist = abs(min((Close − max_252d_close) / max_252d_close × 100, 0))\nTiered: 3–10%=12 · 0–3%=7 · 10–20%=9 · 20–30%=4 · >30%=0',
+    factor: 'Weekly RSI(14)', weight: 15, detail: '50–65=15 · 45–50 or 65–70→11 · 40–45 or 70–75→6 · 35–40+strong trend→9 · else=0.',
+    definition: 'RSI computed on weekly closes (resample daily to weekly, Wilder smoothing). Medium-term momentum — a cleaner signal for multi-month DITM positions than daily RSI.',
+    why: 'Weekly momentum in 50–65 confirms sustained uptrend without being overextended. Weekly RSI in 35–40 plus a confirmed trend signals a strong pullback-entry point.',
+    formula: 'Resample daily Close to weekly\nWilder RSI(14) on weekly series\n50–65=15 · 45–50 or 65–70=11 · 40–45 or 70–75=6 · 35–40+Trend≥18=9 · else=0',
   },
   {
-    factor: '200d Return', weight: 15, detail: '≥25%=15 · 15–25%→11–15 · 5–15%→6–11 · 0–5%→1–6 · <0%=0.',
-    definition: 'How much the stock has appreciated vs. its price approximately 200 days ago (median-anchored to smooth noise). Measures sustained long-term momentum.',
-    why: 'A +15–25% gain over 200 days is the ideal DITM environment: confirmed uptrend with room left. Negative returns mean you are trying to catch a falling knife — avoid.',
-    formula: 'anchor = median(Close[-205:-200])  (5-day median ~200d ago)\nret_200d = Close_today / anchor − 1',
-  },
-  {
-    factor: 'Days to Earnings', weight: 8, detail: '≤7=0 (gate) · 8–14=3 · 15–60=8 · >60 or none=8.',
-    definition: 'Calendar days until the next earnings announcement. Earnings create overnight gap risk that can rapidly change the directional thesis.',
-    why: 'Earnings within a week (≤7d) is a hard gate: IV spike + gap risk makes pricing unreliable. 8–14d is penalised. Further out = full credit.',
-    formula: 'days = (earnings_date − today).days\nHard gate: ≤7 → env_score = 0',
-  },
-  {
-    factor: 'Chain Liquidity', weight: 13, detail: 'log₁₀(median_OI)/log₁₀(500) × 13 · capped at 13.',
+    factor: 'Chain Liquidity', weight: 15, detail: 'log10(median_OI) / log10(500) × 15 · capped at 15.',
     definition: 'Median open interest across the 0.60–0.95 delta range of the call chain. DITM options are typically less liquid than ATM — reference is 500 OI (vs 5000 for CSP/CC).',
     why: 'Illiquid DITM chains = wide spreads on entry, and difficulty exiting or rolling. Even moderate OI (500+) is sufficient for liquid fills on DITM calls.',
-    formula: 'pts = min(log10(median_OI) / log10(500), 1.0) × 13\nMedian of OI across 0.60–0.95 delta call strikes',
+    formula: 'pts = min(log10(median_OI) / log10(500), 1.0) × 15',
+  },
+  {
+    factor: 'Earnings (DTE-scaled)', weight: -15, detail: 'penalty = base × min(1, 30/dte) · ≤7d→base=−15 · 8–14d→−7 · else=0.',
+    definition: 'DTE-scaled earnings penalty. A 7-day-out earnings on a 365-DTE LEAP costs ≈ −1.2 ENV; on a 30-DTE position, the full −15.',
+    why: 'v2 treated earnings ≤ 7d as a hard gate (ENV = 0). For a 365-DTE LEAP, that was a category error: any IV pop reverses within a week and 358 days of thesis remain. v3 scales the penalty by remaining DTE so long-dated trades aren\'t fatally penalised by a near-term print.',
+    formula: 'scale   = min(1, 30 / dte)\npenalty = -15 × scale  if days_to_earn ≤ 7\n        = -7  × scale  if days_to_earn ∈ [8, 14]\n        = 0            otherwise',
   },
   { factor: '— STRIKE SCORE (×0.5) —', weight: null, detail: '', definition: '', why: '', formula: '' },
   {
-    factor: 'Delta', weight: 22, detail: '0.80–0.85=22 · 0.75–0.80 or 0.85–0.90→18 · 0.70–0.75 or >0.90→13 · <0.70=0.',
-    definition: 'Black-Scholes call delta. For DITM calls, delta is high (0.70–0.95+), meaning the option moves nearly dollar-for-dollar with the stock.',
-    why: "Sweet spot 0.80–0.85: you get most of the upside (80–85¢ per $1 move) while paying less extrinsic than an ATM call. Below 0.70 = not DITM enough; above 0.90 = excessive cost for marginal improvement.",
-    formula: 'Black-Scholes call delta:\n  d1 = (ln(S/K) + (r + 0.5σ²)T) / (σ√T)\n  delta = N(d1)',
+    factor: 'Delta', weight: 20, detail: '0.80–0.85→17–20 · 0.85–0.90→16–20 · 0.75–0.80→12–17 · 0.70–0.75→0–12 · 0.90–0.98→10–16 · <0.70=0.',
+    definition: 'Black-Scholes call delta. For DITM calls, delta is high (0.70–0.95+); the option moves nearly dollar-for-dollar with the stock.',
+    why: "Sweet spot 0.80–0.85: you get most of the upside while paying less extrinsic than an ATM call. Below 0.70 = not DITM enough; above 0.90 = excessive cost for marginal improvement.",
+    formula: 'd1 = (ln(S/K) + (r + 0.5σ²)T) / (σ√T)\ndelta = N(d1)',
   },
   {
-    factor: 'Extrinsic %', weight: 28, detail: '<2%=28 · 2–4%→22–28 · 4–6%→16–22 · 6–9%→7–16 · 9–12%→0–7 · >12%=0.',
-    definition: 'Extrinsic value (time value) as a percentage of strike price. Extrinsic = mid − intrinsic, where intrinsic = max(price − strike, 0).',
-    why: 'The entire premise of DITM: minimise the extrinsic you pay. Extrinsic is money that evaporates to theta. <2% of strike means almost all your premium is pure intrinsic — you are essentially buying stock on leverage with bounded downside.',
-    formula: 'intrinsic = max(price − strike, 0)\nextrinsic = mid − intrinsic\nextrinsic_pct = extrinsic / strike × 100',
+    factor: 'Leverage  (NEW)', weight: 25, detail: '2.5–3.5×=25 · 2.0–2.5×→17–25 · 1.5–2.0×→8–17 · 0–1.5×→0–8 · 3.5–5×→12–25 · >5×→0.',
+    definition: 'leverage = delta × current_price / mid. The headline DITM metric — the actual exposure-per-dollar-deployed that stock-replacement is about.',
+    why: 'v2 had no leverage factor. Capital Efficiency (5 pts) used mid/price but ignored delta, so it could rank a 0.95Δ call at 50% cap-eff (leverage ≈ 1.9×) above a 0.70Δ call at 30% cap-eff (leverage ≈ 2.3×) — i.e., the worse option higher. Audit finding #1. v3 adds Leverage as the largest single strike factor (25 pts) and drops Cap Eff entirely.',
+    formula: 'leverage = delta × current_price / mid\n0–1.5×    → 0 → 8 pts (linear)\n1.5–2.0×  → 8 → 17\n2.0–2.5×  → 17 → 25\n2.5–3.5×  → 25 (full credit)\n3.5–5.0×  → 25 → 12\n5.0–8.0×  → 12 → 0',
   },
   {
-    factor: 'Annualised Theta %', weight: 17, detail: '<5%=17 · 5–10%→12–17 · 10–15%→7–12 · 15–20%→2–7 · >20%=0.',
-    definition: 'Annualised Black-Scholes theta expressed as a percentage of the strike price. Measures how much of the strike you pay per year just to hold the option.',
-    why: 'Low theta % = cheap carry cost. This directly penalises excessively expensive options relative to the strike. A DITM call with >20% annualised theta is burning money faster than a stock loan.',
-    formula: 'theta_annual = BS theta (per year, negative for longs)\ntheta_ann_pct = |theta_annual| / strike × 100',
+    factor: 'Extrinsic %', weight: 25, detail: '<2%=25 · 2–4%→19–25 · 4–6%→13–19 · 6–9%→5–13 · 9–12%→0–5 · >12%=0.',
+    definition: 'Extrinsic value (time value) as a percentage of strike price. extrinsic = mid − max(price − strike, 0).',
+    why: 'The entire premise of DITM: minimise the extrinsic you pay. Extrinsic is money that evaporates to theta. <2% of strike means almost all your premium is pure intrinsic — you are essentially buying stock on leverage with bounded downside. v3 drops the separate Theta% factor (audit #4: ~90% correlated with Extrinsic).',
+    formula: 'intrinsic     = max(price − strike, 0)\nextrinsic     = mid − intrinsic\nextrinsic_pct = extrinsic / strike × 100',
   },
   {
-    factor: 'IV Percentile', weight: 10, detail: '≤25=10 · 25–50→7–10 · 50–75→3–7 · >75=0.',
-    definition: 'HV-based IV percentile: % of days in the past year when IV was lower than today. Lower = buying when options are cheap.',
-    why: 'Unlike CSP/CC (premium sellers who want high IV), DITM buyers want low IV. You want to buy a DITM call when options are historically cheap, not when the market is pricing in big moves.',
-    formula: 'iv_percentile = % of last 252d where HV < today HV\nScored inversely: ≤25th pct = full marks',
-  },
-  {
-    factor: 'Bid-Ask Spread', weight: 18, detail: '≤2%=18 · 2–4%→13–18 · 4–7%→7–13 · 7–12%→1–7 · >12%=0.',
+    factor: 'Bid-Ask Spread', weight: 20, detail: '≤2%=20 · 2–4%→14–20 · 4–7%→7–14 · 7–12%→1–7 · >12%=0.',
     definition: '(Ask − Bid) / Mid × 100. The transaction cost paid on entry — and again on exit.',
     why: 'Wide spreads are especially costly for DITM calls because you pay them on large-notional positions. A 10% spread on a $80 DITM call costs $8 on entry alone ($16 round-trip per contract).',
     formula: 'spread_pct = (ask − bid) / mid × 100\nwhere mid = (bid + ask) / 2',
   },
   {
-    factor: 'Capital Efficiency', weight: 5, detail: '25–35%=5 · 35–50%→3–5 · 50–65%→1–3 · >65%=0.',
-    definition: 'Option mid price as a % of underlying price. Measures how much capital you deploy relative to just buying the stock.',
-    why: 'DITM calls should cost 25–35% of the stock price to get delta ~0.80–0.85. Lower = strike too far from money (not DITM). Higher = strike close to ATM, paying too much time value.',
-    formula: 'capital_efficiency_pct = mid / price × 100',
+    factor: 'IV Percentile', weight: 10, detail: '≤25=10 · 25–50→7–10 · 50–75→3–7 · >75=0.',
+    definition: 'HV-based IV percentile: % of days in the past year when IV was lower than today. The single vol-cheapness factor in v3.',
+    why: 'Unlike CSP/CC (premium sellers), DITM buyers want low IV. v3 keeps IV Percentile as the only vol-cheapness factor — the v2 ENV HV Rank factor was dropped because it measured the same signal (audit #5).',
+    formula: 'iv_percentile = % of last 252d where HV < today HV\nScored inversely: ≤25th pct = full marks',
   },
 ]
 
 const HARD_GATES = [
-  { gate: 'Trend < 22 pts',     effect: 'ENV = 0', reason: 'Effectively: not P>SMA50>SMA200. The threshold (22) sits between 18 pts (P>SMA50 only) and 30 pts (full alignment) — only full alignment passes. Buying a DITM call without a confirmed uptrend is directionally wrong.' },
-  { gate: 'HV Rank > 50',       effect: 'ENV = 0', reason: 'Options are priced above their historical median — you are paying above-fair-value extrinsic, defeating the core premise of DITM.' },
-  { gate: 'Earnings ≤ 7 days',  effect: 'ENV = 0', reason: 'IV spike + overnight gap risk make all option pricing unreliable. Wait until after the print.' },
+  // v3 (ADR-0008) removed all v2 hard gates. Score-floor effects come from
+  // the 0.85× macro-hold multiplier and DTE-scaled earnings penalty instead.
+  { gate: 'Macro hold regime', effect: '× 0.85 final', reason: 'VIX ≥ 25 AND rising, OR SPY < SMA200. v3 demotes scores 15% during macro-hold instead of just displaying a banner. The directional, leveraged thesis is most fragile in exactly these regimes.' },
+  { gate: 'Earnings ≤ 7 days',  effect: 'penalty −15 × min(1, 30/dte)', reason: 'DTE-scaled. A 7-day-out earnings on a 365-DTE LEAP costs ≈ −1.2 ENV; on a 30-DTE position, the full −15. v2 used a hard gate (ENV = 0) regardless of remaining DTE — fixed in v3.' },
+  { gate: 'Earnings 8–14 days', effect: 'penalty −7 × min(1, 30/dte)',  reason: 'Same DTE-scaling as above; smaller base.' },
 ]
 
 const SCORE_TIERS = [
-  { range: '≥ 80', label: 'Strong',   color: '#4ade80', desc: 'Strong trend + cheap extrinsic',        action: 'Take it, normal size' },
-  { range: '65–79', label: 'Solid',    color: '#86efac', desc: 'Solid setup, understand the drag',      action: 'Take it, understand the weakness' },
-  { range: '50–64', label: 'Moderate', color: '#facc15', desc: 'Trend confirmed, one factor weak',      action: 'Only with strong conviction' },
-  { range: '35–49', label: 'Weak',     color: '#fb923c', desc: 'Multiple factor drags',                 action: 'Usually skip' },
-  { range: '< 35',  label: 'Avoid',   color: '#f87171', desc: 'Hard gate triggered or scattered score', action: 'Skip' },
+  // v3: aligned with CSP/CC v3 tier scheme (75/65/55/45). v2 frontend used
+  // 80/65/50/35 in legend but 75/65/55/45 in table colors (audit #11). Now consistent.
+  { range: '≥ 75',  label: 'Strong',   color: '#4ade80', desc: 'Strong trend + leverage + cheap extrinsic',     action: 'Take it, normal size' },
+  { range: '65–74', label: 'Solid',    color: '#86efac', desc: 'Solid setup, understand the drag',              action: 'Take it, understand the weakness' },
+  { range: '55–64', label: 'Moderate', color: '#facc15', desc: 'Mechanically fine, thesis-dependent',           action: 'Only with strong conviction' },
+  { range: '45–54', label: 'Weak',     color: '#fb923c', desc: 'Multiple factor drags',                         action: 'Usually skip' },
+  { range: '< 45',  label: 'Avoid',    color: '#f87171', desc: 'Macro hold and/or scattered factor scores',     action: 'Skip' },
 ]
 
 const DECISION_STEPS = [
-  { n: 1, q: 'Score ≥ 65?',                                                   a: 'Trade it. Steps 2–4 are confirmation, not a gate.' },
-  { n: 2, q: 'Is trend confirmed? (P > SMA50 > SMA200)',                       a: 'If no, stop. This is a hard gate — without a full uptrend, DITM calls are trend-fighting trades.' },
-  { n: 3, q: 'What are the 2 biggest factor drags? (ENV + Strike breakdown)',  a: 'The lowest-scoring factors define the specific risk being priced in. Name them before entering.' },
-  { n: 4, q: 'Can I define the thesis: duration, target, and catalyst?',       a: 'If no, skip. DITM calls require a specific view — not just "bullish". Write down: entry, exit target, max loss date.' },
+  { n: 1, q: 'Score ≥ 65?',                                                   a: 'Trade it. Steps 2–4 are confirmation, not a gate. The v3 "take it" threshold is 65 — same as CSP/CC.' },
+  { n: 2, q: 'Is trend confirmed? (P > SMA50 > SMA200)',                       a: 'Trend is no longer a hard gate in v3, but full alignment earns the 25 pts that anchor the ENV score. If alignment fails, your ENV will sit ~17 pts lower — read the breakdown.' },
+  { n: 3, q: 'What is the leverage and the 2 biggest factor drags?',           a: 'Leverage = delta × price / mid. Sweet spot 2.5–3.5×. The lowest-scoring factors define the specific risk being priced in.' },
+  { n: 4, q: 'Can I define the thesis: duration, target, and catalyst?',       a: 'If no, skip. DITM calls require a specific view — not just "bullish". Write down: entry, exit target, max loss date, catalyst window.' },
 ]
 
 interface ExitNode { cond: string; action: string; tone?: 'close' | 'hold' | 'monitor' | 'assign' | 'roll' }
@@ -117,26 +109,34 @@ const EXIT_STRATEGY: ExitBranch[] = [
   {
     label: 'Profit-side (scale out)',
     children: [
-      { cond: '+25% on option mid',                                     action: 'Consider partial close (25% of position)',       tone: 'hold' },
-      { cond: '+50%',                                                   action: 'Close 50% — lock in most of the gain',           tone: 'close' },
-      { cond: '+100%',                                                  action: 'Close remainder or trail the rest',              tone: 'close' },
-      { cond: '+150%+',                                                 action: 'Let the final tranche run with a stop',          tone: 'close' },
+      { cond: '+25% on option mid',    action: 'Consider partial close (25% of position)',   tone: 'hold' },
+      { cond: '+50%',                  action: 'Close 50% — lock in most of the gain',       tone: 'close' },
+      { cond: '+100%',                 action: 'Close remainder or trail the rest',          tone: 'close' },
+      { cond: '+150%+',                action: 'Let the final tranche run with a stop',      tone: 'close' },
     ],
   },
   {
     label: 'Loss-side (defence)',
     children: [
-      { cond: '−35% on option mid',                                     action: 'Hard stop — exit immediately',                  tone: 'roll' },
-      { cond: 'Price breaks SMA200',                                    action: 'Exit — trend thesis is invalidated',             tone: 'roll' },
-      { cond: 'Score drops below 35',                                   action: 'Re-evaluate; close if no recovery thesis',      tone: 'monitor' },
-      { cond: '120 DTE checkpoint',                                     action: 'Review: roll forward if score ≥ 50; close if not', tone: 'monitor' },
+      { cond: '−35% on option mid',    action: 'Hard stop — exit immediately',                       tone: 'roll' },
+      { cond: 'Price breaks SMA200',   action: 'Exit — trend thesis is invalidated',                 tone: 'roll' },
+      { cond: 'Score drops below 45',  action: 'Re-evaluate; close if no recovery thesis',           tone: 'monitor' },
+      { cond: '120 DTE checkpoint',    action: 'Review: roll forward if score ≥ 55; close if not',   tone: 'monitor' },
     ],
   },
   {
-    label: 'Roll triggers',
+    label: 'Macro hold regime — defensive posture',
     children: [
-      { cond: 'Score < 50 + ≥ 90 DTE remaining + trend intact',        action: 'Roll to next cycle for credit or small debit',  tone: 'roll' },
-      { cond: 'Score ≥ 50 + < 60 DTE remaining',                       action: 'Hold — still has time value worth keeping',     tone: 'hold' },
+      { cond: 'VIX ≥ 25 and rising · or SPY < SMA200',  action: 'Scores already × 0.85 — don\'t add new exposure',           tone: 'monitor' },
+      { cond: 'Existing positions in macro hold',       action: 'Tighten stops 25% · consider partial profit-take',          tone: 'close' },
+    ],
+  },
+  {
+    label: 'Roll mechanics — when ROLL is the action above',
+    children: [
+      { cond: 'Trigger',                                       action: 'Δ ≥ +0.95 · spot >2% above strike · price breaks SMA50 with thesis intact · ≤ 60 DTE with thesis intact', tone: 'monitor' },
+      { cond: 'Target',                                        action: 'Next monthly · ~0.82 Δ at current spot · NEVER roll to a strike below cost basis · BA ≤ 5% & OI ≥ 200',  tone: 'roll' },
+      { cond: 'Stop',                                          action: '>15% above original strike · 3 rolls deep · capital tied >2× original premium · no net-credit roll → close at loss',                          tone: 'close' },
     ],
   },
 ]

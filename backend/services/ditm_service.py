@@ -3,7 +3,17 @@ Orchestrates per-symbol DITM (Deep-In-The-Money) Long Call analysis:
   OHLC → Technicals (ENV) → Options → Strike → Greeks → Scoring
 
 Final score = 0.5 × ENV_raw + 0.5 × Strike_raw (both 0–100 scale).
-Macro gate: sets macro_hold flag; does NOT zero the score.
+
+v3 lean model (ADR-0008):
+  ENV (5 factors, 100): Trend 25 + 200d Return 25 + 52W (flipped) 20
+                        + Weekly RSI 15 + Chain Liquidity 15
+  Strike (5, 100):      Δ 20 + Leverage 25 + Extrinsic% 25
+                        + Bid-Ask 20 + IV Percentile 10
+  Earnings penalty:     DTE-scaled −15 ENV pts (≤7d), −7 (8–14d).
+  Macro hold:           0.85× multiplier on final_score (was display-only).
+  Hard gates removed:   HV Rank > 50 (eliminated half the universe by
+                        construction), Trend < 22 (collapsed to a soft
+                        25-pt factor), Earnings ≤ 7d (now DTE-scaled).
 """
 from __future__ import annotations
 
@@ -90,6 +100,7 @@ class DitmResult:
     gap_3d_pct: float = 0.0        # max overnight gap last 3 sessions (%)
     macro_hold: bool = False        # True when VIX ≥ 25 and rising, or SPY < SMA200
     chain_median_oi: float = 0.0
+    iv_percentile: Optional[float] = None  # 0–100, HV-based; v3 strike-side single vol-cheapness factor
 
 
 @dataclass
@@ -149,7 +160,7 @@ def _lerp(x: float, x0: float, x1: float, y0: float, y1: float) -> float:
 
 
 # ---------------------------------------------------------------------------
-# ENV scoring
+# ENV scoring (v3)
 # ---------------------------------------------------------------------------
 
 def _score_trend_strength(
@@ -158,96 +169,92 @@ def _score_trend_strength(
     price: float,
     sma200: float,
 ) -> float:
+    """v3: 25 pts. Soft factor (no longer a hard gate). Full alignment is
+    still the strongest tier, but partial alignment now earns proportional
+    pts instead of zeroing the whole ENV."""
     if price_above_sma50 and sma50_above_sma200:
-        return 30.0
+        return 25.0
     if price_above_sma50:
-        return 18.0
+        return 15.0
     if sma50_above_sma200:
-        return 10.0
-    # Neither — small bias if at least above SMA200
+        return 8.0
     if sma200 > 0 and price > sma200:
-        return 5.0
-    return 0.0
-
-
-def _score_hv_rank_inv(hv_rank: Optional[float]) -> float:
-    """Inverted: low HV rank = cheap vol = better for buyers."""
-    if hv_rank is None or math.isnan(hv_rank):
-        return 6.0
-    r = hv_rank
-    if r <= 20:
-        return 12.0
-    if r <= 40:
-        return _lerp(r, 20, 40, 12.0, 8.0)
-    if r <= 60:
-        return _lerp(r, 40, 60, 8.0, 4.0)
-    if r <= 80:
-        return _lerp(r, 60, 80, 4.0, 1.0)
+        return 4.0
     return 0.0
 
 
 def _score_weekly_rsi(w_rsi: float, trend_pts: float) -> float:
+    """v3: 15 pts. Sweet spot 50–65; 35–40 in a strong uptrend earns
+    pullback-entry credit."""
     if math.isnan(w_rsi):
-        return 5.0
-    if 50 <= w_rsi <= 65:
-        return 10.0
-    if (45 <= w_rsi < 50) or (65 < w_rsi <= 70):
         return 7.0
+    if 50 <= w_rsi <= 65:
+        return 15.0
+    if (45 <= w_rsi < 50) or (65 < w_rsi <= 70):
+        return 11.0
     if (40 <= w_rsi < 45) or (70 < w_rsi <= 75):
-        return 4.0
-    if 35 <= w_rsi < 40 and trend_pts >= 22:
-        # Oversold in strong uptrend — pullback entry
         return 6.0
+    if 35 <= w_rsi < 40 and trend_pts >= 18:
+        return 9.0
     return 0.0
 
 
 def _score_52w_dist(dist_pct: float) -> float:
-    """dist_pct is negative when below 52W high (e.g. -10 = 10% below)."""
+    """v3: 20 pts. Curve FLIPPED — finding #6: full credit at 0–5% below
+    high (trend confirmation), smooth taper through 30%. Mean-reversion
+    logic removed."""
     if math.isnan(dist_pct):
-        return 6.0
-    d = abs(min(dist_pct, 0.0))  # % below high, positive
-    if d <= 3:
-        return 7.0
+        return 10.0
+    d = abs(min(dist_pct, 0.0))
+    if d <= 5:
+        return 20.0
     if d <= 10:
-        return _lerp(d, 3, 10, 7.0, 12.0)
+        return _lerp(d, 5, 10, 20.0, 17.0)
     if d <= 20:
-        return _lerp(d, 10, 20, 12.0, 9.0)
+        return _lerp(d, 10, 20, 17.0, 10.0)
     if d <= 30:
-        return _lerp(d, 20, 30, 9.0, 4.0)
+        return _lerp(d, 20, 30, 10.0, 0.0)
     return 0.0
 
 
 def _score_200d_return(ret_frac: float) -> float:
-    """ret_frac is fraction (0.15 = 15%)."""
+    """v3: 25 pts. ret_frac is fraction (0.15 = 15%)."""
     if math.isnan(ret_frac):
-        return 5.0
+        return 8.0
     pct = ret_frac * 100
     if pct >= 25:
-        return 15.0
+        return 25.0
     if pct >= 15:
-        return _lerp(pct, 15, 25, 11.0, 15.0)
+        return _lerp(pct, 15, 25, 18.0, 25.0)
     if pct >= 5:
-        return _lerp(pct, 5, 15, 6.0, 11.0)
+        return _lerp(pct, 5, 15, 10.0, 18.0)
     if pct >= 0:
-        return _lerp(pct, 0, 5, 1.0, 6.0)
+        return _lerp(pct, 0, 5, 2.0, 10.0)
     return 0.0
 
 
-def _score_earnings_env(days: Optional[int]) -> float:
-    if days is None or days > 60:
-        return 8.0
-    if days <= 7:
-        return 0.0  # hard gate trigger
-    if days <= 14:
-        return 3.0
-    return 8.0
-
-
 def _score_liquidity_ditm(median_oi: float) -> float:
-    """Uses log10(500) as reference (DITM chains less liquid than ATM)."""
+    """v3: 15 pts. Reference log10(500) (DITM chains thinner than ATM)."""
     if median_oi <= 0:
         return 0.0
-    return min(math.log10(max(median_oi, 1)) / math.log10(500), 1.0) * 13.0
+    return min(math.log10(max(median_oi, 1)) / math.log10(500), 1.0) * 15.0
+
+
+def _earnings_penalty_dte_scaled(days_to_earnings: Optional[int], dte: int) -> float:
+    """v3: DTE-aware earnings penalty (audit finding #9).
+
+    Returns a NEGATIVE value to subtract from ENV. A 7-day-out earnings on
+    a 365-DTE LEAP is a small ding (~−1.2 ENV); on a 30-DTE position it is
+    fatal (−15 ENV).
+    """
+    if days_to_earnings is None or days_to_earnings > 60:
+        return 0.0
+    scale = min(1.0, 30.0 / max(dte, 1))
+    if days_to_earnings <= 7:
+        return -15.0 * scale
+    if days_to_earnings <= 14:
+        return -7.0 * scale
+    return 0.0
 
 
 def compute_ditm_env_score(
@@ -255,94 +262,99 @@ def compute_ditm_env_score(
     sma50_above_sma200: bool,
     price: float,
     sma200: float,
-    hv_rank: Optional[float],
     weekly_rsi: float,
     dist_from_52w_high_pct: float,
     ret_200d_frac: float,
     days_to_earnings: Optional[int],
     chain_median_oi: float,
+    dte: int,
 ) -> tuple[float, str]:
     """
     Returns (env_raw_score 0–100, detail_string).
-    Hard gates set score to 0: trend not P>SMA50>SMA200, HV rank >50, earnings ≤7d.
+
+    v3: no hard gates. HV Rank dropped (was duplicate of strike-side IV
+    Percentile). Trend gate dropped (now a soft 25-pt factor — failing
+    full alignment costs ~17 pts but doesn't zero ENV). Earnings ≤7d is
+    a DTE-scaled penalty rather than a hard gate.
     """
     trend_pts = _score_trend_strength(price_above_sma50, sma50_above_sma200, price, sma200)
-    hv_pts = _score_hv_rank_inv(hv_rank)
     rsi_pts = _score_weekly_rsi(weekly_rsi, trend_pts)
     dist_pts = _score_52w_dist(dist_from_52w_high_pct)
     ret_pts = _score_200d_return(ret_200d_frac)
-    earn_pts = _score_earnings_env(days_to_earnings)
     lq_pts = _score_liquidity_ditm(chain_median_oi)
+    earn_pen = _earnings_penalty_dte_scaled(days_to_earnings, dte)
 
-    raw = trend_pts + hv_pts + rsi_pts + dist_pts + ret_pts + earn_pts + lq_pts
-
-    # Hard gates
-    hv_rank_val = hv_rank if hv_rank is not None and not math.isnan(hv_rank) else 0.0
-    hard_gate = (
-        trend_pts < 22
-        or hv_rank_val > 50
-        or (days_to_earnings is not None and days_to_earnings <= 7)
-    )
-    if hard_gate:
-        raw = 0.0
+    raw = trend_pts + rsi_pts + dist_pts + ret_pts + lq_pts + earn_pen
+    raw = max(0.0, min(100.0, raw))
 
     detail = (
-        f"Tr:{trend_pts:.1f} HV:{hv_pts:.1f} WRSI:{rsi_pts:.1f} "
-        f"52W:{dist_pts:.1f} R2:{ret_pts:.1f} Ea:{earn_pts:.1f} LQ:{lq_pts:.1f}"
+        f"Tr:{trend_pts:.1f} R2:{ret_pts:.1f} 52W:{dist_pts:.1f} "
+        f"WRSI:{rsi_pts:.1f} LQ:{lq_pts:.1f} Earn:{earn_pen:.1f}"
     )
     return round(raw, 2), detail
 
 
 # ---------------------------------------------------------------------------
-# Strike scoring
+# Strike scoring (v3)
 # ---------------------------------------------------------------------------
 
 def _score_delta_ditm(delta: float) -> float:
-    """delta is positive call delta, e.g. 0.82. Sweet spot 0.80–0.85."""
+    """v3: 20 pts. Symmetric bell around 0.82 sweet spot 0.80–0.85."""
     if delta < 0.70:
         return 0.0
     if delta <= 0.75:
-        return _lerp(delta, 0.70, 0.75, 0.0, 13.0)
+        return _lerp(delta, 0.70, 0.75, 0.0, 12.0)
     if delta <= 0.80:
-        return _lerp(delta, 0.75, 0.80, 13.0, 18.0)
+        return _lerp(delta, 0.75, 0.80, 12.0, 17.0)
     if delta <= 0.85:
-        return _lerp(delta, 0.80, 0.85, 18.0, 22.0)
+        return _lerp(delta, 0.80, 0.85, 17.0, 20.0)
     if delta <= 0.90:
-        return _lerp(delta, 0.85, 0.90, 22.0, 18.0)
-    return _lerp(delta, 0.90, 0.98, 18.0, 13.0)
+        return _lerp(delta, 0.85, 0.90, 20.0, 16.0)
+    return _lerp(delta, 0.90, 0.98, 16.0, 10.0)
+
+
+def _score_leverage(leverage: float) -> float:
+    """v3 NEW (audit finding #1): 25 pts. The headline DITM metric.
+
+    leverage = delta × price / mid — captures the stock-replacement thesis
+    directly. Sweet spot 2.5–3.5×. Below 1.5× the option is not delivering
+    enough leverage to justify time-value cost; above ~5× usually means
+    the strike is too far OTM and delta has already collapsed.
+    """
+    if math.isnan(leverage) or leverage <= 0:
+        return 0.0
+    if leverage < 1.5:
+        return _lerp(leverage, 0.0, 1.5, 0.0, 8.0)
+    if leverage < 2.0:
+        return _lerp(leverage, 1.5, 2.0, 8.0, 17.0)
+    if leverage <= 2.5:
+        return _lerp(leverage, 2.0, 2.5, 17.0, 25.0)
+    if leverage <= 3.5:
+        return 25.0
+    if leverage <= 5.0:
+        return _lerp(leverage, 3.5, 5.0, 25.0, 12.0)
+    return _lerp(leverage, 5.0, 8.0, 12.0, 0.0)
 
 
 def _score_extrinsic_pct(pct_frac: float) -> float:
-    """pct_frac = extrinsic / strike as fraction. Lower = better."""
-    p = pct_frac * 100  # to %
+    """v3: 25 pts. pct_frac = extrinsic / strike as fraction. Lower = better."""
+    p = pct_frac * 100
     if p < 2:
-        return 28.0
+        return 25.0
     if p <= 4:
-        return _lerp(p, 2, 4, 28.0, 22.0)
+        return _lerp(p, 2, 4, 25.0, 19.0)
     if p <= 6:
-        return _lerp(p, 4, 6, 22.0, 16.0)
+        return _lerp(p, 4, 6, 19.0, 13.0)
     if p <= 9:
-        return _lerp(p, 6, 9, 16.0, 7.0)
+        return _lerp(p, 6, 9, 13.0, 5.0)
     if p <= 12:
-        return _lerp(p, 9, 12, 7.0, 0.0)
-    return 0.0
-
-
-def _score_theta_pct(pct: float) -> float:
-    """pct = annualised theta as % of strike. Lower = better."""
-    if pct < 5:
-        return 17.0
-    if pct <= 10:
-        return _lerp(pct, 5, 10, 17.0, 12.0)
-    if pct <= 15:
-        return _lerp(pct, 10, 15, 12.0, 7.0)
-    if pct <= 20:
-        return _lerp(pct, 15, 20, 7.0, 2.0)
+        return _lerp(p, 9, 12, 5.0, 0.0)
     return 0.0
 
 
 def _score_iv_percentile_ditm(iv_pct: Optional[float]) -> float:
-    """Lower IV percentile = cheaper options = better for buyers."""
+    """v3: 10 pts. Lower IV percentile = cheaper options for buyers.
+    Single vol-cheapness factor (HV Rank ENV factor was duplicate)."""
     if iv_pct is None or math.isnan(iv_pct):
         return 5.0
     if iv_pct <= 25:
@@ -355,29 +367,18 @@ def _score_iv_percentile_ditm(iv_pct: Optional[float]) -> float:
 
 
 def _score_spread_ditm(spread_pct: Optional[float]) -> float:
-    """spread_pct in %. Lower = better."""
+    """v3: 20 pts. spread_pct in %. Lower = better."""
     if spread_pct is None or math.isnan(spread_pct):
-        return 5.0
+        return 6.0
     if spread_pct <= 2:
-        return 18.0
+        return 20.0
     if spread_pct <= 4:
-        return _lerp(spread_pct, 2, 4, 18.0, 13.0)
+        return _lerp(spread_pct, 2, 4, 20.0, 14.0)
     if spread_pct <= 7:
-        return _lerp(spread_pct, 4, 7, 13.0, 7.0)
+        return _lerp(spread_pct, 4, 7, 14.0, 7.0)
     if spread_pct <= 12:
         return _lerp(spread_pct, 7, 12, 7.0, 1.0)
     return 0.0
-
-
-def _score_capital_eff(cap_pct: float) -> float:
-    """cap_pct = mid / price * 100. DITM sweet spot: 25–35%."""
-    if cap_pct < 25 or cap_pct > 65:
-        return 0.0
-    if cap_pct <= 35:
-        return 5.0
-    if cap_pct <= 50:
-        return _lerp(cap_pct, 35, 50, 5.0, 3.0)
-    return _lerp(cap_pct, 50, 65, 3.0, 1.0)
 
 
 def compute_ditm_strike_score(
@@ -385,24 +386,27 @@ def compute_ditm_strike_score(
     strike: float,
     mid: float,
     current_price: float,
-    theta_annualized_pct: float,
     extrinsic_pct_of_strike_frac: float,
     bid_ask_spread_pct: Optional[float],
     iv_percentile: Optional[float],
 ) -> tuple[float, str]:
-    """Returns (strike_raw_score 0–100, detail_string)."""
+    """v3: returns (strike_raw_score 0–100, detail_string).
+
+    Drops Theta% (audit #4 — same signal as Extrinsic%) and Capital
+    Efficiency (audit #1 — replaced by Leverage which absorbs its role
+    while including delta).
+    """
     delta_pts = _score_delta_ditm(delta)
+    leverage = (delta * current_price / mid) if mid > 0 else 0.0
+    lev_pts = _score_leverage(leverage)
     ext_pts = _score_extrinsic_pct(extrinsic_pct_of_strike_frac)
-    theta_pts = _score_theta_pct(theta_annualized_pct)
     iv_pts = _score_iv_percentile_ditm(iv_percentile)
     spread_pts = _score_spread_ditm(bid_ask_spread_pct)
-    cap_pct = (mid / current_price * 100) if current_price > 0 else 0.0
-    cap_pts = _score_capital_eff(cap_pct)
 
-    raw = delta_pts + ext_pts + theta_pts + iv_pts + spread_pts + cap_pts
+    raw = delta_pts + lev_pts + ext_pts + spread_pts + iv_pts
     detail = (
-        f"Δ:{delta_pts:.1f} Ext:{ext_pts:.1f} Th:{theta_pts:.1f} "
-        f"IV:{iv_pts:.1f} BA:{spread_pts:.1f} Cap:{cap_pts:.1f}"
+        f"Δ:{delta_pts:.1f} Lev:{lev_pts:.1f} Ext:{ext_pts:.1f} "
+        f"BA:{spread_pts:.1f} IV:{iv_pts:.1f}"
     )
     return round(raw, 2), detail
 
@@ -503,6 +507,12 @@ def process_symbol(
         macro_hold = not macro_context["macro_pass"]
         for r in rows:
             r.macro_hold = macro_hold
+            if macro_hold:
+                # v3 audit finding #10: macro_hold demotes scores by 15%.
+                # Was display-only in v2.
+                for s in r.strikes:
+                    s.ditm_score = round(s.ditm_score * 0.85, 1)
+                r.best_ditm_score = round(r.best_ditm_score * 0.85, 1)
     return rows, None
 
 
@@ -659,12 +669,12 @@ def _legacy_process_symbol(
                             sma50_above_sma200=trend["sma50_above_sma200"],
                             price=current_price,
                             sma200=sma200_val if not math.isnan(sma200_val) else 0.0,
-                            hv_rank=hv_rank,
                             weekly_rsi=w_rsi,
                             dist_from_52w_high_pct=dist_52w if not math.isnan(dist_52w) else 0.0,
                             ret_200d_frac=ret_200d_frac if not math.isnan(ret_200d_frac) else 0.0,
                             days_to_earnings=days_to_earnings,
                             chain_median_oi=chain_median_oi,
+                            dte=dte,
                         )
 
                         # Strike score
@@ -673,13 +683,15 @@ def _legacy_process_symbol(
                             strike=sp,
                             mid=mid_price,
                             current_price=current_price,
-                            theta_annualized_pct=theta_ann_pct,
                             extrinsic_pct_of_strike_frac=ext_pct_frac,
                             bid_ask_spread_pct=spread_pct,
                             iv_percentile=iv_percentile,
                         )
 
-                        final_s = round(0.5 * env_s + 0.5 * strike_s, 1)
+                        # v3 macro-hold demotion (audit #10)
+                        macro_hold_legacy = not macro_context["macro_pass"] if macro_context else False
+                        macro_mult = 0.85 if macro_hold_legacy else 1.0
+                        final_s = round((0.5 * env_s + 0.5 * strike_s) * macro_mult, 1)
 
                         strike_results.append(DitmStrikeResult(
                             strike=sp,
@@ -741,6 +753,7 @@ def _legacy_process_symbol(
                     gap_3d_pct=gap_3d,
                     macro_hold=macro_hold,
                     chain_median_oi=chain_median_oi,
+                    iv_percentile=iv_percentile,
                 ))
             except Exception as exc:
                 logger.debug("Expiry processing error for %s: %s", sym, exc)
@@ -859,33 +872,32 @@ def _ditm_strike_context_builder(
 
 
 def _ditm_env_scorer(ind: Indicators) -> tuple[float, str]:
-    """Adapter: Indicators → legacy `compute_ditm_env_score`. Hard-gate
-    zeroing happens inside the legacy function; the breakdown detail
-    string is preserved either way."""
+    """Adapter: Indicators → v3 `compute_ditm_env_score`. No hard gates in
+    v3 (audit findings #2/#9). Earnings is a DTE-scaled penalty applied
+    inside the function."""
     return compute_ditm_env_score(
         price_above_sma50=ind.price_above_sma50,
         sma50_above_sma200=ind.sma50_above_sma200,
         price=ind.price,
         sma200=ind.sma200,
-        hv_rank=ind.hv_rank,
         weekly_rsi=ind.weekly_rsi if ind.weekly_rsi is not None else float("nan"),
         dist_from_52w_high_pct=ind.dist_from_52w_high_pct,
         ret_200d_frac=ind.ret_200d_frac if ind.ret_200d_frac is not None else 0.0,
         days_to_earnings=ind.days_to_earnings,
         chain_median_oi=ind.chain_median_oi,
+        dte=ind.dte,
     )
 
 
 def _ditm_strike_scorer_adapter(ctx: StrikeContext) -> tuple[float, str, dict]:
-    """Adapter: StrikeContext → legacy `compute_ditm_strike_score` kwargs.
-    Returns the (score, detail, raw) triple expected by the runner; raw
-    carries the per-strike numeric metrics used by the result_factory."""
+    """Adapter: StrikeContext → v3 `compute_ditm_strike_score` kwargs.
+    Theta% is no longer scored (audit #4) but `theta_annualized_pct` is
+    still kept in `raw` for the result_factory and frontend display."""
     score, detail = compute_ditm_strike_score(
         delta=ctx.delta,
         strike=ctx.strike,
         mid=ctx.mid or 0.0,
         current_price=ctx.current_price,
-        theta_annualized_pct=ctx.theta_annualized_pct or 0.0,
         extrinsic_pct_of_strike_frac=ctx.extrinsic_pct_of_strike_frac or 0.0,
         bid_ask_spread_pct=ctx.bid_ask_spread_pct,
         iv_percentile=ctx.iv_percentile,
@@ -969,6 +981,7 @@ def _ditm_result_factory(
         gap_3d_pct=metrics.gap_3d_pct or 0.0,
         macro_hold=False,
         chain_median_oi=ctx.chain_median_oi,
+        iv_percentile=metrics.iv_percentile,
     )
 
 

@@ -36,6 +36,7 @@ export interface DitmResult {
   gap_3d_pct: number              // max overnight gap last 3 sessions (%)
   macro_hold: boolean             // VIX ≥ 25 and rising, or SPY < SMA200
   chain_median_oi: number
+  iv_percentile: number | null    // v3 strike-side vol-cheapness factor (0–100, HV-based)
 }
 
 export interface DitmExpirationRow {
@@ -65,6 +66,7 @@ export interface GroupedDitmResult {
   best_score: number
   expirations: DitmExpirationRow[]
   env_detail: string
+  iv_percentile: number | null    // v3 — surface to the IV%ile column
 }
 
 export interface DitmFilterState {

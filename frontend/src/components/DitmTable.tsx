@@ -38,19 +38,19 @@ function parseDetail(detail: string): Record<string, number> {
   return out
 }
 
-// ENV factor keys + max pts (must match ditm_service detail string keys)
+// v3 ENV factor keys + max pts (ADR-0008)
 const ENV_MAX: Record<string, number> = {
-  Tr: 30, HV: 12, WRSI: 10, '52W': 12, R2: 15, Ea: 8, LQ: 13,
+  Tr: 25, R2: 25, '52W': 20, WRSI: 15, LQ: 15,
 }
-// Strike factor keys + max pts
+// v3 Strike factor keys + max pts
 const STRIKE_MAX: Record<string, number> = {
-  'Δ': 22, Ext: 28, Th: 17, IV: 10, BA: 18, Cap: 5,
+  'Δ': 20, Lev: 25, Ext: 25, BA: 20, IV: 10,
 }
 const DRAG_LABELS: Record<string, string> = {
-  Tr: 'Trend', HV: 'HV Rank', WRSI: 'Weekly RSI',
-  '52W': '52W Dist', R2: '200d Return', Ea: 'Earnings',  LQ: 'Liquidity',
-  'Δ': 'Delta', Ext: 'Extrinsic%', Th: 'Theta/yr',
-  IV: 'IV Pctile', BA: 'Bid-Ask Spread', Cap: 'Cap Efficiency',
+  Tr: 'Trend', WRSI: 'Weekly RSI', '52W': '52W Dist',
+  R2: '200d Return', LQ: 'Liquidity',
+  'Δ': 'Delta', Lev: 'Leverage', Ext: 'Extrinsic%',
+  BA: 'Bid-Ask Spread', IV: 'IV Pctile',
 }
 function topDrags(envDetail: string, strikeDetail: string, n = 2) {
   const envPts = parseDetail(envDetail)
@@ -139,7 +139,6 @@ const COLUMNS = [
   col.accessor('symbol',                 { header: 'Symbol',   cell: () => null, meta: { sticky: 1 } }),
   col.accessor('price',                  { header: 'Price',    cell: () => null, meta: { sticky: 2 } }),
   col.accessor('sma_ratio',              { header: () => <span className="col-tip col-scored" title="SMA50 ÷ SMA200 · >1 = SMA50 above SMA200 (uptrend)">Trend ⓘ</span>, cell: () => null }),
-  col.accessor('hv_rank',                { header: () => <span className="col-tip col-scored" title="HV Rank (0–100) · DITM buyers want LOW rank = cheap extrinsic">HV Rank ⓘ</span>, cell: () => null }),
   col.accessor('weekly_rsi',             { header: () => <span className="col-tip col-scored" title="Weekly RSI(14) — medium-term momentum on weekly closes · 50–65 = ideal">W-RSI ⓘ</span>, cell: () => null }),
   col.accessor('ret_200d',               { header: () => <span className="col-tip col-scored" title="200-day median-anchored return · close_today / median(closes 200d ago) − 1">200d Ret ⓘ</span>, cell: () => null }),
   col.accessor('dist_from_52w_high_pct', { header: () => <span className="col-tip col-scored" title="Distance from 52-week high · 0% = at the high · negative = % below">52W Dist ⓘ</span>, cell: () => null }),
@@ -168,6 +167,7 @@ function groupResults(results: DitmResult[]): GroupedDitmResult[] {
         best_score: 0,
         expirations: [],
         env_detail: '',
+        iv_percentile: r.iv_percentile,
       })
     }
     const g = map.get(r.symbol)!
@@ -312,13 +312,13 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Extrinsic value / strike × 100 · The time-value cost · DITM buyers want this BELOW 4%">
-                  Extrinsic% ⓘ
+                <span className="col-tip" title="Leverage = delta × price / mid · v3 NEW (audit #1) · The headline DITM metric: exposure-per-dollar deployed · Sweet spot 2.5–3.5×">
+                  Lev ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Annualised BS theta / strike × 100 · Cost-of-carry per year as % of strike · Below 10% = efficient hold">
-                  Theta/yr ⓘ
+                <span className="col-tip" title="Extrinsic value / strike × 100 · The time-value cost · DITM buyers want this BELOW 4%">
+                  Extrinsic% ⓘ
                 </span>
               </th>
               <th>
@@ -327,17 +327,17 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Mid / Price × 100 · Capital committed as % of stock price · Sweet spot 25–35%">
-                  Cap% ⓘ
-                </span>
-              </th>
-              <th>
                 <span className="col-tip" title="(Ask − Bid) / Mid × 100 · Transaction cost on entry and exit">
                   Spread% ⓘ
                 </span>
               </th>
               <th>
-                <span className="col-tip" title="Chain median OI across 0.60–0.95 delta call strikes">
+                <span className="col-tip" title="IV Percentile — % of last 252d where HV < today HV · v3 single vol-cheapness factor (10 pts) · Inverted: low = cheap = full credit">
+                  IV%ile ⓘ
+                </span>
+              </th>
+              <th>
+                <span className="col-tip" title="Per-strike OI · colored by Chain Liquidity factor (audit #12 fix — was incorrectly colored by IV)">
                   OI ⓘ
                 </span>
               </th>
@@ -345,7 +345,7 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                 className="sortable"
                 onClick={() => scoreCol?.toggleSorting(scoreSorted === 'asc')}
               >
-                <span className="col-tip" title="Final Score = 0.5×Env + 0.5×Strike&#10;&#10;ENV (100 pts)&#10;  Trend Strength  30 pts  P>SMA50>SMA200&#10;  HV Rank (inv.)  12 pts  ≤20=full (buyers want cheap vol)&#10;  Weekly RSI      10 pts  50–65=full&#10;  52W High Dist.  12 pts  3–10%=full&#10;  200d Return     15 pts  ≥25%=full&#10;  Days to Earn.    8 pts  ≤7=gate&#10;  Chain Liquidity 13 pts  log10 scale&#10;&#10;STRIKE (100 pts)&#10;  Delta           22 pts  0.80–0.85 peak&#10;  Extrinsic%      28 pts  &lt;2%=full&#10;  Theta/yr        17 pts  &lt;5%=full&#10;  IV Percentile   10 pts  ≤25th=full&#10;  Bid-Ask Spread  18 pts  ≤2%=full&#10;  Capital Eff.     5 pts  25–35%=full">
+                <span className="col-tip" title="Final Score = (0.5×Env + 0.5×Strike) × macro_mult (0.85 if macro hold)&#10;&#10;ENV (100 pts)&#10;  Trend Strength   25 pts  P>SMA50>SMA200 (soft factor in v3)&#10;  200d Return      25 pts  ≥25%=full&#10;  52W High Dist.   20 pts  ≤5%=full (curve flipped — audit #6)&#10;  Weekly RSI       15 pts  50–65=full&#10;  Chain Liquidity  15 pts  log10 ref 500&#10;  Earnings (DTE-scaled)  up to −15 pts penalty&#10;&#10;STRIKE (100 pts)&#10;  Delta            20 pts  0.80–0.85 peak&#10;  Leverage (NEW)   25 pts  delta×price/mid · sweet 2.5–3.5×&#10;  Extrinsic%       25 pts  &lt;2%=full&#10;  Bid-Ask Spread   20 pts  ≤2%=full&#10;  IV Percentile    10 pts  ≤25th=full (inverted)&#10;&#10;Diagnostic only in v3:&#10;  Theta/yr  Cap%  HV Rank  Breakeven%">
                   Score ⓘ
                 </span>
                 {scoreSorted === 'asc' && ' ↑'}
@@ -400,50 +400,14 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                   </td>
                   <td rowSpan={totalRows} className="sticky-col sticky-col-2">{fmt2(r.price)}</td>
 
-                  {/* Trend */}
+                  {/* Trend — v3: soft 25-pt factor, no longer a hard gate */}
                   <td rowSpan={totalRows}>
                     <span style={{ color: subColor(envPts, 'Tr', ENV_MAX) || '#94a3b8', fontWeight: 600 }}>{trendLabel}</span>
                     <br />
                     <span style={{ fontSize: '10px', color: '#94a3b8' }}>
                       {isNaN(r.sma_ratio) ? '—' : r.sma_ratio.toFixed(4)}
                     </span>
-                    {(() => {
-                      const trPts = envPts['Tr']
-                      if (trPts == null) return null
-                      const pass = trPts >= 22
-                      return (
-                        <span
-                          style={{ fontSize: '10px', color: pass ? '#4ade80' : '#f87171', display: 'block', lineHeight: 1.2 }}
-                          title={pass ? 'Trend gate: Pass (P>SMA50>SMA200)' : `Trend gate: Fail (${Math.round(trPts)} pts < 22 → ENV = 0)`}
-                        >
-                          {pass ? '✓ Gate' : '✗ Gate'}
-                        </span>
-                      )
-                    })()}
-                  </td>
-
-                  {/* HV Rank */}
-                  <td rowSpan={totalRows}>
-                    {isNaN(r.hv_rank)
-                      ? <span className="dim">N/A</span>
-                      : <>
-                          <span style={{ color: subColor(envPts, 'HV', ENV_MAX), fontWeight: 600 }}>
-                            {r.hv_rank.toFixed(0)}
-                          </span>
-                          {subScore(envPts, 'HV', ENV_MAX)}
-                          {(() => {
-                            const pass = r.hv_rank <= 50
-                            return (
-                              <span
-                                style={{ fontSize: '10px', color: pass ? '#4ade80' : '#f87171', display: 'block', lineHeight: 1.2 }}
-                                title={pass ? 'HV gate: Pass (rank ≤ 50)' : `HV gate: Fail (rank ${r.hv_rank.toFixed(0)} > 50 → ENV = 0)`}
-                              >
-                                {pass ? '✓ Gate' : '✗ Gate'}
-                              </span>
-                            )
-                          })()}
-                        </>
-                    }
+                    {subScore(envPts, 'Tr', ENV_MAX)}
                   </td>
 
                   {/* Weekly RSI */}
@@ -485,7 +449,7 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                     }
                   </td>
 
-                  {/* Earnings */}
+                  {/* Earnings — v3: DTE-scaled penalty (audit #9), no longer a hard gate */}
                   <td rowSpan={totalRows}>
                     {r.earnings_date
                       ? <>
@@ -495,13 +459,20 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                           {(() => {
                             const dte = r.days_to_earnings
                             if (dte == null) return null
-                            const pass = dte > 7
+                            const tone =
+                              dte <= 7 ? '#f87171'
+                              : dte <= 14 ? '#fb923c'
+                              : '#94a3b8'
+                            const label =
+                              dte <= 7 ? `−15 ENV × min(1, 30/dte)`
+                              : dte <= 14 ? `−7 ENV × min(1, 30/dte)`
+                              : `${dte}d`
                             return (
                               <span
-                                style={{ fontSize: '10px', color: pass ? '#4ade80' : '#f87171', display: 'block', lineHeight: 1.2 }}
-                                title={pass ? `Earnings gate: Pass (${dte}d away)` : `Earnings gate: Fail (${dte}d ≤ 7 → ENV = 0)`}
+                                style={{ fontSize: '10px', color: tone, display: 'block', lineHeight: 1.2 }}
+                                title={`v3 DTE-scaled earnings penalty (replaces v2 hard gate)`}
                               >
-                                {pass ? '✓ Gate' : '✗ Gate'}
+                                {label}
                               </span>
                             )
                           })()}
@@ -552,6 +523,19 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                   {subScore(parseDetail(bestStrike.strike_detail), 'Δ', STRIKE_MAX)}
                 </td>
 
+                {/* Leverage — v3 NEW (audit #1) */}
+                <td>
+                  {(() => {
+                    const lev = bestStrike.mid > 0 ? bestStrike.delta * r.price / bestStrike.mid : 0
+                    return <>
+                      <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'Lev', STRIKE_MAX) }}>
+                        {lev.toFixed(2)}×
+                      </span>
+                      {subScore(parseDetail(bestStrike.strike_detail), 'Lev', STRIKE_MAX)}
+                    </>
+                  })()}
+                </td>
+
                 <td>
                   <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'Ext', STRIKE_MAX) }}>
                     {fmtPct(bestStrike.extrinsic_pct)}
@@ -560,21 +544,7 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                 </td>
 
                 <td>
-                  <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'Th', STRIKE_MAX) }}>
-                    {fmtPct(bestStrike.theta_annualized_pct)}
-                  </span>
-                  {subScore(parseDetail(bestStrike.strike_detail), 'Th', STRIKE_MAX)}
-                </td>
-
-                <td>
                   <span className="dim">{fmtPct(bestStrike.breakeven_pct)}</span>
-                </td>
-
-                <td>
-                  <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'Cap', STRIKE_MAX) }}>
-                    {fmtPct(bestStrike.capital_efficiency_pct)}
-                  </span>
-                  {subScore(parseDetail(bestStrike.strike_detail), 'Cap', STRIKE_MAX)}
                 </td>
 
                 <td>
@@ -584,13 +554,21 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                   {subScore(parseDetail(bestStrike.strike_detail), 'BA', STRIKE_MAX)}
                 </td>
 
+                {/* IV Percentile — v3: explicit column (was hidden under OI — audit #12) */}
                 <td>
                   <span style={{ color: subColor(parseDetail(bestStrike.strike_detail), 'IV', STRIKE_MAX) }}>
+                    {r.iv_percentile != null ? `${r.iv_percentile.toFixed(0)}` : '—'}
+                  </span>
+                  {subScore(parseDetail(bestStrike.strike_detail), 'IV', STRIKE_MAX)}
+                </td>
+
+                {/* OI — v3: colored by LQ (audit #12 fix) */}
+                <td>
+                  <span style={{ color: subColor(parseDetail(bestStrike.env_detail), 'LQ', ENV_MAX) }}>
                     {bestStrike.chain_oi >= 1000
                       ? (bestStrike.chain_oi / 1000).toFixed(1) + 'k'
                       : bestStrike.chain_oi}
                   </span>
-                  {subScore(parseDetail(bestStrike.strike_detail), 'IV', STRIKE_MAX)}
                 </td>
 
                 <td>
@@ -628,6 +606,18 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                       )}
                       {subScore(parseDetail(s.strike_detail), 'Δ', STRIKE_MAX)}
                     </td>
+                    {/* Leverage */}
+                    <td>
+                      {(() => {
+                        const lev = s.mid > 0 ? s.delta * r.price / s.mid : 0
+                        return <>
+                          <span style={{ color: subColor(parseDetail(s.strike_detail), 'Lev', STRIKE_MAX) }}>
+                            {lev.toFixed(2)}×
+                          </span>
+                          {subScore(parseDetail(s.strike_detail), 'Lev', STRIKE_MAX)}
+                        </>
+                      })()}
+                    </td>
                     <td>
                       <span style={{ color: subColor(parseDetail(s.strike_detail), 'Ext', STRIKE_MAX) }}>
                         {fmtPct(s.extrinsic_pct)}
@@ -635,19 +625,7 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                       {subScore(parseDetail(s.strike_detail), 'Ext', STRIKE_MAX)}
                     </td>
                     <td>
-                      <span style={{ color: subColor(parseDetail(s.strike_detail), 'Th', STRIKE_MAX) }}>
-                        {fmtPct(s.theta_annualized_pct)}
-                      </span>
-                      {subScore(parseDetail(s.strike_detail), 'Th', STRIKE_MAX)}
-                    </td>
-                    <td>
                       <span className="dim">{fmtPct(s.breakeven_pct)}</span>
-                    </td>
-                    <td>
-                      <span style={{ color: subColor(parseDetail(s.strike_detail), 'Cap', STRIKE_MAX) }}>
-                        {fmtPct(s.capital_efficiency_pct)}
-                      </span>
-                      {subScore(parseDetail(s.strike_detail), 'Cap', STRIKE_MAX)}
                     </td>
                     <td>
                       <span style={{ color: subColor(parseDetail(s.strike_detail), 'BA', STRIKE_MAX) }}>
@@ -655,11 +633,18 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                       </span>
                       {subScore(parseDetail(s.strike_detail), 'BA', STRIKE_MAX)}
                     </td>
+                    {/* IV%ile — explicit column */}
                     <td>
                       <span style={{ color: subColor(parseDetail(s.strike_detail), 'IV', STRIKE_MAX) }}>
-                        {s.chain_oi >= 1000 ? (s.chain_oi / 1000).toFixed(1) + 'k' : s.chain_oi}
+                        {r.iv_percentile != null ? `${r.iv_percentile.toFixed(0)}` : '—'}
                       </span>
                       {subScore(parseDetail(s.strike_detail), 'IV', STRIKE_MAX)}
+                    </td>
+                    {/* OI — colored by LQ */}
+                    <td>
+                      <span style={{ color: subColor(parseDetail(s.env_detail), 'LQ', ENV_MAX) }}>
+                        {s.chain_oi >= 1000 ? (s.chain_oi / 1000).toFixed(1) + 'k' : s.chain_oi}
+                      </span>
                     </td>
                     <td>
                       {scoreFmt(s.env_score, s.strike_score, s.ditm_score)}
@@ -682,10 +667,8 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
         })}
       </table>
       <div className="table-footer-note">
-        HV Rank = 30-day historical volatility ranked over a 252-day window.
-        Trend = price vs SMA50 vs SMA200.
-        ⚠ in Symbol = overnight gap ≥ 3% in last 3 sessions.
-        Best strike highlighted by highest DITM score.
+        v3 (ADR-0008): Trend gate and HV Rank gate removed. Macro hold demotes scores by 15%.
+        ⚠ in Symbol = overnight gap ≥ 3% in last 3 sessions. Best strike highlighted by highest DITM score.
       </div>
     </div>
   )

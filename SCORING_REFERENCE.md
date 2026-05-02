@@ -1,16 +1,21 @@
-# Scoring Reference (CSP & CC) — v3
+# Scoring Reference (CSP, CC, DITM) — v3
 
 > Single source of truth for the screener scoring system. Every weight and threshold listed
-> here is mirrored in code by `ENV_WEIGHTS` and `STRIKE_WEIGHTS` in
-> [backend/services/scoring/config.py](backend/services/scoring/config.py). The frontend
-> `SCORE_LEGEND` arrays in [CspInput.tsx](frontend/src/components/CspInput.tsx) and
-> [CcInput.tsx](frontend/src/components/CcInput.tsx) mirror this document.
+> here is mirrored in code by `ENV_WEIGHTS` / `STRIKE_WEIGHTS` in
+> [backend/services/scoring/config.py](backend/services/scoring/config.py) (CSP/CC) and the
+> v3 scorer functions in [backend/services/ditm_service.py](backend/services/ditm_service.py)
+> (DITM — kept inline pending a follow-up move to `services/scoring/`). The frontend
+> `SCORE_LEGEND` arrays in [CspInput.tsx](frontend/src/components/CspInput.tsx),
+> [CcInput.tsx](frontend/src/components/CcInput.tsx), and
+> [DitmInput.tsx](frontend/src/components/DitmInput.tsx) mirror this document.
 
-> **v3 lean model** (May 2026, see [ADR-0007](docs/adr/0007-scoring-v3-lean-model.md)) reduced
-> the model from 14 factors to 8 to remove correlated and inert signals identified by the
-> quant-trader diagnostic. Dropped: HV Rank, SMA Alignment, DTE Sweet Spot, EM Buffer, %OTM,
-> S/R Distance. The fields `em_buffer_pct`, `dist_pct`, and `otm_pct` are still computed and
-> returned in the response payload for diagnostic visibility but contribute 0 to the score.
+> **v3 lean model** for CSP/CC (May 2026, see [ADR-0007](docs/adr/0007-scoring-v3-lean-model.md))
+> reduced the model from 14 → 8 factors. **DITM v3** (May 2026, see
+> [ADR-0008](docs/adr/0008-ditm-v3-lean-model.md)) reduced the DITM model from 13 → 10
+> factors, added the Leverage factor that was missing, and removed the HV Rank and Trend
+> hard gates. Diagnostic-preserved fields (`em_buffer_pct`, `dist_pct`, `otm_pct` for CSP/CC;
+> `theta_annualized_pct`, `capital_efficiency_pct`, `breakeven_pct`, `hv_rank` for DITM) are
+> still computed and returned in the response payload but contribute 0 to the score.
 
 ## Final score formula
 
@@ -18,13 +23,19 @@
 final_score = 0.4 × env_score + 0.6 × strike_score
 ```
 
-Tiers (unchanged from v2):
+Tiers (mirror the in-app legend in `CspInput.tsx` / `CcInput.tsx`):
 
-| Tier     | Range  | Color  | Meaning |
-|----------|--------|--------|---------|
-| Strong   | ≥ 70   | green  | All signals aligned, chain liquid, executable |
-| Moderate | 45–69  | amber  | Most signals ok, some weakness in env or execution |
-| Weak     | < 45   | red    | Poor IV env, execution risk, earnings overlap, or illiquid chain |
+| Score | Interpretation                              | Action                                       | Color  |
+|-------|---------------------------------------------|----------------------------------------------|--------|
+| ≥ 75  | All signals aligned, rare                   | Take it, normal size                          | green  |
+| 65–74  | Solid trade with minor weakness             | Take it, understand the weakness              | light green |
+| 55–64  | Mechanically fine, thesis-dependent         | Only if you have a directional view           | amber  |
+| 45–54  | Something structural is off                 | Usually skip                                  | orange |
+| < 45  | Multiple red flags                          | Skip                                          | red    |
+
+The "take it" threshold is **65**: scores at or above 65 are tradeable on score alone
+(modulo the would-I-own-it check); 55–64 require a documented thesis; below 55 the
+structural drag outweighs the premium and the trade should be skipped.
 
 Both `env_score` and `strike_score` cap at 100, so `final_score` ∈ [0, 100].
 
@@ -314,6 +325,241 @@ These constraints filter candidates *before* scoring, not as scored factors:
 
 ---
 
+## DITM (Deep-In-The-Money long calls) — v3
+
+`compute_ditm_env_score(...)` and `compute_ditm_strike_score(...)` in
+[backend/services/ditm_service.py](backend/services/ditm_service.py). DITM v3 (ADR-0008)
+shipped after CSP/CC v3 — it applies the same lean philosophy plus DITM-specific fixes
+(adds Leverage, removes the HV Rank > 50 hard gate, makes the macro-hold flag actually
+demote scores).
+
+### Final score formula
+
+```
+final_score = (0.5 × env_score + 0.5 × strike_score) × macro_mult
+macro_mult  = 0.85 if macro_hold else 1.0
+```
+
+`macro_hold = (VIX ≥ 25 AND vix_5d_change > 0) OR (SPY < SMA200)`.
+
+### DITM ENV (max 100)
+
+| Factor | Weight | Notes |
+|--------|-------:|-------|
+| Trend Strength | 25 | Soft factor (no longer a hard gate) |
+| 200d Return | 25 | ≥25% = full credit |
+| 52W High Distance (FLIPPED) | 20 | ≤5% = full credit (audit fix #6) |
+| Weekly RSI(14) | 15 | sweet 50–65 |
+| Chain Liquidity | 15 | log10(median_OI) / log10(500) × 15 |
+| Earnings (DTE-scaled) | up to −15 | Penalty, not gate |
+| **Total** | **100** | (Earnings deductible) |
+
+#### Trend Strength (25 pts)
+
+```
+P > SMA50 > SMA200       → 25
+P > SMA50 only           → 15
+SMA50 > SMA200 only      →  8
+above SMA200 only        →  4
+else                     →  0
+```
+
+> **Audit fix:** v2 used Trend < 22 pts as a hard gate that zeroed ENV when alignment
+> wasn't full. v3 keeps Trend as the highest-weighted ENV factor (any partial alignment
+> earns proportional pts) but no longer zeroes ENV for failing it.
+
+#### 200d Return (25 pts)
+
+```
+ret_200d = Close_today / median(Close[-205:-200]) − 1
+```
+
+| pct      | Pts             |
+|----------|-----------------|
+| ≥ 25%    | 25              |
+| 15–25%   | linear 18 → 25  |
+| 5–15%    | linear 10 → 18  |
+| 0–5%     | linear 2 → 10   |
+| < 0%     | 0               |
+
+#### 52W High Distance (20 pts) — **curve flipped vs v2**
+
+`pct_below = abs(min(dist, 0))` where `dist = (Close − max_252d_close) / max_252d_close × 100`.
+
+| pct_below | Pts             |
+|-----------|-----------------|
+| ≤ 5%      | 20              |
+| 5–10%     | linear 20 → 17  |
+| 10–20%    | linear 17 → 10  |
+| 20–30%    | linear 10 → 0   |
+| > 30%     | 0               |
+
+> **Audit fix #6:** v2 awarded only 7 pts at 0–3% below high and 12 pts at 3–10% — so a
+> stock printing fresh ATHs (the cleanest possible DITM trend setup) lost 5 pts vs a stock
+> 8% below. That was mean-reversion logic in a momentum screener. v3 flips the curve: full
+> credit at the high, smooth taper through 30%.
+
+#### Weekly RSI(14) (15 pts)
+
+Resample daily Close to weekly (last close of each week), then Wilder RSI(14).
+
+| Bucket            | Pts                        |
+|-------------------|----------------------------|
+| 50–65             | 15                         |
+| 45–50 or 65–70    | 11                         |
+| 40–45 or 70–75    | 6                          |
+| 35–40 + Trend ≥ 18| 9 (pullback-entry credit)  |
+| else              | 0                          |
+
+#### Chain Liquidity (15 pts)
+
+```
+pts = min(log10(median_OI) / log10(500), 1.0) × 15
+```
+
+Reference is 500 (vs 5000 for CSP/CC) because DITM chains are structurally thinner than
+ATM. Median is taken across the 0.60–0.95 delta band of the call chain.
+
+#### Earnings penalty (DTE-scaled)
+
+```
+scale   = min(1, 30 / dte)
+penalty = -15 × scale  if days_to_earnings ≤ 7
+        = -7  × scale  if days_to_earnings ∈ [8, 14]
+        = 0            otherwise
+```
+
+> **Audit fix #9:** v2 used `days ≤ 7 → ENV = 0` as a hard gate, which was a category
+> error for long-dated trades. A 365-DTE LEAP losing its entire ENV because earnings is in
+> 5 days ignores that the IV pop reverses within a week and 358 days of thesis remain.
+> v3 scales by DTE: 7-day-out earnings on a 365-DTE LEAP costs ≈ −1.2 ENV; on a 30-DTE
+> position, the full −15.
+
+### DITM Strike (max 100)
+
+| Factor | Weight | Notes |
+|--------|-------:|-------|
+| Δ (delta position) | 20 | sweet 0.80–0.85 |
+| **Leverage (NEW)** | 25 | δ × price / mid · sweet 2.5–3.5× |
+| Extrinsic % | 25 | <2% = full |
+| Bid-Ask Spread % | 20 | ≤2% = full |
+| IV Percentile (inv) | 10 | ≤25th pct = full credit (cheap vol for buyers) |
+| **Total** | **100** | |
+
+#### Δ — 20 pts
+
+| Bucket       | Pts                  |
+|--------------|----------------------|
+| 0.80–0.85    | linear 17 → 20       |
+| 0.85–0.90    | linear 20 → 16       |
+| 0.75–0.80    | linear 12 → 17       |
+| 0.70–0.75    | linear 0 → 12        |
+| 0.90–0.98    | linear 16 → 10       |
+| < 0.70       | 0                    |
+
+#### Leverage — 25 pts (NEW in v3)
+
+```
+leverage = delta × current_price / mid
+```
+
+The headline DITM metric. Captures stock replacement directly: at `δ = 0.85`, `S = $700`,
+`mid = $210`, `leverage = 2.83×` — every dollar deployed in the option captures 2.83× the
+notional exposure of a share. v2 had a 5-pt Capital Efficiency factor that ignored delta
+and could rank a 0.95Δ call at 50% cap-eff (leverage ≈ 1.9×) above a 0.70Δ call at 30%
+cap-eff (leverage ≈ 2.3×) — i.e., it ranked the worse option higher. Audit finding #1.
+
+| leverage   | Pts             |
+|------------|-----------------|
+| 0–1.5×     | linear 0 → 8    |
+| 1.5–2.0×   | linear 8 → 17   |
+| 2.0–2.5×   | linear 17 → 25  |
+| 2.5–3.5×   | 25              |
+| 3.5–5.0×   | linear 25 → 12  |
+| 5.0–8.0×   | linear 12 → 0   |
+| > 8.0×     | 0               |
+
+Above ~5× usually means the strike is too far OTM and delta has already collapsed —
+the leverage number looks high but the option is no longer behaving like stock.
+
+#### Extrinsic % — 25 pts
+
+```
+intrinsic     = max(price − strike, 0)
+extrinsic     = max(mid − intrinsic, 0)
+extrinsic_pct = extrinsic / strike × 100
+```
+
+| pct      | Pts                  |
+|----------|----------------------|
+| < 2%     | 25                   |
+| 2–4%     | linear 25 → 19       |
+| 4–6%     | linear 19 → 13       |
+| 6–9%     | linear 13 → 5        |
+| 9–12%    | linear 5 → 0         |
+| > 12%    | 0                    |
+
+> **Audit fix #4:** v2 had Extrinsic% (28) and Annualised Theta% (17) as separate
+> factors. Because `θ_annual ≈ extrinsic / T` and the DTE filter holds T in a narrow
+> band, the two are ~90% correlated. v3 keeps Extrinsic% (more directly meaningful to a
+> buyer) and drops Theta%. Theta is still computed and returned for display.
+
+#### Bid-Ask Spread % — 20 pts
+
+```
+spread_pct = (ask − bid) / mid × 100
+```
+
+| pct      | Pts                  |
+|----------|----------------------|
+| ≤ 2%     | 20                   |
+| 2–4%     | linear 20 → 14       |
+| 4–7%     | linear 14 → 7        |
+| 7–12%    | linear 7 → 1         |
+| > 12%    | 0                    |
+
+#### IV Percentile (inverted) — 10 pts
+
+```
+iv_percentile = % of last 252d where HV < today HV  (HV-derived)
+```
+
+Buyers want low IV. v3 keeps IV Percentile as the single vol-cheapness factor; the v2 ENV
+HV Rank factor was dropped (audit #5 — duplicate of this signal).
+
+| pct      | Pts                  |
+|----------|----------------------|
+| ≤ 25     | 10                   |
+| 25–50    | linear 10 → 7        |
+| 50–75    | linear 7 → 3         |
+| > 75     | 0                    |
+
+### DITM hard filters (gate before scoring)
+
+| Filter | Source | Effect |
+|--------|--------|--------|
+| Delta range | `DITM_CONFIG.delta_range = (0.70, 0.90)` | Strikes outside the gate are excluded |
+| Strike side | strike < current_price | ITM calls only |
+| DTE window | User-supplied min/max DTE (default 90–365) | Expirations outside the window skipped |
+| ITM-only | `strike_filter` excludes OTM strikes | — |
+
+All v2 hard gates that zeroed ENV are removed in v3:
+- HV Rank > 50 → removed (audit #2)
+- Trend < 22 → removed (Trend is now a 25-pt soft factor)
+- Earnings ≤ 7d → replaced by DTE-scaled penalty (audit #9)
+
+### DITM diagnostic-only fields (not scored in v3)
+
+| Field | Notes |
+|-------|-------|
+| `theta_annualized_pct` | Computed and surfaced; was a v2 scored factor (audit #4 redundancy) |
+| `capital_efficiency_pct` | `mid / price × 100` · was v2 scored (replaced by Leverage) |
+| `breakeven_pct` | `(strike + mid − price) / price × 100` — display only |
+| `hv_rank` | Symbol-level HV rank — was v2 ENV factor + hard gate (audit #2/#5) |
+| `gap_3d_pct` | Max overnight gap last 3 sessions — alert flag, not scored |
+
+---
+
 ## Endpoints accepting `max_capital` (CSP only)
 
 | Endpoint                    | Parameter shape                                            |
@@ -329,6 +575,87 @@ cache_key = "{universe}:{top_n}:{min_dte}:{max_dte}:{max_capital}"
 
 See [ADR-0004](docs/adr/0004-scan-result-caching.md) and
 [ADR-0005](docs/adr/0005-csp-capital-constraint.md) for design rationale.
+
+---
+
+## Trade management — roll triggers, targets, and stops
+
+The score ranks **entries**, not outcomes. A high-scoring trade still requires a
+documented exit plan before capital is committed. These rules are not enforced by the
+screener — they are the discipline layer the user is expected to apply.
+
+### Why this section exists
+
+Most assignment damage on otherwise-sound CSP/CC setups does not come from being wrong
+about fair value. It comes from having no roll plan and freezing when the trade moves.
+Writing the rules **before** entry converts an open-ended valuation question ("is this
+strike a fair price to own?") into a finite rules-based plan ("if X happens, I do Y").
+
+### Roll trigger — when to act
+
+For a sold CSP, act when **any** of these fire:
+
+| Trigger | Threshold | Why |
+|---------|-----------|-----|
+| Delta breach | abs(current Δ) ≥ **0.40** | Probability of assignment has roughly doubled vs. the −0.225 entry; the trade has materially moved against you |
+| Price proximity | Spot within **2%** of strike | Gamma is accelerating; small further moves swing P&L sharply |
+| Premium captured | **≥ 50%** of credit captured with **> 21 DTE** remaining | Lock the win and free the capital — diminishing return per remaining day |
+| DTE floor | **≤ 21 DTE** with abs(Δ) ≥ 0.30 | Inside the gamma zone with assignment risk still elevated |
+| Thesis break | Earnings pre-announce / structural support breach / sector-wide vol spike | Discretionary — the original setup no longer applies |
+
+Mirror for sold CC: replace abs(Δ) ≥ 0.40 with Δ ≥ +0.40, and "spot within 2% of strike"
+becomes spot within 2% **above** strike for CCs.
+
+### Roll target — where to roll to
+
+The default mechanic for a defensive roll is **down-and-out** (CSP) or
+**up-and-out** (CC):
+
+1. **Strike**: target the new strike at approximately **−0.225 Δ** in the next monthly
+   expiry — i.e., re-center on the entry ideal at the new spot. Acceptable to roll to a
+   strike between the current spot and the original strike if a credit is achievable;
+   never roll to a tighter strike than current Δ supports.
+2. **Expiry**: prefer the **next monthly** (typically +28 to +35 days from current expiry).
+   Avoid weeklies on the roll — gamma is already the problem.
+3. **Credit discipline**: only roll for a **net credit** (or zero cost). Rolling for a
+   debit converts a defensive maneuver into a directional bet and almost always
+   compounds losses. If no credit is available at any acceptable strike/expiry, the
+   correct action is to **take assignment** and pivot to the wheel (run a CC against the
+   shares).
+4. **Liquidity check**: only roll into chains with bid-ask ≤ 5% and OI ≥ 200 at the new
+   strike. The screener's per-strike OI/Volume factor (15 pts) is partly there to ensure
+   rollability — if the original chain failed it, the trade should not have been entered.
+
+### Stop — when to stop rolling
+
+Rolling indefinitely is how a small loss becomes a structural one. Hard stops:
+
+| Stop | Condition | Action |
+|------|-----------|--------|
+| Strike floor | Roll target would require a strike **> 15%** below original strike (CSP) or **> 15%** above original strike (CC) | **Take assignment.** The thesis has broken; pivot to the underlying. |
+| Roll-count cap | **3 rolls** on the same position | **Take assignment.** Beyond this, you are managing a forced position, not an income trade. |
+| Capital reallocation | Capital tied in defensive rolls **>2× the original CSP capital** | **Close at loss.** Free the capital for a fresh setup with a clean thesis. |
+| No-credit roll | No acceptable strike/expiry combination yields a net credit | **Take assignment** (CSP) or **buy back at loss** (CC, if the underlying isn't held). |
+
+### Pre-entry journal entry
+
+Before placing the order, write down:
+
+```
+Symbol / strike / expiry / credit:
+Roll trigger:                  e.g., abs(Δ) ≥ 0.40 or spot ≤ <X>
+Roll target (if triggered):    e.g., next monthly at −0.225 Δ, must be net credit
+Stop (when to stop rolling):   e.g., strike < <Y> or 3 rolls deep, then take assignment
+Assignment plan:               e.g., wheel — sell CC at +0.225 Δ next month
+```
+
+The presence of this entry — not its specific values — is the discipline check. A trade
+that cannot be specified at this level of detail before entry is a trade that should not
+be placed, regardless of score.
+
+> The screener does not enforce these rules. The 8-factor model ranks the entry; the
+> exit plan is the user's contract with themselves. See ADR-0007 § Open questions for
+> potential future automation (alerting on roll triggers).
 
 ---
 
