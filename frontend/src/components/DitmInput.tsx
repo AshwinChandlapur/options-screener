@@ -53,7 +53,7 @@ const SCORE_LEGEND = [
     formula: 'd1 = (ln(S/K) + (r + 0.5σ²)T) / (σ√T)\ndelta = N(d1)',
   },
   {
-    factor: 'Leverage  (NEW)', weight: 25, detail: '2.5–3.5×=25 · 2.0–2.5×→17–25 · 1.5–2.0×→8–17 · 0–1.5×→0–8 · 3.5–5×→12–25 · >5×→0.',
+    factor: 'Leverage  (NEW)', weight: 25, detail: '2.5–3.5×=25 · 2.0–2.5×→17–25 · 1.5–2.0×→8–17 · 0–1.5×→0–8 · 3.5–5×→25–12 · 5–8×→12–0 · >8×=0.',
     definition: 'leverage = delta × current_price / mid. The headline DITM metric — the actual exposure-per-dollar-deployed that stock-replacement is about.',
     why: 'v2 had no leverage factor. Capital Efficiency (5 pts) used mid/price but ignored delta, so it could rank a 0.95Δ call at 50% cap-eff (leverage ≈ 1.9×) above a 0.70Δ call at 30% cap-eff (leverage ≈ 2.3×) — i.e., the worse option higher. Audit finding #1. v3 adds Leverage as the largest single strike factor (25 pts) and drops Cap Eff entirely.',
     formula: 'leverage = delta × current_price / mid\n0–1.5×    → 0 → 8 pts (linear)\n1.5–2.0×  → 8 → 17\n2.0–2.5×  → 17 → 25\n2.5–3.5×  → 25 (full credit)\n3.5–5.0×  → 25 → 12\n5.0–8.0×  → 12 → 0',
@@ -302,7 +302,7 @@ export function DitmInput({ onScan, onCustom, loading }: Props) {
 
           {/* Hard gates */}
           <div className="score-legend-factors">
-            <div className="score-legend-header">Hard gates — any of these forces ENV = 0 (final ≤ ~50)</div>
+            <div className="score-legend-header">Score modifiers — v3 replaces hard gates with scaled penalties</div>
             {HARD_GATES.map(g => (
               <div key={g.gate} className="score-factor-block">
                 <div className="score-factor-row">
