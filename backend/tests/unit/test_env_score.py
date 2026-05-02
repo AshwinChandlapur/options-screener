@@ -29,7 +29,7 @@ def _neutral_kwargs() -> dict:
         "price_above_sma50": False,
         "sma50_above_sma200": False,
         "dist_from_52w_high_pct": -50.0,
-        "rsi": 50.0,            # CSP: 42–62 sweet spot → 10 pts
+        "rsi": 50.0,            # CSP: 42–62 sweet spot → 20 pts in v3
         "chain_median_oi": 0.0,
         "earnings_within_dte": False,
         "direction": "csp",
@@ -38,27 +38,15 @@ def _neutral_kwargs() -> dict:
     }
 
 
-# --- HV Rank factor (22 pts) -----------------------------------------------
+# --- iv_rank back-compat (dropped in v3) ------------------------------------
 
-@pytest.mark.parametrize(
-    "iv_rank, expected_min",
-    [
-        (80.0, 22.0),   # plateau
-        (95.0, 22.0),   # plateau
-        (60.0, 13.0),   # ramp start
-        (40.0, 6.5),    # ramp middle
-        (20.0, 0.0),    # ramp floor
-        (10.0, 0.0),    # below threshold → 0
-    ],
-)
-def test_env_hv_rank_factor_at_elbows(iv_rank: float, expected_min: float):
-    kw = _neutral_kwargs()
-    kw["iv_rank"] = iv_rank
-    score, _ = compute_env_score(**kw)
-    # 50 RSI also contributes 10 pts; subtract that to isolate HV.
-    isolated = score - 10.0
-    assert isolated >= expected_min - 0.1
-    assert isolated <= expected_min + 22.0  # upper sanity
+def test_env_iv_rank_is_ignored_in_v3():
+    """iv_rank is a back-compat parameter; v3 dropped HV Rank (redundant with
+    strike-side IV Percentile). Changing it must not affect the score."""
+    base = _neutral_kwargs()
+    score_low, _ = compute_env_score(**{**base, "iv_rank": 0.0})
+    score_high, _ = compute_env_score(**{**base, "iv_rank": 95.0})
+    assert score_low == pytest.approx(score_high, abs=0.01)
 
 
 # --- IV/HV ratio factor (28 pts) -------------------------------------------
@@ -89,32 +77,19 @@ def test_env_iv_stale_zeros_iv_hv_factor():
     kw["iv_hv_ratio"] = 2.0
     kw["iv_stale"] = True
     score, _ = compute_env_score(**kw)
-    # Only the 50-RSI sweet spot contributes (10 pts).
-    assert score == pytest.approx(10.0, abs=0.1)
+    # Only the 50-RSI sweet spot contributes (20 pts in v3).
+    assert score == pytest.approx(20.0, abs=0.1)
 
 
-# --- SMA alignment factor (15 pts, categorical) ----------------------------
+# --- SMA alignment back-compat (dropped in v3) ----------------------------
 
-def test_env_sma_full_alignment_awards_15():
-    kw = _neutral_kwargs()
-    kw["price_above_sma50"] = True
-    kw["sma50_above_sma200"] = True
-    score, _ = compute_env_score(**kw)
-    assert score == pytest.approx(10.0 + 15.0, abs=0.1)
-
-
-def test_env_sma_price_only_awards_9():
-    kw = _neutral_kwargs()
-    kw["price_above_sma50"] = True
-    score, _ = compute_env_score(**kw)
-    assert score == pytest.approx(10.0 + 9.0, abs=0.1)
-
-
-def test_env_sma_50_above_200_only_awards_5():
-    kw = _neutral_kwargs()
-    kw["sma50_above_sma200"] = True
-    score, _ = compute_env_score(**kw)
-    assert score == pytest.approx(10.0 + 5.0, abs=0.1)
+def test_env_sma_flags_are_ignored_in_v3():
+    """price_above_sma50 / sma50_above_sma200 are back-compat parameters; v3
+    replaced the SMA factor with the direction-aware 52W Trend curve."""
+    base = _neutral_kwargs()
+    s_neither, _ = compute_env_score(**base)
+    s_both, _ = compute_env_score(**{**base, "price_above_sma50": True, "sma50_above_sma200": True})
+    assert s_neither == pytest.approx(s_both, abs=0.01)
 
 
 # --- Direction-aware divergence: 52W and RSI -------------------------------
@@ -129,8 +104,8 @@ def test_env_direction_diverges_at_52w_proximity():
     kw["direction"] = "cc"
     cc_score, _ = compute_env_score(**kw)
 
-    # CSP: full 10 pts on 52W. CC: only 4 pts.
-    assert csp_score - cc_score == pytest.approx(6.0, abs=0.2)
+    # v3: CSP awards full 25 Trend pts at the 52W high; CC awards 0 (assignment risk).
+    assert csp_score - cc_score == pytest.approx(25.0, abs=0.2)
 
 
 def test_env_direction_diverges_at_rsi_60():
@@ -165,30 +140,21 @@ def test_env_chain_oi_zero_awards_zero():
     kw = _neutral_kwargs()
     kw["chain_median_oi"] = 0.0
     score, _ = compute_env_score(**kw)
-    # No OI contribution; only the 50-RSI plateau.
-    assert score == pytest.approx(10.0, abs=0.1)
+    # No OI contribution; only the 50-RSI plateau (20 pts in v3).
+    assert score == pytest.approx(20.0, abs=0.1)
 
 
-# --- DTE factor (7 pts) ----------------------------------------------------
+# --- dte back-compat (dropped in v3) ----------------------------------------
 
-@pytest.mark.parametrize(
-    "dte, expected_pts",
-    [
-        (35, 7.0),     # sweet spot center
-        (25, 4.2),     # mid tier
-        (50, 4.2),     # mid tier (other side)
-        (16, 2.1),     # outer tier
-        (70, 2.1),     # outer tier (other side)
-        (10, 0.0),     # below threshold
-        (90, 0.0),     # above threshold
-    ],
-)
-def test_env_dte_sweet_spot(dte: int, expected_pts: float):
-    kw = _neutral_kwargs()
-    kw["dte"] = dte
-    score, _ = compute_env_score(**kw)
-    # Subtract 50-RSI plateau (10 pts) to isolate DTE.
-    assert score - 10.0 == pytest.approx(expected_pts, abs=0.1)
+def test_env_dte_is_ignored_in_v3():
+    """dte is a back-compat parameter; v3 dropped the DTE sweet-spot factor
+    (DTE is now enforced as a hard filter upstream, not a soft ENV score)."""
+    base = _neutral_kwargs()
+    score_0, _ = compute_env_score(**{**base, "dte": 0})
+    score_35, _ = compute_env_score(**{**base, "dte": 35})
+    score_90, _ = compute_env_score(**{**base, "dte": 90})
+    assert score_0 == pytest.approx(score_35, abs=0.01)
+    assert score_0 == pytest.approx(score_90, abs=0.01)
 
 
 # --- Earnings penalty ------------------------------------------------------
