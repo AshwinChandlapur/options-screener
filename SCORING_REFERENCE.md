@@ -1,9 +1,16 @@
-# Scoring Reference (CSP & CC)
+# Scoring Reference (CSP & CC) — v3
 
-> Single source of truth for the screener scoring system. Every weight/threshold listed here
-> is mirrored in code by the constants `ENV_WEIGHTS` and `STRIKE_WEIGHTS` in
-> `backend/services/technical_service.py`. The frontend `SCORE_LEGEND` arrays in
-> `CspInput.tsx` / `CcInput.tsx` mirror this document.
+> Single source of truth for the screener scoring system. Every weight and threshold listed
+> here is mirrored in code by `ENV_WEIGHTS` and `STRIKE_WEIGHTS` in
+> [backend/services/scoring/config.py](backend/services/scoring/config.py). The frontend
+> `SCORE_LEGEND` arrays in [CspInput.tsx](frontend/src/components/CspInput.tsx) and
+> [CcInput.tsx](frontend/src/components/CcInput.tsx) mirror this document.
+
+> **v3 lean model** (May 2026, see [ADR-0007](docs/adr/0007-scoring-v3-lean-model.md)) reduced
+> the model from 14 factors to 8 to remove correlated and inert signals identified by the
+> quant-trader diagnostic. Dropped: HV Rank, SMA Alignment, DTE Sweet Spot, EM Buffer, %OTM,
+> S/R Distance. The fields `em_buffer_pct`, `dist_pct`, and `otm_pct` are still computed and
+> returned in the response payload for diagnostic visibility but contribute 0 to the score.
 
 ## Final score formula
 
@@ -11,7 +18,7 @@
 final_score = 0.4 × env_score + 0.6 × strike_score
 ```
 
-Tiers (unchanged from previous revision; recalibration deferred):
+Tiers (unchanged from v2):
 
 | Tier     | Range  | Color  | Meaning |
 |----------|--------|--------|---------|
@@ -25,104 +32,76 @@ Both `env_score` and `strike_score` cap at 100, so `final_score` ∈ [0, 100].
 
 ## ENV score (max 100)
 
-`compute_env_score(..., direction='csp'|'cc', dte=int|None, iv_stale=False)` in
-`backend/services/technical_service.py`.
+`compute_env_score(..., direction='csp'|'cc', iv_stale=False)` in
+[backend/services/scoring/env.py](backend/services/scoring/env.py).
 
 | Factor             | Weight | CSP / CC differs? |
 |--------------------|-------:|:-----------------:|
-| HV Rank            |  22    | no                |
-| IV / HV Ratio      |  28    | no                |
-| SMA Alignment      |  15    | no                |
-| 52W High Distance  |  10    | **yes**           |
-| RSI(14)            |  10    | **yes**           |
-| Chain Median OI    |   8    | no                |
-| DTE Sweet Spot     |   7    | no                |
+| IV / HV Ratio      |  35    | no                |
+| Trend (52W dist)   |  25    | **yes**           |
+| RSI(14)            |  20    | **yes**           |
+| Chain Median OI    |  20    | no                |
 | Earnings in DTE    | −15    | no (penalty)      |
 | **Total**          | **100**| (Earnings is a deductible penalty) |
 
-### HV Rank (22 pts)
-
-> **Note:** Previously labeled "IV Rank" in the UI but always computed from 30-day HV ranked
-> over 252 days (true ATM IV history is not stored). Renamed to "HV Rank" to reflect what is
-> actually measured. Behavior unchanged besides rescale.
-
-```
-hv_rank = (HV_today − HV_min_252) / (HV_max_252 − HV_min_252) × 100
-HV      = std(log(Closeₜ / Closeₜ₋₁), 30d) × √252
-```
-
-| Bucket       | Pts            |
-|--------------|----------------|
-| < 20         | 0              |
-| 20–40        | linear → 6.6   |
-| 40–60        | linear → 13.2  |
-| 60–80        | linear → 18.33 |
-| ≥ 80         | 22             |
-
-### IV / HV Ratio (28 pts)
+### IV / HV Ratio (35 pts)
 
 ```
 iv_hv_ratio = yfinance_IV / HV_30d
 ```
 
-Recalibrated in v2: upper full-credit threshold compressed from 1.7 → 1.3. In a trending
-bull market, IV/HV is structurally 0.9–1.15; the prior 1.7 threshold was calibrated for
-post-spike/crisis conditions and earned only 3–9 pts in normal trending environments.
+Measures whether options are priced rich or cheap relative to actual recent movement.
+IV > HV is the seller's edge. Recalibrated in v3 from 28 → 35 pts: with HV Rank dropped,
+IV/HV becomes the primary volatility signal.
 
-| Bucket      | Pts              |
-|-------------|------------------|
-| < 0.8       | 0                |
-| 0.8–1.0     | linear → 4       |
-| 1.0–1.1     | linear 4 → 10    |
-| 1.1–1.2     | linear 10 → 18   |
-| 1.2–1.3     | linear 18 → 28   |
-| ≥ 1.3       | 28               |
+| Bucket      | Pts                |
+|-------------|--------------------|
+| < 0.8       | 0                  |
+| 0.8–1.0     | linear → 5         |
+| 1.0–1.1     | linear 5 → 12.5    |
+| 1.1–1.2     | linear 12.5 → 22.5 |
+| 1.2–1.3     | linear 22.5 → 35   |
+| ≥ 1.3       | 35                 |
 
-**Stale-IV flag:** trigger is `(IV is NaN) or (IV ≤ 0.01)`.
-When `iv_stale=True`, IV/HV pts are forced to 0 and the row is annotated with
-`iv_stale: true` in the API response so the UI can surface the warning.
+**Stale-IV flag:** trigger is `(IV is NaN) or (IV ≤ 0.01)`. When `iv_stale=True`, IV/HV pts
+are forced to 0 and the row is annotated with `iv_stale: true` in the API response.
 
-### SMA Alignment (15 pts)
+### Trend / 52W High Distance (25 pts) — direction-aware
 
-| Condition                    | Pts |
-|------------------------------|-----|
-| Price > SMA50 > SMA200       | 15  |
-| Price > SMA50 only           |  9  |
-| SMA50 > SMA200 only          |  5  |
-| else                         |  0  |
-
-### 52W High Distance (10 pts) — direction-aware
+Replaces the v2 SMA Alignment (15) + 52W (10) into a single direction-aware Trend factor.
+SMA was a redundant signal under the lean model; the 52W direction-aware curve captures
+the same trend information with smooth math.
 
 ```
 dist       = (Closeₜ − max(Close, 252d)) / max(Close, 252d) × 100
 pct_below  = abs(min(dist, 0))
 ```
 
-**CSP curve** (rewards proximity to the high — uptrend):
-
-> Bug fix: the 5–10% segment previously started at 7.33 pts (creating a 2.67-pt cliff
-> at exactly 5% below the 52W high). The segment now correctly starts at 10.0 pts and
-> decays continuously through 7.33 at 10%, then to 0 at 30%.
+**CSP curve** (rewards strength near the 52W high — uptrend reduces put assignment risk):
 
 | pct_below     | Pts                          |
 |---------------|------------------------------|
-| ≤ 5%          | 10                           |
-| 5–10%         | linear 10 → 7.33             |
-| 10–20%        | linear 7.33 → 4.67           |
-| 20–30%        | linear 4.67 → 0              |
+| ≤ 5%          | 25                           |
+| 5–10%         | linear 25 → 18.333           |
+| 10–20%        | linear 18.333 → 11.667       |
+| 20–30%        | linear 11.667 → 0            |
 | > 30%         | 0                            |
 
-**CC curve** (rewards mild consolidation, penalizes near-high — assignment risk):
+**CC curve** (penalizes near-high — assignment risk; rewards 5–15% consolidation):
 
-| pct_below     | Pts            |
-|---------------|----------------|
-| ≤ 5%          | 4              |
-| 5–15%         | linear 4 → 10  |
-| 15–25%        | linear 10 → 6  |
-| 25–35%        | linear 6 → 2   |
-| > 35%         | 0              |
+| pct_below     | Pts                          |
+|---------------|------------------------------|
+| ≤ 5%          | **0** (was 4 in v2 — fix #5) |
+| 5–15%         | linear 0 → 25                |
+| 15–25%        | linear 25 → 10               |
+| 25–35%        | linear 10 → 0                |
+| > 35%         | 0                            |
 
-### RSI(14) (10 pts) — direction-aware
+> **Cliff fix #5:** in v2 the CC ≤5% bucket paid 4 pts (40% of the factor cap), which
+> contradicted the assignment-risk thesis for call writers. v3 zeroes this bucket so
+> near-52W-high names are correctly penalized.
+
+### RSI(14) (20 pts) — direction-aware
 
 Wilder-smoothed RSI(14):
 
@@ -137,180 +116,138 @@ RSI      = 100 − 100 / (1 + avg_gain / avg_loss)
 
 | Bucket        | Pts                |
 |---------------|--------------------|
-| 42–62         | 10                 |
-| 35–42         | linear → 6         |
-| 62–75         | linear → 0         |
-| 30–35         | 2                  |
-| < 30 or > 75  | 0                  |
+| 42–62         | 20                 |
+| 35–42         | linear 0 → 20      |
+| 62–75         | linear 20 → 0      |
+| < 35 or > 75  | 0                  |
 
-**CC curve** (sweet spot shifted lower, ceiling decay steeper — overheated names blow
-through call strikes):
+> **Cliff fix #2:** v2 awarded a flat 2 pts for RSI 30–35, then jumped to 6 pts at exactly
+> RSI=35 (a 4-pt cliff). v3 removes the 30–35 floor so the 35–42 ramp starts continuously
+> at 0.
+
+**CC curve** (sweet spot shifted lower; ceiling extended from 70 to 75):
 
 | Bucket        | Pts                |
 |---------------|--------------------|
-| 38–58         | 10                 |
-| 30–38         | linear 4 → 10      |
-| 58–70         | linear 10 → 0      |
-| < 30 or > 70  | 0                  |
+| 38–58         | 20                 |
+| 30–38         | linear 0 → 20      |
+| 58–75         | linear 20 → 0      |
+| < 30 or > 75  | 0                  |
 
-### Chain Median OI (8 pts)
+> **Audit finding #8:** the v2 CC ceiling decay 58→70 was knife-edged, sending NVDA-style
+> momentum names with RSI 72 to 0 pts. v3 extends the upper bound to 75 so AAPL/MSFT-style
+> names in normal trends earn meaningful points.
+
+### Chain Median OI (20 pts)
 
 Median open interest across the working-delta band (puts: 0.10 < |Δ| < 0.40, calls
 0.10 < Δ < 0.40):
 
 ```
-pts = min(log10(OI) / log10(5000), 1.0) × 8
+pts = min(log10(OI) / log10(5000), 1.0) × 20
 ```
 
-Effectively a circuit-breaker for illiquid chains; saturates near 8 for any liquid name.
+A circuit-breaker for illiquid chains. Saturates near 20 for any liquid name; gives
+small-cap chains partial credit on a log scale. Rescaled from 8 in v2.
 
-### DTE Sweet Spot (7 pts) — new
+### Earnings penalty (−15 pts)
 
-Theta decay accelerates non-linearly approaching expiry; the 30–45 DTE band balances
-gamma exposure against decay rate.
-
-| DTE                            | Pts |
-|--------------------------------|----:|
-| 30 ≤ DTE ≤ 45                  | 7.0 |
-| 21–30 or 45–60                 | 4.2 |
-| 14–21 or 60–75                 | 2.1 |
-| < 14 or > 75 (or unknown)      | 0   |
-
-### Earnings in DTE (−15 pts)
+Binary flag — `True` if the company's next earnings announcement falls within the option's
+DTE window. Applied as a flat deduction on top of the env score.
 
 ```
-earnings_within_dte = 0 ≤ (earnings_date − today).days ≤ DTE
+earnings_within_dte = True if 0 ≤ (earnings_date − today).days ≤ DTE
+Source: yfinance calendarEvents.earnings
 ```
-
-If true, subtract 15 from the env score (can produce negative env contributions).
 
 ---
 
 ## CSP Strike score (max 100)
 
-`compute_csp_strike_score(..., credit=float|None)` in `backend/services/technical_service.py`.
+`compute_csp_strike_score(...)` in [backend/services/scoring/strike.py](backend/services/scoring/strike.py).
 
-| Factor             | Weight |
-|--------------------|-------:|
-| Delta              |  15    |
-| Dist vs Support    |  18    |
-| Exp Move Buffer    |  20    |
-| % OTM from Spot    |   9    |
-| Bid-Ask Spread     |  23    |
-| OI / Volume        |   5    |
-| Annualized ROC     |  10    |
-| **Total**          | **100**|
+| Factor               | Weight |
+|----------------------|-------:|
+| Δ (delta position)   |  20    |
+| Bid-Ask Spread %     |  30    |
+| OI / Volume (per strike) | 15 |
+| Annualized ROC       |  35    |
+| **Total**            | **100**|
 
-### Delta (15 pts)
+### Δ (delta position) — 20 pts
 
-Black-Scholes put delta. Sweet spot is −0.20 → −0.25 (≈ 20–25% ITM probability).
-
-| Δ band                 | Pts    |
-|------------------------|--------|
-| −0.20 → −0.25          | 15     |
-| ±1 absolute band       | 10     |
-| −0.10 → −0.15          | 5      |
-| < −0.30                | 5.83   |
-
-### Dist vs Support (18 pts)
-
-Volume-profile support, 6-month (126-day) lookback. Distance = nearest support level
-below strike.
-
-| Condition                              | Pts        |
-|----------------------------------------|------------|
-| ≤ 5% below strike                      | 18 → 10    |
-| 5–10% below strike                     | 10 → 0     |
-| > 10% below strike                     | 0          |
-| All support above strike (uptrend)     | 7 (bonus)  |
-
-### Exp Move Buffer (20 pts)
-
-Recalibrated in v2: reference boundary changed from 1× EM to **0.5× EM**.
-At the target delta (−0.225), the put strike sits approximately 0.25 EM units *outside*
-the 0.5× boundary, earning full 20 pts. Under the prior 1× EM reference, the same
-strike sat 0.25 EM units *inside* the boundary and earned 0 pts — a mathematical
-certainty regardless of IV level (see ADR-0006).
+Symmetric bell around `ideal_delta = -0.225`. The CSP delta gate
+`delta_range=(-0.35, -0.10)` is enforced by the candidate filter upstream; this factor
+awards points based on offset from the ideal.
 
 ```
-EM              = S × σ × √(DTE/365)
-EM_half_lower   = S − 0.5 × EM        (reference boundary)
-sigmas_outside  = (EM_half_lower − strike) / EM
+offset = abs(delta - (-0.225))
 ```
 
-| sigmas_outside       | Pts |
-|----------------------|----:|
-| ≥ 0.2σ outside       | 20  |
-| 0 to 0.2σ outside    | 13  |
-| −0.1 to 0σ           |  5  |
-| deeper inside        |  0  |
+| offset            | Pts |
+|-------------------|----:|
+| ≤ 0.025  (Δ in [-0.25, -0.20]) | 20 |
+| ≤ 0.075  (gate inner band)     | 13 |
+| ≤ 0.125  (gate outer band)     |  7 |
+| outside the gate               |  0 |
 
-CC uses the symmetric upper boundary: `EM_half_upper = S + 0.5 × EM`.
+> **Audit fix #7:** v2 awarded the aggressive wing (Δ < -0.30) 5.83 pts but the conservative
+> wing (-0.15 < Δ ≤ -0.10) only 5.0 pts despite equal distance from the ideal. v3 is
+> symmetric — both wings score equally at the same offset.
 
-### % OTM from Spot (9 pts)
-
-```
-otm_pct = (S − K) / S × 100
-```
-
-| Bucket    | Pts  |
-|-----------|------|
-| ≥ 15%     | 9    |
-| ≥ 10%     | 6.75 |
-| ≥ 5%      | 4.5  |
-| ≥ 2%      | 1.5  |
-| < 2%      | 0    |
-
-### Bid-Ask Spread (23 pts)
+### Bid-Ask Spread % — 30 pts
 
 ```
 spread_pct = (ask − bid) / mid × 100   where mid = (bid + ask) / 2
 ```
 
-| Bucket    | Pts   |
-|-----------|-------|
-| ≤ 1%      | 23    |
-| ≤ 3%      | 15.33 |
-| ≤ 5%      | 8.52  |
-| ≤ 8%      | 2.13  |
-| > 8%      | 0     |
+Lower spread = better execution. Wide spreads erode realized premium on entry and every roll.
 
-### OI / Volume (5 pts)
+| Bucket    | Pts            |
+|-----------|----------------|
+| ≤ 1%      | 30             |
+| 1–3%      | linear 30 → 20 |
+| 3–5%      | linear 20 → 11 |
+| 5–8%      | linear 11 → 3  |
+| > 8%      | 0              |
+
+Rescaled from 23 in v2.
+
+### OI / Volume (per strike) — 15 pts
 
 Per-strike circuit-breaker. Uses volume during US market hours (9:30–16:00 ET weekday),
 otherwise falls back to openInterest.
 
-| Bucket      | Pts                      |
-|-------------|-------------------------:|
-| ≥ 1000      | 5                        |
-| 500–1000    | linear 3.5 → 5           |
-| 200–500     | linear 2 → 3.5           |
-| 100–200     | linear 0 → 2             |
-| < 100       | 0                        |
+| Bucket      | Pts            |
+|-------------|----------------|
+| ≥ 1000      | 15             |
+| 500–1000    | linear 10.5 → 15 |
+| 200–500     | linear 6 → 10.5 |
+| 100–200     | linear 0 → 6   |
+| < 100       | 0              |
 
-Note: the 100–200 range awards partial credit (linear ramp) to borderline-liquid
-strikes. The doc previously stated flat 0 below 200; the backend implementation
-has always interpolated in this range — this entry corrects the documentation.
+Rescaled from 5 in v2.
 
-### Annualized ROC (10 pts)
+### Annualized ROC — 35 pts
 
 ```
 capital_per_share = strike − credit
 ROC               = (credit / capital_per_share) × (365 / DTE) × 100
 ```
 
-Recalibrated in v2: full-credit threshold lowered from 30% → 20%. The prior 30%
-threshold was only achievable on illiquid chains that simultaneously failed the Bid-Ask
-factor. At the target delta (−0.225), liquid large-caps earn 8–17% annualized ROC;
-20% for full credit makes the factor meaningful for the intended universe.
+For CSP, capital at risk = strike − credit (cash secured minus premium received).
 
-| ROC %       | Pts            |
-|-------------|----------------|
-| ≥ 20%       | 10             |
-| 14–20%      | linear 7 → 10  |
-| 8–14%       | linear 4 → 7   |
-| 4–8%        | linear 1 → 4   |
-| < 4%        | 0              |
+| ROC %       | Pts                  |
+|-------------|----------------------|
+| ≥ 20%       | 35                   |
+| 14–20%      | linear 24.5 → 35     |
+| 8–14%       | linear 14 → 24.5     |
+| 4–8%        | linear 3.5 → 14      |
+| 2–4%        | linear 0 → 3.5       |
+| < 2%        | 0                    |
+
+> **Cliff fix #6:** v2 awarded a flat 1 pt at ROC = 4 then jumped to 0 below. v3 adds a
+> 2–4% ramp for continuous behavior.
 
 The API response exposes the raw value as `roc_annualized`.
 
@@ -318,134 +255,71 @@ The API response exposes the raw value as `roc_annualized`.
 
 ## CC Strike score (max 100)
 
-`compute_cc_strike_score(..., credit=float|None)` in `backend/services/technical_service.py`.
+`compute_cc_strike_score(...)` in [backend/services/scoring/strike.py](backend/services/scoring/strike.py).
 
 | Factor               | Weight |
 |----------------------|-------:|
-| Delta                |  15    |
-| Dist vs Resistance   |  18    |
-| Exp Move Buffer      |  20    |
-| % OTM from Spot      |   9    |
-| Bid-Ask Spread       |  23    |
-| OI / Volume          |   5    |
-| Annualized ROC       |  10    |
+| Δ (delta position)   |  20    |
+| Bid-Ask Spread %     |  30    |
+| OI / Volume          |  15    |
+| Annualized ROC       |  35    |
 | **Total**            | **100**|
 
-### Delta (15 pts)
+### Divergences from CSP
 
-Black-Scholes call delta. Sweet spot is +0.20 → +0.25.
+The CC scorer uses the **same 8-factor structure, the same weights, and the same curves**
+as CSP. Only two inputs differ:
 
-| Δ band                 | Pts    |
-|------------------------|--------|
-| +0.20 → +0.25          | 15     |
-| ±1 absolute band       | 10     |
-| +0.10 → +0.15          | 5      |
-| > +0.30                | 5.83   |
+1. **Δ ideal**: `+0.225` (sign-flipped from CSP). Symmetric bell math is identical.
+2. **ROC capital basis**: `current_price − credit`. The CC writer's capital at risk is the
+   value of the underlying held to write the call, not the strike. The ROC scoring curve
+   is otherwise identical to CSP.
 
-### Dist vs Resistance (18 pts) — unchanged
-
-Volume-profile resistance, 6-month (126-day) lookback.
-
-```
-nearest_R = min(resistances above current price)
-gap_pct   = (nearest_R − strike) / strike × 100   (negative = R below strike)
-```
-
-| Condition                                   | Pts        |
-|---------------------------------------------|------------|
-| gap ≤ −20% (uncharted territory)            | 3          |
-| −20% < gap ≤ −10%                           | 3 → 18     |
-| −10% < gap ≤ 0%                             | 18         |
-| All R ≤ strike, gap within 10% (ceiling stack) | +5 bonus |
-| 0% < gap ≤ 5%                               | 18 → 10    |
-| 5% < gap ≤ 10%                              | 10 → 0     |
-| gap > 10%                                   | 0          |
-
-### Exp Move Buffer (20 pts)
-
-```
-EM             = S × σ × √(DTE/365)
-EM_upper       = S + EM
-sigmas_outside = (strike − EM_upper) / EM
-```
-
-Same tier table as CSP but oriented to upside ceiling.
-
-### % OTM from Spot (9 pts)
-
-```
-otm_pct = (K − S) / S × 100
-```
-
-Same tier table as CSP.
-
-### Bid-Ask Spread (23 pts)
-
-Same as CSP.
-
-### OI / Volume (5 pts)
-
-Same as CSP.
-
-### Annualized ROC (10 pts) — new
-
-CC capital basis = current price (simplification — does not track per-position cost basis).
-
-```
-capital_per_share = current_price − credit
-ROC               = (credit / capital_per_share) × (365 / DTE) × 100
-```
-
-Tier table same as CSP.
+All other factors (Bid-Ask, OI/Volume) are direction-agnostic and share the same code path
+via shared helpers in `strike.py`.
 
 ---
 
-## Capital constraint (CSP only)
+## Diagnostic-only fields (not scored in v3)
 
-The `maxCapital` parameter caps the collateral you are willing to commit per contract.
-It is a **pre-scoring gate, not a post-hoc filter**: any strike that exceeds the cap is
-skipped before scoring starts, so it never appears in results and does not inflate error
-counts.
+The following fields continue to be computed and returned in the API response so the
+frontend table columns remain populated, but they contribute **0 to the score**:
 
-**Collateral formula:**
+| Field           | What it shows |
+|-----------------|---------------|
+| `em_buffer_pct` | (0.5×EM-referenced) sigmas_outside × 100. Positive = strike outside the 0.5σ boundary. |
+| `otm_pct`       | Raw `(S − K) / S × 100` for CSP, `(K − S) / S × 100` for CC. |
+| `dist_pct`      | `None` in v3 (S/R was dropped). Kept as nullable field for response back-compat. |
 
-```
-collateral = strike × 100   (one standard-lot contract)
-```
+These are visible in the strike table for context but do not influence ranking. ADR-0007
+captures the rationale.
 
-A strike is evaluated only when:
+---
 
-```
-strike × 100 ≤ maxCapital
-```
+## Hard filters (gate before scoring)
 
-### Defaults and validation
+These constraints filter candidates *before* scoring, not as scored factors:
 
-| Property   | Value                                          |
-|------------|------------------------------------------------|
-| Default    | `None` — no constraint, all strikes evaluated  |
-| Floor      | $100 (rejects values below minimum 1-lot contract) |
-| Applies to | CSP only — CC and DITM are unaffected          |
+| Filter | Source | Effect |
+|--------|--------|--------|
+| Delta gate | `CSP_CONFIG.delta_range = (-0.35, -0.10)` / `CC_CONFIG.delta_range = (0.10, 0.35)` | Strikes outside the gate are excluded |
+| DTE window | User-supplied `min_dte` / `max_dte` | Expirations outside the window skipped |
+| Capital gate (CSP only) | User-supplied `max_capital` | Strikes requiring `strike × 100 > max_capital` skipped (after OI aggregation — see [ADR-0005](docs/adr/0005-csp-capital-constraint.md)) |
+| Stale IV | IV is NaN or ≤ 0.01 | IV/HV pts forced to 0 (row not dropped, just flagged) |
 
-### Example
+> **Future work** (not in v3): a hard filter on EM Buffer (reject candidates with
+> `sigmas_outside < 0` against the 0.5×EM boundary) was considered to replace the dropped
+> EM Buffer scored factor. Deferred — the delta gate already excludes most strikes that
+> would fail this check at the configured ideal_delta. See ADR-0007 § Open questions.
 
-With `maxCapital = 8000`, only strikes ≤ $80 are evaluated:
+---
 
-```
-$80 × 100 = $8,000 ≤ $8,000   ✓ evaluated
-$81 × 100 = $8,100 > $8,000   ✗ skipped
-```
-
-### Endpoints
-
-`maxCapital` is accepted by both CSP endpoints:
+## Endpoints accepting `max_capital` (CSP only)
 
 | Endpoint                    | Parameter shape                                            |
 |-----------------------------|------------------------------------------------------------|
 | `POST /api/screener/csp`    | JSON body field `maxCapital` (float, optional)             |
 | `GET /api/screener/csp/scan`| Query parameter `max_capital` (float, optional, `ge=100`)  |
-
-### Cache behaviour
 
 The `/csp/scan` cache key includes `max_capital`:
 
@@ -453,60 +327,48 @@ The `/csp/scan` cache key includes `max_capital`:
 cache_key = "{universe}:{top_n}:{min_dte}:{max_dte}:{max_capital}"
 ```
 
-Scans with different `max_capital` values are stored as separate entries and do not
-pollute each other. A scan with no capital constraint and one with `max_capital=8000`
-each maintain an independent 30-minute TTL entry. See
-[ADR-0004](docs/adr/0004-scan-result-caching.md) and
+See [ADR-0004](docs/adr/0004-scan-result-caching.md) and
 [ADR-0005](docs/adr/0005-csp-capital-constraint.md) for design rationale.
 
 ---
 
-## What changed from the prior revision
+## What changed in v3 (vs v2)
 
-1. **HV Rank rename** — was "IV Rank" but always derived from HV; now honestly labeled.
-   Rescaled 30 → 22 to make room for new factors.
-2. **IV / HV bumped** — 25 → 28; gives the genuine IV-vs-realized signal more weight.
-3. **Stale-IV trigger fixed** — `IV < 0.15` (false positive on KO etc.) → `NaN or ≤ 0.01`.
-   Now also surfaces an `iv_stale` flag in the API response.
-4. **52W direction-aware** — CSP keeps reward-near-high curve (rescaled 15 → 10).
-   CC gets a smooth-ramp consolidation curve (4 → 10 → 6 → 2 → 0) so near-high names
-   correctly score lower for call selling.
-5. **RSI direction-aware** — CC sweet spot moves from 42–62 to 38–58, ceiling decay
-   sharpens (10 → 0 over 12 RSI pts vs 13).
-6. **DTE Sweet Spot** — new 7-pt env factor rewarding the 30–45 DTE band where theta
-   acceleration peaks.
-7. **Chain OI bumped** — 5 → 8; gives small-cap chains more discrimination room.
-8. **Δ rescale** — 18 → 15.
-9. **Bid-Ask rescale** — 27 → 23.
-10. **% OTM rescale** — 12 → 9.
-11. **Annualized ROC** — new 10-pt strike factor; previously the strike score scored
-    safety and execution but never the actual yield.
+ADR-0007 captures the full rationale; this is the changelog summary.
 
-ENV totals to exactly 100 (22+28+15+10+10+8+7). Strike totals to exactly 100
-(15+18+20+9+23+5+10). Confirmed by `assert sum(ENV_WEIGHTS.values()) == 100` and
-`assert sum(STRIKE_WEIGHTS.values()) == 100` in the smoke test.
+**Dropped factors (6 total):**
+1. **HV Rank (22 pts)** — correlated with IV/HV; structurally undervalued low-vol names
+   (KO, PG, JNJ).
+2. **SMA Alignment (15 pts)** — collapsed into Trend; redundant signal.
+3. **DTE Sweet Spot (7 pts)** — should be a hard filter (already enforced via min/max DTE),
+   not a scored factor.
+4. **EM Buffer (20 pts)** — deterministic at the configured ideal_delta; inert signal that
+   added redundancy with Δ and %OTM. Still computed for diagnostic display.
+5. **%OTM from Spot (9 pts)** — deterministic function of Δ and IV; redundant with Δ.
+   Still computed for diagnostic display.
+6. **S/R Distance (18 pts)** — fragile swing-detection heuristic; high implementation cost
+   for low signal value.
 
-### v2 recalibration (quant-trader diagnostic)
+**Rescaled factors:**
+- IV/HV: 28 → 35 (primary vol signal)
+- Trend (52W direction-aware): 10 → 25 (absorbs SMA's role)
+- RSI: 10 → 20
+- Chain OI: 8 → 20
+- Δ: 15 → 20 (now symmetric — fixes audit #7)
+- Bid-Ask: 23 → 30
+- OI/Volume: 5 → 15
+- ROC: 10 → 35
 
-12. **IV/HV upper threshold 1.7 → 1.3** — trending bull markets sustain IV/HV 1.1–1.3
-    structurally; the prior 1.7 ceiling earned only 3–9 pts in normal conditions and
-    essentially never fired. New curve: 0.8–1.0 → 4, 1.0–1.1 → 10, 1.1–1.2 → 18,
-    1.2–1.3 → 28, ≥1.3 = 28.
-13. **52W CSP curve bug fix** — the 5–10% segment previously started at 7.33 pts
-    (discontinuous drop from 10 pts at 5%). Corrected to a smooth linear decay:
-    5–10% → 10→7.33, 10–20% → 7.33→4.67, 20–30% → 4.67→0.
-14. **EM Buffer reference 1×EM → 0.5×EM** — at the target delta (−0.225), the put
-    strike sits ~0.25 EM units inside the 1×EM lower bound, earning 0 pts regardless
-    of IV level. Changing the reference boundary to 0.5×EM puts the same strike 0.25 EM
-    units *outside* the boundary, earning full 20 pts. See ADR-0006.
-15. **ROC full-credit threshold 30% → 20%** — at target delta on liquid large-caps,
-    annualized ROC is typically 8–17%. The prior 30% floor was only achievable on
-    illiquid chains that simultaneously failed Bid-Ask. The factor was effectively
-    inert. New tiers: ≥20%=10, 14–20%→7–10, 8–14%→4–7, 4–8%→1–4, <4%=0.
-16. **OI/Volume doc corrected** — backend has always interpolated linearly in the
-    100–200 range; documentation incorrectly stated flat 0 below 200. Table now shows
-    the 100–200 ramp explicitly.
-17. **`stable_csp` universe added** — 29 large-cap names across financials, payment
-    networks, consumer defensives/staples, industrials, and healthcare. Curated for
-    tight bid-ask spreads, structurally stable RSI (40–65), and IV/HV typically 1.0–1.3.
-    See `backend/services/universe.py`.
+**Cliff fixes (in surviving curves):**
+- **#2 RSI-CSP**: removed 30–35 floor of 2 pts that created a 4-pt cliff at RSI=35.
+- **#5 CC ≤5% near-high**: dropped from 4 pts to 0 (full penalty for assignment risk).
+- **#6 ROC**: added 2–4% ramp to remove the small cliff at ROC=4.
+- **#8 CC RSI ceiling**: extended upper bound from 70 to 75 for smoother decay.
+
+**Audit-driven fixes:**
+- **#7 Δ asymmetry**: aggressive and conservative wings now score equally at the same
+  offset from ideal.
+- **44%-redundancy stack**: removing EM Buffer + %OTM eliminates the v2 issue where Δ +
+  EM + %OTM all measured the same delta-position signal at the configured ideal_delta.
+
+**Weight integrity:** ENV totals 100 (35+25+20+20). Strike totals 100 (20+30+15+35).

@@ -1,15 +1,33 @@
 """
-Strike-quality scorers + final-blend helpers for the CSP and CC screeners.
+Strike-quality scorers + final-blend helpers — v3 lean model (see ADR-0007).
 
-Both scorers share the same factor structure (Δ, distance to S/R, EM, OTM, BA,
-LQ, ROC) but with direction-specific math: CSP wants short puts below strong
-support, CC wants short calls below stiff resistance.
+Both CSP and CC scorers share the same factor structure (Δ, BA, LQ, ROC) with
+direction-specific math: CSP uses negative deltas with capital basis = strike,
+CC uses positive deltas with capital basis = current_price.
 
-DITM strike scoring is intentionally *not* in this module yet — the live
-implementation lives inline in `services.ditm_service.py` (its factor mix
-is fundamentally different: extrinsic % matters more than EM, no S/R
-distance factor). Phase 4 of the screener refactor will migrate it here
-once `ScreenerConfig` exists (see ADR-0002).
+v3 reduced Strike from 7 factors to 4 (Δ 20 + BA 30 + LQ 15 + ROC 35 = 100).
+Dropped factors:
+- EM Buffer: deterministic at the configured ideal_delta — adds no signal
+  beyond Δ position. Removing it fixes the 44%-redundancy stack identified
+  in the quant audit (Δ + EM + %OTM all measured the same delta-position).
+- %OTM from Spot: deterministic function of Δ + IV; redundant with Δ.
+- S/R Distance: fragile swing-detection heuristic; high implementation cost
+  for low signal value.
+
+The fields `em_buffer_pct`, `dist_pct`, and `otm_pct` continue to be computed
+and returned in the response payload so the frontend table columns remain
+populated for diagnostic visibility — they simply contribute 0 to the score.
+
+Direction-aware divergences (kept):
+- Δ ideal: CSP −0.225, CC +0.225 (sign flip, symmetric bell)
+- ROC capital basis: CSP = strike − credit, CC = current_price − credit
+
+Legacy parameters `vol_support_*` (CSP) / `vol_resistance_*` (CC) and
+`iv_used` are accepted in the signature for back-compat but no longer affect
+the score. They will be removed in a future cleanup once all call sites are
+updated.
+
+DITM strike scoring is intentionally *not* in this module yet.
 """
 from __future__ import annotations
 
@@ -23,6 +41,99 @@ __all__ = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Shared scorer fragments (identical math for CSP and CC; only inputs differ)
+# ---------------------------------------------------------------------------
+
+
+def _score_bid_ask(spread_pct: float | None) -> float:
+    """Bid-Ask Spread % — 30 pts. Lower spread = better execution."""
+    if spread_pct is None or math.isnan(spread_pct):
+        return 0.0
+    if spread_pct <= 1.0:
+        return 30.0
+    if spread_pct <= 3.0:
+        return 20.0 + (3.0 - spread_pct) / 2.0 * 10.0     # 30 → 20
+    if spread_pct <= 5.0:
+        return 11.0 + (5.0 - spread_pct) / 2.0 * 9.0      # 20 → 11
+    if spread_pct <= 8.0:
+        return 3.0 + (8.0 - spread_pct) / 3.0 * 8.0       # 11 → 3
+    return 0.0
+
+
+def _score_liquidity(market_open: bool, volume: int, open_interest: int) -> tuple[float, int]:
+    """OI / Volume circuit-breaker — 15 pts. Returns (pts, liquidity_count_used)."""
+    liquidity_count = volume if (market_open and volume > 0) else open_interest
+    if liquidity_count >= 1000:
+        p = 15.0
+    elif liquidity_count >= 500:
+        p = 10.5 + (liquidity_count - 500) / 500.0 * 4.5   # 10.5 → 15.0
+    elif liquidity_count >= 200:
+        p = 6.0 + (liquidity_count - 200) / 300.0 * 4.5    # 6.0 → 10.5
+    elif liquidity_count >= 100:
+        p = (liquidity_count - 100) / 100.0 * 6.0          # 0 → 6.0
+    else:
+        p = 0.0
+    return p, liquidity_count
+
+
+def _score_roc(roc: float) -> float:
+    """Annualized ROC — 35 pts. Cliff-fixed (#6): adds 2–4% ramp."""
+    if roc >= 20:
+        return 35.0
+    if roc >= 14:
+        return 24.5 + (roc - 14) / 6.0 * 10.5    # 24.5 → 35.0
+    if roc >= 8:
+        return 14.0 + (roc - 8) / 6.0 * 10.5     # 14.0 → 24.5
+    if roc >= 4:
+        return 3.5 + (roc - 4) / 4.0 * 10.5      # 3.5 → 14.0
+    if roc >= 2:
+        return (roc - 2) / 2.0 * 3.5             # 0 → 3.5 (cliff fix)
+    return 0.0
+
+
+def _score_delta_symmetric(delta: float, ideal: float) -> float:
+    """Δ symmetric bell — 20 pts. Fixes audit #7 asymmetry between wings.
+
+    Sweet band ±0.025 around ideal = full credit; widens 13 → 7 → 0 by 0.05
+    bands. The legacy gate (-0.35 to -0.10 for CSP, mirrored for CC) is enforced
+    by the candidate filter upstream; this scorer awards 0 outside ±0.125.
+    """
+    if math.isnan(delta):
+        return 0.0
+    offset = abs(delta - ideal)
+    if offset <= 0.025:
+        return 20.0
+    if offset <= 0.075:
+        return 13.0
+    if offset <= 0.125:
+        return 7.0
+    return 0.0
+
+
+def _diag_em_buffer_pct(current_price: float, strike: float, iv_used: float, dte: int, *, side: str) -> float:
+    """Diagnostic only — computes 0.5×EM-referenced sigmas_outside × 100.
+
+    Returned in the response for visibility, but does NOT contribute to score
+    in v3 (see ADR-0007). `side='csp'` uses lower boundary, `side='cc'` upper.
+    """
+    if math.isnan(iv_used) or iv_used <= 0 or dte <= 0:
+        return float('nan')
+    em = current_price * iv_used * math.sqrt(dte / 365.0)
+    if side == 'cc':
+        boundary = current_price + 0.5 * em
+        sigmas_outside = (strike - boundary) / em
+    else:
+        boundary = current_price - 0.5 * em
+        sigmas_outside = (boundary - strike) / em
+    return round(sigmas_outside * 100, 2)
+
+
+# ---------------------------------------------------------------------------
+# CSP strike scorer
+# ---------------------------------------------------------------------------
+
+
 def compute_csp_strike_score(
     *,
     delta: float,
@@ -30,141 +141,51 @@ def compute_csp_strike_score(
     strike: float,
     iv_used: float,
     dte: int,
-    vol_support_1: float | None,
-    vol_support_2: float | None,
-    vol_support_3: float | None,
+    vol_support_1: float | None = None,   # IGNORED in v3 (S/R dropped)
+    vol_support_2: float | None = None,   # IGNORED in v3
+    vol_support_3: float | None = None,   # IGNORED in v3
     bid_ask_spread_pct: float | None,
     open_interest: int,
     market_open: bool,
     volume: int,
-    credit: float | None = None,   # per-share premium for ROC factor
+    credit: float | None = None,
 ) -> tuple[float, str, dict]:
     """
-    CSP Strike Safety Score 0–100.
-
-    Weights: Δ 15 + Sup 18 + EM 20 + OTM 9 + BA 23 + LQ 5 + ROC 10 = 100
+    CSP Strike Safety Score 0–100. Weights: Δ 20 + BA 30 + LQ 15 + ROC 35 = 100.
     """
-    score = 0.0
+    _ = vol_support_1, vol_support_2, vol_support_3  # explicitly unused in v3
     bk: dict[str, float] = {}
 
-    # --- Delta bell-curve (15 pts — rescaled from 18 by ×15/18) ---
-    p = 0.0
-    if not math.isnan(delta):
-        if -0.25 <= delta <= -0.20:
-            p = 15.0
-        elif (-0.30 <= delta < -0.25) or (-0.20 < delta <= -0.15):
-            p = 10.0
-        elif -0.15 < delta <= -0.10:
-            p = 5.0
-        elif delta < -0.30:
-            p = 5.833
-    score += p; bk['Δ'] = p
+    p_delta = _score_delta_symmetric(delta, ideal=-0.225)
+    bk['Δ'] = p_delta
 
-    # --- Distance vs Nearest Support Below Strike (18 pts) — unchanged ---
-    p = 0.0
-    _csp_dist_pct: float | None = None
-    supports = [s for s in [vol_support_1, vol_support_2, vol_support_3] if s is not None]
-    supports_below = [s for s in supports if s < strike]
-    if supports_below:
-        nearest = max(supports_below)
-        gap_pct = (strike - nearest) / strike * 100.0
-        _csp_dist_pct = round(gap_pct, 2)
-        if gap_pct <= 0:
-            p = 18.0
-        elif gap_pct <= 5:
-            p = 18.0 - gap_pct / 5.0 * 8.0
-        elif gap_pct <= 10:
-            p = 10.0 - (gap_pct - 5) / 5.0 * 10.0
-    elif supports:
-        p = 7.0
-    score += p; bk['Sup'] = p
+    p_ba = _score_bid_ask(bid_ask_spread_pct)
+    bk['BA'] = p_ba
 
-    # --- Expected Move Buffer (20 pts) — recalibrated reference to 0.5× EM ---
-    # Prior formula used 1×EM as the lower boundary, making sigmas_outside ≈ -0.25
-    # at the target delta (-0.225), earning 0 pts always. Using 0.5×EM means a
-    # -0.225 delta put is ~0.25 EM units outside the new boundary → full 20 pts.
-    p = 0.0
-    _em_buffer_pct: float = float('nan')
-    if not math.isnan(iv_used) and iv_used > 0 and dte > 0:
-        T = dte / 365.0
-        em = current_price * iv_used * math.sqrt(T)
-        em_half_lower = current_price - 0.5 * em   # 0.5× EM reference boundary
-        sigmas_outside = (em_half_lower - strike) / em
-        _em_buffer_pct = round(sigmas_outside * 100, 2)
-        if sigmas_outside >= 0.20:
-            p = 20.0
-        elif sigmas_outside >= 0.0:
-            p = 13.0 + sigmas_outside / 0.20 * 7.0
-        elif sigmas_outside >= -0.10:
-            p = 5.0 + (sigmas_outside + 0.10) / 0.10 * 8.0
-    score += p; bk['EM'] = p
+    p_lq, liquidity_count = _score_liquidity(market_open, volume, open_interest)
+    bk['LQ'] = p_lq
 
-    # --- % OTM from Spot (9 pts — rescaled from 12 by ×0.75) ---
-    p = 0.0
-    otm_pct = (current_price - strike) / current_price * 100.0
-    if otm_pct >= 15:
-        p = 9.0
-    elif otm_pct >= 10:
-        p = 6.75 + (otm_pct - 10) / 5.0 * 2.25
-    elif otm_pct >= 5:
-        p = 4.5 + (otm_pct - 5) / 5.0 * 2.25
-    elif otm_pct >= 2:
-        p = 1.5 + (otm_pct - 2) / 3.0 * 3.0
-    score += p; bk['OTM'] = p
-
-    # --- Bid-Ask Spread % (23 pts — rescaled from 27 by ×23/27) ---
-    p = 0.0
-    if bid_ask_spread_pct is not None and not math.isnan(bid_ask_spread_pct):
-        if bid_ask_spread_pct <= 1.0:
-            p = 23.0
-        elif bid_ask_spread_pct <= 3.0:
-            p = 15.333 + (3.0 - bid_ask_spread_pct) / 2.0 * 7.667
-        elif bid_ask_spread_pct <= 5.0:
-            p = 8.519 + (5.0 - bid_ask_spread_pct) / 2.0 * 6.815
-        elif bid_ask_spread_pct <= 8.0:
-            p = 2.130 + (8.0 - bid_ask_spread_pct) / 3.0 * 6.389
-    score += p; bk['BA'] = p
-
-    # --- OI / Volume at this strike (5 pts) — unchanged ---
-    p = 0.0
-    liquidity_count = volume if (market_open and volume > 0) else open_interest
-    if liquidity_count >= 1000:
-        p = 5.0
-    elif liquidity_count >= 500:
-        p = 3.5 + (liquidity_count - 500) / 500.0 * 1.5
-    elif liquidity_count >= 200:
-        p = 2.0 + (liquidity_count - 200) / 300.0 * 1.5
-    elif liquidity_count >= 100:
-        p = (liquidity_count - 100) / 100.0 * 2.0
-    score += p; bk['LQ'] = p
-
-    # --- Annualized ROC (10 pts) — recalibrated: full credit threshold 30% → 20% ---
-    # Prior 30% threshold was only achievable on illiquid chains that simultaneously
-    # fail Bid-Ask. Lowered to 20% so NVDA/AMD/AMAT at delta -0.225 earn near-full pts.
-    # CSP capital = (strike * 100) − credit*100 (cash secured minus premium received)
-    # Per-share: capital = strike − credit
-    p = 0.0
+    p_roc = 0.0
     _roc_annualized: float = float('nan')
     if credit is not None and credit > 0 and dte > 0:
         capital_per_share = strike - credit
         if capital_per_share > 0:
             roc = (credit / capital_per_share) * (365.0 / dte) * 100.0
             _roc_annualized = round(roc, 2)
-            if roc >= 20:
-                p = 10.0
-            elif roc >= 14:
-                p = 7.0 + (roc - 14) / 6.0 * 3.0     # 7 → 10
-            elif roc >= 8:
-                p = 4.0 + (roc - 8) / 6.0 * 3.0      # 4 → 7
-            elif roc >= 4:
-                p = 1.0 + (roc - 4) / 4.0 * 3.0      # 1 → 4
-    score += p; bk['ROC'] = p
+            p_roc = _score_roc(roc)
+    bk['ROC'] = p_roc
+
+    score = p_delta + p_ba + p_lq + p_roc
+
+    # Diagnostic-only fields (kept in response for frontend column visibility)
+    _em_buffer_pct = _diag_em_buffer_pct(current_price, strike, iv_used, dte, side='csp')
+    otm_pct = (current_price - strike) / current_price * 100.0 if current_price > 0 else 0.0
 
     detail = ' '.join(f"{k}:{round(v)}" for k, v in bk.items())
     raw = {
-        'dist_pct': _csp_dist_pct,
-        'em_buffer_pct': _em_buffer_pct,
-        'otm_pct': otm_pct,
+        'dist_pct': None,                # S/R dropped — preserved as None for back-compat
+        'em_buffer_pct': _em_buffer_pct, # diagnostic only
+        'otm_pct': otm_pct,              # diagnostic only
         'lq_count': liquidity_count,
         'roc_annualized': _roc_annualized,
     }
@@ -176,6 +197,11 @@ def compute_csp_final_score(env_score: float, strike_score: float) -> float:
     return round(0.4 * env_score + 0.6 * strike_score, 1)
 
 
+# ---------------------------------------------------------------------------
+# CC strike scorer
+# ---------------------------------------------------------------------------
+
+
 def compute_cc_strike_score(
     *,
     delta: float,
@@ -183,141 +209,54 @@ def compute_cc_strike_score(
     strike: float,
     iv_used: float,
     dte: int,
-    vol_resistance_1: float | None,
-    vol_resistance_2: float | None,
-    vol_resistance_3: float | None,
+    vol_resistance_1: float | None = None,   # IGNORED in v3 (S/R dropped)
+    vol_resistance_2: float | None = None,   # IGNORED in v3
+    vol_resistance_3: float | None = None,   # IGNORED in v3
     bid_ask_spread_pct: float | None,
     open_interest: int,
     market_open: bool,
     volume: int,
-    credit: float | None = None,   # per-share premium for ROC factor
+    credit: float | None = None,
 ) -> tuple[float, str, dict]:
     """
-    CC Strike Safety Score 0–100.
+    CC Strike Safety Score 0–100. Weights: Δ 20 + BA 30 + LQ 15 + ROC 35 = 100.
 
-    Weights: Δ 15 + Res 18 + EM 20 + OTM 9 + BA 23 + LQ 5 + ROC 10 = 100
+    ROC capital basis = current_price (the underlying held to write the call),
+    not strike. This differs from CSP, which uses strike − credit (cash-secured).
     """
-    score = 0.0
+    _ = vol_resistance_1, vol_resistance_2, vol_resistance_3  # explicitly unused in v3
     bk: dict[str, float] = {}
 
-    # --- Delta bell-curve (15 pts — rescaled from 18 by ×15/18) ---
-    p = 0.0
-    if not math.isnan(delta):
-        if 0.20 <= delta <= 0.25:
-            p = 15.0
-        elif (0.15 <= delta < 0.20) or (0.25 < delta <= 0.30):
-            p = 10.0
-        elif 0.10 <= delta < 0.15:
-            p = 5.0
-        elif delta > 0.30:
-            p = 5.833
-    score += p; bk['Δ'] = p
+    p_delta = _score_delta_symmetric(delta, ideal=+0.225)
+    bk['Δ'] = p_delta
 
-    # --- Distance vs Nearest Resistance Above Current Price (18 pts) — unchanged ---
-    p = 0.0
-    _cc_dist_pct: float | None = None
-    resistances = [r for r in [vol_resistance_1, vol_resistance_2, vol_resistance_3] if r is not None]
-    resistances_above_price = [r for r in resistances if r > current_price]
-    if resistances_above_price:
-        nearest_R = min(resistances_above_price)
-        gap_pct = (nearest_R - strike) / strike * 100.0
-        _cc_dist_pct = round(gap_pct, 2)
-        if gap_pct <= -20:
-            p = 3.0
-        elif gap_pct <= -10:
-            p = 3.0 + (gap_pct + 20.0) / 10.0 * 15.0
-        elif gap_pct <= 0:
-            p = 18.0
-            if all(r <= strike for r in resistances_above_price):
-                p += 5.0
-        elif gap_pct <= 5:
-            p = 18.0 - gap_pct / 5.0 * 8.0
-        elif gap_pct <= 10:
-            p = 10.0 - (gap_pct - 5) / 5.0 * 10.0
-    score += p; bk['Res'] = p
+    p_ba = _score_bid_ask(bid_ask_spread_pct)
+    bk['BA'] = p_ba
 
-    # --- Expected Move Buffer (20 pts) — recalibrated reference to 0.5× EM ---
-    # Same fix as CSP: uses 0.5×EM as the boundary so +0.225 delta calls earn pts.
-    p = 0.0
-    _cc_em_buffer_pct: float = float('nan')
-    if not math.isnan(iv_used) and iv_used > 0 and dte > 0:
-        T = dte / 365.0
-        em = current_price * iv_used * math.sqrt(T)
-        em_half_upper = current_price + 0.5 * em   # 0.5× EM reference boundary
-        sigmas_outside = (strike - em_half_upper) / em
-        _cc_em_buffer_pct = round(sigmas_outside * 100, 2)
-        if sigmas_outside >= 0.20:
-            p = 20.0
-        elif sigmas_outside >= 0.0:
-            p = 13.0 + sigmas_outside / 0.20 * 7.0
-        elif sigmas_outside >= -0.10:
-            p = 5.0 + (sigmas_outside + 0.10) / 0.10 * 8.0
-    score += p; bk['EM'] = p
+    p_lq, liquidity_count = _score_liquidity(market_open, volume, open_interest)
+    bk['LQ'] = p_lq
 
-    # --- % OTM from Spot (9 pts — rescaled from 12 by ×0.75) ---
-    p = 0.0
-    otm_pct = (strike - current_price) / current_price * 100.0
-    if otm_pct >= 15:
-        p = 9.0
-    elif otm_pct >= 10:
-        p = 6.75 + (otm_pct - 10) / 5.0 * 2.25
-    elif otm_pct >= 5:
-        p = 4.5 + (otm_pct - 5) / 5.0 * 2.25
-    elif otm_pct >= 2:
-        p = 1.5 + (otm_pct - 2) / 3.0 * 3.0
-    score += p; bk['OTM'] = p
-
-    # --- Bid-Ask Spread % (23 pts — rescaled from 27 by ×23/27) ---
-    p = 0.0
-    if bid_ask_spread_pct is not None and not math.isnan(bid_ask_spread_pct):
-        if bid_ask_spread_pct <= 1.0:
-            p = 23.0
-        elif bid_ask_spread_pct <= 3.0:
-            p = 15.333 + (3.0 - bid_ask_spread_pct) / 2.0 * 7.667
-        elif bid_ask_spread_pct <= 5.0:
-            p = 8.519 + (5.0 - bid_ask_spread_pct) / 2.0 * 6.815
-        elif bid_ask_spread_pct <= 8.0:
-            p = 2.130 + (8.0 - bid_ask_spread_pct) / 3.0 * 6.389
-    score += p; bk['BA'] = p
-
-    # --- OI / Volume at this strike (5 pts) — unchanged ---
-    p = 0.0
-    liquidity_count = volume if (market_open and volume > 0) else open_interest
-    if liquidity_count >= 1000:
-        p = 5.0
-    elif liquidity_count >= 500:
-        p = 3.5 + (liquidity_count - 500) / 500.0 * 1.5
-    elif liquidity_count >= 200:
-        p = 2.0 + (liquidity_count - 200) / 300.0 * 1.5
-    elif liquidity_count >= 100:
-        p = (liquidity_count - 100) / 100.0 * 2.0
-    score += p; bk['LQ'] = p
-
-    # --- Annualized ROC (10 pts) — recalibrated: full credit threshold 30% → 20% ---
-    # CC capital basis = current price (not cost basis — out of scope)
-    # Per-share: capital = current_price − credit
-    p = 0.0
+    p_roc = 0.0
     _roc_annualized: float = float('nan')
     if credit is not None and credit > 0 and dte > 0 and current_price > 0:
         capital_per_share = current_price - credit
         if capital_per_share > 0:
             roc = (credit / capital_per_share) * (365.0 / dte) * 100.0
             _roc_annualized = round(roc, 2)
-            if roc >= 20:
-                p = 10.0
-            elif roc >= 14:
-                p = 7.0 + (roc - 14) / 6.0 * 3.0
-            elif roc >= 8:
-                p = 4.0 + (roc - 8) / 6.0 * 3.0
-            elif roc >= 4:
-                p = 1.0 + (roc - 4) / 4.0 * 3.0
-    score += p; bk['ROC'] = p
+            p_roc = _score_roc(roc)
+    bk['ROC'] = p_roc
+
+    score = p_delta + p_ba + p_lq + p_roc
+
+    # Diagnostic-only fields (kept in response for frontend column visibility)
+    _em_buffer_pct = _diag_em_buffer_pct(current_price, strike, iv_used, dte, side='cc')
+    otm_pct = (strike - current_price) / current_price * 100.0 if current_price > 0 else 0.0
 
     detail = ' '.join(f"{k}:{round(v)}" for k, v in bk.items())
     raw = {
-        'dist_pct': _cc_dist_pct,
-        'em_buffer_pct': _cc_em_buffer_pct,
-        'otm_pct': otm_pct,
+        'dist_pct': None,                # S/R dropped — preserved as None for back-compat
+        'em_buffer_pct': _em_buffer_pct, # diagnostic only
+        'otm_pct': otm_pct,              # diagnostic only
         'lq_count': liquidity_count,
         'roc_annualized': _roc_annualized,
     }
