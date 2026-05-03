@@ -37,6 +37,7 @@ export interface DitmResult {
   macro_hold: boolean             // VIX ≥ 25 and rising, or SPY < SMA200
   chain_median_oi: number
   iv_percentile: number | null    // v3 strike-side vol-cheapness factor (0–100, HV-based)
+  trend_r2: number | null         // v3.2: R² of 50-day OLS price regression (0–1)
 }
 
 export interface DitmExpirationRow {
@@ -67,6 +68,7 @@ export interface GroupedDitmResult {
   expirations: DitmExpirationRow[]
   env_detail: string
   iv_percentile: number | null    // v3 — surface to the IV%ile column
+  trend_r2: number | null         // v3.2: R² of 50-day OLS price regression
 }
 
 export interface DitmFilterState {

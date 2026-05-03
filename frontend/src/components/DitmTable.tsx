@@ -141,6 +141,7 @@ const COLUMNS = [
   col.accessor('sma_ratio',              { header: () => <span className="col-tip col-scored" title="SMA50 ÷ SMA200 · >1 = SMA50 above SMA200 (uptrend)">Trend ⓘ</span>, cell: () => null }),
   col.accessor('weekly_rsi',             { header: () => <span className="col-tip col-scored" title="Weekly RSI(14) — medium-term momentum on weekly closes · 50–65 = ideal">W-RSI ⓘ</span>, cell: () => null }),
   col.accessor('ret_200d',               { header: () => <span className="col-tip col-scored" title="200-day median-anchored return · close_today / median(closes 200d ago) − 1">200d Ret ⓘ</span>, cell: () => null }),
+  col.accessor('trend_r2',               { header: () => <span className="col-tip col-scored" title="R² of 50-day OLS price regression · measures trend smoothness · ≥0.85=10pts · 0.70–0.85→7.5–10 · <0.30=0 (v3.2)">R² ⓘ</span>, cell: () => null }),
   col.accessor('dist_from_52w_high_pct', { header: () => <span className="col-tip col-scored" title="Distance from 52-week high · 0% = at the high · negative = % below">52W Dist ⓘ</span>, cell: () => null }),
   col.accessor('earnings_date',          { header: 'Earnings', cell: () => null }),
   col.accessor('best_score',             { header: () => null, cell: () => null }),
@@ -168,6 +169,7 @@ function groupResults(results: DitmResult[]): GroupedDitmResult[] {
         expirations: [],
         env_detail: '',
         iv_percentile: r.iv_percentile,
+        trend_r2: r.trend_r2,
       })
     }
     const g = map.get(r.symbol)!
@@ -432,6 +434,19 @@ export function DitmTable({ data, macroPass, vixLevel, vix5dChange, spyAboveSma2
                             {r.ret_200d >= 0 ? '+' : ''}{r.ret_200d.toFixed(1)}%
                           </span>
                           {subScore(envPts, 'Ret', ENV_MAX)}
+                        </>
+                    }
+                  </td>
+
+                  {/* Trend Stability R² — v3.2 */}
+                  <td rowSpan={totalRows}>
+                    {r.trend_r2 == null
+                      ? <span className="dim">—</span>
+                      : <>
+                          <span style={{ color: subColor(envPts, 'R2', ENV_MAX) }}>
+                            {r.trend_r2.toFixed(2)}
+                          </span>
+                          {subScore(envPts, 'R2', ENV_MAX)}
                         </>
                     }
                   </td>

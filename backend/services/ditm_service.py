@@ -101,6 +101,7 @@ class DitmResult:
     macro_hold: bool = False        # True when VIX ≥ 25 and rising, or SPY < SMA200
     chain_median_oi: float = 0.0
     iv_percentile: Optional[float] = None  # 0–100, HV-based; v3 strike-side single vol-cheapness factor
+    trend_r2: Optional[float] = None       # v3.2: R² of 50-day OLS price regression (trend smoothness)
 
 
 @dataclass
@@ -808,6 +809,7 @@ def _legacy_process_symbol(
                     macro_hold=macro_hold,
                     chain_median_oi=chain_median_oi,
                     iv_percentile=iv_percentile,
+                    trend_r2=None if math.isnan(trend_r2_leg) else round(trend_r2_leg, 4),
                 ))
             except Exception as exc:
                 logger.debug("Expiry processing error for %s: %s", sym, exc)
@@ -1051,6 +1053,7 @@ def _ditm_result_factory(
         macro_hold=False,
         chain_median_oi=ctx.chain_median_oi,
         iv_percentile=metrics.iv_percentile,
+        trend_r2=round(ind.trend_r2, 4) if ind.trend_r2 is not None else None,
     )
 
 
