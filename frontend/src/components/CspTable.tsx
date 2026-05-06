@@ -9,6 +9,8 @@ import {
 import { useState, useMemo } from 'react'
 import type { ReactElement } from 'react'
 import type { CspResult, GroupedCspResult } from '../types/csp'
+import type { InsightResult, InsightVerdict } from '../types/insight'
+import { useInsight } from '../hooks/useInsight'
 
 const col = createColumnHelper<GroupedCspResult>()
 
@@ -148,6 +150,40 @@ const COLUMNS = [
   col.accessor('best_score', { header: () => null, cell: () => null }),
 ]
 
+function scorePatternTag(env: number, strike: number): ReactElement | null {
+  if (env < 45 && strike < 45)
+    return <span className="score-tag score-tag-both-weak" title="Both ENV and Strike are weak — structural drag on both sides">✗ Both weak</span>
+  if (strike - env > 25)
+    return <span className="score-tag score-tag-env-weak" title="Strike mechanics are strong but the stock environment is stressed — understand why ENV is low before entering">⚠ ENV weak</span>
+  if (env - strike > 25)
+    return <span className="score-tag score-tag-strike-weak" title="Stock environment looks good but the put mechanics are weak — poor premium, wide spread, or off-delta">⚠ Strike weak</span>
+  return null
+}
+
+const VERDICT_STYLE: Record<InsightVerdict, { cls: string; label: string }> = {
+  ENTER: { cls: 'insight-verdict-enter', label: 'ENTER' },
+  WAIT:  { cls: 'insight-verdict-wait',  label: 'WAIT'  },
+  SKIP:  { cls: 'insight-verdict-skip',  label: 'SKIP'  },
+}
+
+function InsightPanel({ insight }: { insight: InsightResult }) {
+  const vs = VERDICT_STYLE[insight.verdict as InsightVerdict] ?? VERDICT_STYLE.WAIT
+  return (
+    <div className="insight-panel">
+      <div className="insight-header">
+        <span className={`insight-verdict ${vs.cls}`}>{vs.label}</span>
+        <span className="insight-confidence">{Math.round(insight.confidence * 100)}% confidence</span>
+        <span className="insight-summary">{insight.summary}</span>
+      </div>
+      <div className="insight-flags">
+        <div className="insight-flag"><span className="insight-flag-label">ENV</span>{insight.env_flag}</div>
+        <div className="insight-flag"><span className="insight-flag-label">Strike</span>{insight.strike_flag}</div>
+        <div className="insight-flag insight-flag-risk"><span className="insight-flag-label">Key risk</span>{insight.key_risk}</div>
+      </div>
+    </div>
+  )
+}
+
 function groupResults(results: CspResult[]): GroupedCspResult[] {
   const map = new Map<string, GroupedCspResult>()
   for (const r of results) {
@@ -207,7 +243,9 @@ export function CspTable({ data }: Props) {
   const groupedData = useMemo(() => groupResults(data), [data])
   const [sorting, setSorting] = useState<SortingState>([{ id: 'best_score', desc: true }])
   const [strikeExpanded, setStrikeExpanded] = useState<Set<string>>(new Set())
+  const [insightExpanded, setInsightExpanded] = useState<Set<string>>(new Set())
   const [staleDismissed, setStaleDismissed] = useState(false)
+  const { insights, loading: insightLoading, errors: insightErrors, fetchInsight } = useInsight()
 
   const anyStale = groupedData.some(
     r => r.using_hv_fallback || r.expirations.some(e => e.strikes.some(s => s.iv_stale))
@@ -249,6 +287,7 @@ export function CspTable({ data }: Props) {
       : rounded >= 55 ? 'score-caution'
       : rounded >= 45 ? 'score-warn'
       : 'score-bad'
+    const tag = (env != null && strike != null) ? scorePatternTag(env, strike) : null
     return (
       <span
         className={cls}
@@ -261,6 +300,7 @@ export function CspTable({ data }: Props) {
             E{env.toFixed(0)} S{strike.toFixed(0)}
           </span>
         )}
+        {tag && <span style={{ display: 'block' }}>{tag}</span>}
       </span>
     )
   }
@@ -355,12 +395,14 @@ export function CspTable({ data }: Props) {
         {table.getRowModel().rows.map(row => {
           const r = row.original
 
-          // Pre-compute total <tr> count for rowSpan (main rows + expanded alt rows)
+          // Pre-compute total <tr> count for rowSpan (main rows + expanded alt rows + insight rows)
           const totalRows = r.expirations.reduce((sum, exp) => {
-            const altCount = strikeExpanded.has(`${r.symbol}-${exp.expiration}`)
+            const expKey = `${r.symbol}-${exp.expiration}`
+            const altCount = strikeExpanded.has(expKey)
               ? exp.strikes.filter(s => !s.is_best).length
               : 0
-            return sum + 1 + altCount
+            const insightCount = insightExpanded.has(expKey) ? 1 : 0
+            return sum + 1 + altCount + insightCount
           }, 0)
 
           const rows: ReactElement[] = []
@@ -493,7 +535,42 @@ export function CspTable({ data }: Props) {
                   )}
                   {strikeSub(bestStrike.strike_detail, 'ROC')}
                 </td>
-                <td>{scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.csp_score, bestStrike.env_detail, bestStrike.strike_detail, true)}</td>
+                <td>
+                  {scoreFmt(bestStrike.env_score, bestStrike.strike_score, bestStrike.csp_score, bestStrike.env_detail, bestStrike.strike_detail, true)}
+                  <button
+                    className="insight-btn"
+                    title="Get AI insight for this trade"
+                    onClick={() => {
+                      const isOpen = insightExpanded.has(key)
+                      setInsightExpanded(prev => {
+                        const next = new Set(prev)
+                        if (isOpen) next.delete(key); else next.add(key)
+                        return next
+                      })
+                      if (!isOpen && !insights.has(key) && !insightLoading.has(key)) {
+                        fetchInsight(key, {
+                          symbol: r.symbol,
+                          price: r.price,
+                          strike: bestStrike.strike,
+                          premium: bestStrike.premium,
+                          dte: exp.dte,
+                          expiration: exp.expiration,
+                          env_score: bestStrike.env_score,
+                          strike_score: bestStrike.strike_score,
+                          final_score: bestStrike.csp_score,
+                          env_detail: bestStrike.env_detail,
+                          strike_detail: bestStrike.strike_detail,
+                          roc_annualized: bestStrike.roc_annualized ?? null,
+                          rsi: r.rsi,
+                          iv_hv_ratio: bestStrike.iv_hv_ratio ?? null,
+                          dist_from_52w_high_pct: r.dist_from_52w_high_pct,
+                        })
+                      }
+                    }}
+                  >
+                    {insightExpanded.has(key) ? '▲ AI' : '✦ AI'}
+                  </button>
+                </td>
                 <td>
                   {topDrags(bestStrike.env_detail ?? '', bestStrike.strike_detail ?? '').map(d => (
                     <span key={d.key} style={{ display: 'block', fontSize: '12px', color: d.drag >= 15 ? '#f87171' : '#fb923c' }}>
@@ -546,6 +623,24 @@ export function CspTable({ data }: Props) {
                 )
                 absRowIdx++
               }
+            }
+
+            // ── AI insight row (full-colspan, after all strike rows) ───────
+            if (insightExpanded.has(key)) {
+              rows.push(
+                <tr key={`${expIdx}-insight`} className="insight-row">
+                  <td colSpan={19}>
+                    {insightLoading.has(key) ? (
+                      <div className="insight-loading">✦ Fetching AI insight…</div>
+                    ) : insightErrors.get(key) ? (
+                      <div className="insight-error">⚠ {insightErrors.get(key)}</div>
+                    ) : insights.get(key) ? (
+                      <InsightPanel insight={insights.get(key)!} />
+                    ) : null}
+                  </td>
+                </tr>
+              )
+              absRowIdx++
             }
           }
 

@@ -15,6 +15,7 @@ from pydantic import BaseModel, field_validator
 from services.csp_service import CspResult, process_symbol
 from services.data_service import get_risk_free_rate
 from services.scan_cache import csp_scan_cache
+from services.screener_insight_service import InsightError, InsightRequest, InsightResult, get_insight
 from services.universe import UNIVERSES, get_universe
 
 logger = logging.getLogger(__name__)
@@ -286,4 +287,73 @@ def _to_out(r: CspResult) -> CspResultOut:
         expected_move=r.expected_move,
         dist_from_52w_high_pct=r.dist_from_52w_high_pct,
         chain_median_oi=r.chain_median_oi,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Insight endpoint
+# ---------------------------------------------------------------------------
+
+class InsightRequestIn(BaseModel):
+    symbol: str
+    price: float
+    strike: float
+    premium: float
+    dte: int
+    expiration: str
+    env_score: float
+    strike_score: float
+    final_score: float
+    env_detail: str
+    strike_detail: str
+    roc_annualized: Optional[float] = None
+    rsi: float
+    iv_hv_ratio: Optional[float] = None
+    dist_from_52w_high_pct: float
+
+
+class InsightResultOut(BaseModel):
+    verdict: str
+    confidence: float
+    summary: str
+    env_flag: str
+    strike_flag: str
+    key_risk: str
+
+
+@router.post("/csp/insight", response_model=InsightResultOut)
+async def get_csp_insight(request: InsightRequestIn) -> InsightResultOut:
+    """
+    Calls Azure OpenAI with the scored CSP row + recent news to produce
+    a plain-English ENTER / WAIT / SKIP verdict with rationale.
+    """
+    svc_req = InsightRequest(
+        symbol=request.symbol.strip().upper(),
+        price=request.price,
+        strike=request.strike,
+        premium=request.premium,
+        dte=request.dte,
+        expiration=request.expiration,
+        env_score=request.env_score,
+        strike_score=request.strike_score,
+        final_score=request.final_score,
+        env_detail=request.env_detail,
+        strike_detail=request.strike_detail,
+        roc_annualized=request.roc_annualized,
+        rsi=request.rsi,
+        iv_hv_ratio=request.iv_hv_ratio,
+        dist_from_52w_high_pct=request.dist_from_52w_high_pct,
+    )
+    try:
+        result: InsightResult = await asyncio.to_thread(get_insight, svc_req)
+    except InsightError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return InsightResultOut(
+        verdict=result.verdict,
+        confidence=result.confidence,
+        summary=result.summary,
+        env_flag=result.env_flag,
+        strike_flag=result.strike_flag,
+        key_risk=result.key_risk,
     )

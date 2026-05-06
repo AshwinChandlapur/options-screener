@@ -1,9 +1,10 @@
 """
-Fetches OHLC price history and the risk-free rate from Yahoo Finance via yfinance.
+Fetches OHLC price history, the risk-free rate, and news headlines from Yahoo Finance via yfinance.
 """
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import pandas as pd
 import yfinance as yf
@@ -43,3 +44,38 @@ def get_risk_free_rate() -> float:
     except Exception as exc:
         logger.warning("Could not fetch risk-free rate: %s — using fallback %.3f", exc, _FALLBACK_RISK_FREE_RATE)
     return _FALLBACK_RISK_FREE_RATE
+
+
+def get_news(symbol: str, max_age_hours: int = 72, max_items: int = 8) -> list[dict]:
+    """
+    Returns recent news headlines for a symbol from Yahoo Finance.
+
+    Each item is a dict with keys: title, summary, published (ISO string).
+    Items older than max_age_hours are excluded. Returns at most max_items.
+    Returns an empty list on any failure — callers must tolerate missing news.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        raw: list = ticker.news or []
+        cutoff = datetime.now(tz=timezone.utc).timestamp() - max_age_hours * 3600
+        items: list[dict] = []
+        for entry in raw:
+            content = entry.get("content", {})
+            pub_str: str = content.get("pubDate", "")
+            try:
+                pub_ts = datetime.fromisoformat(pub_str.replace("Z", "+00:00")).timestamp()
+            except (ValueError, AttributeError):
+                pub_ts = cutoff  # include if unparseable
+            if pub_ts < cutoff:
+                continue
+            title: str = content.get("title", "").strip()
+            summary: str = content.get("summary", "").strip()
+            if not title:
+                continue
+            items.append({"title": title, "summary": summary, "published": pub_str})
+            if len(items) >= max_items:
+                break
+        return items
+    except Exception as exc:
+        logger.warning("News fetch failed for %s: %s", symbol, exc)
+        return []

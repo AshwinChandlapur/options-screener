@@ -496,6 +496,112 @@ body {
 }
 .stale-dismiss:hover { color: #fff; }
 
+/* Score pattern tags — ENV weak / Strike weak / Both weak */
+.score-tag {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  padding: 1px 4px;
+  line-height: 1.4;
+}
+.score-tag-env-weak  { color: #fed7aa; background: #431407; border: 1px solid #c2410c; }
+.score-tag-strike-weak { color: #bfdbfe; background: #0f2344; border: 1px solid #1d4ed8; }
+.score-tag-both-weak { color: #fecaca; background: #3b0a0a; border: 1px solid #b91c1c; }
+
+/* ── AI Insight button ────────────────────────────────────────────────────── */
+.insight-btn {
+  display: block;
+  margin-top: 4px;
+  background: #1e1b4b;
+  border: 1px solid #4338ca;
+  color: #a5b4fc;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.insight-btn:hover { background: #312e81; color: #e0e7ff; }
+
+/* ── AI Insight row ───────────────────────────────────────────────────────── */
+.insight-row td {
+  background: #0e0e1a;
+  border-top: 1px solid #1e1b4b;
+  border-bottom: 1px solid #1e1b4b;
+  padding: 0;
+}
+.insight-loading {
+  padding: 10px 16px;
+  color: #a5b4fc;
+  font-size: 12px;
+  font-style: italic;
+}
+.insight-error {
+  padding: 10px 16px;
+  color: #f87171;
+  font-size: 12px;
+}
+.insight-panel {
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.insight-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.insight-verdict {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.insight-verdict-enter { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.insight-verdict-wait  { background: #2d1f00; color: #fbbf24; border: 1px solid #b45309; }
+.insight-verdict-skip  { background: #3b0a0a; color: #f87171; border: 1px solid #b91c1c; }
+.insight-confidence {
+  font-size: 11px;
+  color: #64748b;
+  flex-shrink: 0;
+}
+.insight-summary {
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+.insight-flags {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.insight-flag {
+  font-size: 11px;
+  color: #94a3b8;
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+}
+.insight-flag-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #475569;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.insight-flag-risk { color: #fca5a5; }
+
 /* HV fallback tag next to delta */
 .iv-fallback-tag {
   display: inline-block;

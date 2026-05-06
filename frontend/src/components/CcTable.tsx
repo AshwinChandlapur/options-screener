@@ -141,6 +141,16 @@ const COLUMNS = [
   col.accessor('best_score',    { header: () => null,   cell: () => null }),
 ]
 
+function scorePatternTag(env: number, strike: number): ReactElement | null {
+  if (env < 45 && strike < 45)
+    return <span className="score-tag score-tag-both-weak" title="Both ENV and Strike are weak — structural drag on both sides">✗ Both weak</span>
+  if (strike - env > 25)
+    return <span className="score-tag score-tag-env-weak" title="Strike mechanics are strong but the stock environment is stressed — understand why ENV is low before entering">⚠ ENV weak</span>
+  if (env - strike > 25)
+    return <span className="score-tag score-tag-strike-weak" title="Stock environment looks good but the call mechanics are weak — poor premium, wide spread, or off-delta">⚠ Strike weak</span>
+  return null
+}
+
 function groupResults(results: CcResult[]): GroupedCcResult[] {
   const map = new Map<string, GroupedCcResult>()
   for (const r of results) {
@@ -243,6 +253,7 @@ export function CcTable({ data }: Props) {
       : rounded >= 55 ? 'score-caution'
       : rounded >= 45 ? 'score-warn'
       : 'score-bad'
+    const tag = (env != null && strike != null) ? scorePatternTag(env, strike) : null
     return (
       <span
         className={cls}
@@ -255,6 +266,7 @@ export function CcTable({ data }: Props) {
             E{env.toFixed(0)} S{strike.toFixed(0)}
           </span>
         )}
+        {tag && <span style={{ display: 'block' }}>{tag}</span>}
       </span>
     )
   }
