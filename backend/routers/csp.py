@@ -14,9 +14,12 @@ from pydantic import BaseModel, field_validator
 
 from services.csp_service import CspResult, process_symbol
 from services.data_service import get_risk_free_rate
-from services.scan_cache import csp_scan_cache
+from services.em_scan_service import EmRankError, EmRankResult, process_em_symbol
+from services.scan_cache import ScanCache, csp_scan_cache
 from services.screener_insight_service import InsightError, InsightRequest, InsightResult, get_insight
 from services.universe import UNIVERSES, get_universe
+
+_em_scan_cache: ScanCache = ScanCache()
 
 logger = logging.getLogger(__name__)
 
@@ -308,7 +311,8 @@ class InsightRequestIn(BaseModel):
     strike_detail: str
     roc_annualized: Optional[float] = None
     rsi: float
-    iv_hv_ratio: Optional[float] = None
+    iv_hv_ratio: Optional[float] = None       # kept for back-compat
+    iv_percentile: Optional[float] = None     # v3.3 scored ENV factor
     dist_from_52w_high_pct: float
 
 
@@ -316,10 +320,15 @@ class InsightResultOut(BaseModel):
     verdict: str
     confidence: float
     summary: str
-    env_flag: str
-    strike_flag: str
+    regime_drivers: str
+    current_regime: str
+    stock_cycle: str
+    bear_band: str
+    normal_band: str
+    bull_band: str
+    strike_context: str
     key_risk: str
-    reentry_condition: Optional[str] = None
+    vix_regime: str
 
 
 @router.post("/csp/insight", response_model=InsightResultOut)
@@ -343,6 +352,7 @@ async def get_csp_insight(request: InsightRequestIn) -> InsightResultOut:
         roc_annualized=request.roc_annualized,
         rsi=request.rsi,
         iv_hv_ratio=request.iv_hv_ratio,
+        iv_percentile=request.iv_percentile,
         dist_from_52w_high_pct=request.dist_from_52w_high_pct,
     )
     try:
@@ -354,8 +364,258 @@ async def get_csp_insight(request: InsightRequestIn) -> InsightResultOut:
         verdict=result.verdict,
         confidence=result.confidence,
         summary=result.summary,
-        env_flag=result.env_flag,
-        strike_flag=result.strike_flag,
+        regime_drivers=result.regime_drivers,
+        current_regime=result.current_regime,
+        stock_cycle=result.stock_cycle,
+        bear_band=result.bear_band,
+        normal_band=result.normal_band,
+        bull_band=result.bull_band,
+        strike_context=result.strike_context,
         key_risk=result.key_risk,
-        reentry_condition=result.reentry_condition,
+        vix_regime=result.vix_regime,
     )
+
+
+# ---------------------------------------------------------------------------
+# EM Rank endpoints
+# ---------------------------------------------------------------------------
+
+class EmRankRequest(BaseModel):
+    symbols: List[str]
+    minDTE: int = 30
+    maxDTE: int = 60
+    maxCapital: Optional[float] = None
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("symbols list must not be empty")
+        if len(v) > _MAX_SYMBOLS:
+            raise ValueError(f"Maximum {_MAX_SYMBOLS} symbols per request")
+        cleaned = [s.strip().upper() for s in v if s.strip()]
+        if not cleaned:
+            raise ValueError("symbols list contains no valid entries")
+        for sym in cleaned:
+            if len(sym) > 10 or not sym.isalnum():
+                raise ValueError(f"Invalid symbol: '{sym}'")
+        return cleaned
+
+    @field_validator("minDTE", "maxDTE")
+    @classmethod
+    def validate_dte(cls, v: int) -> int:
+        if not (1 <= v <= 90):
+            raise ValueError("DTE values must be between 1 and 90")
+        return v
+
+
+class EmRankStrikeOut(BaseModel):
+    strike: float
+    bid: float
+    ask: float
+    mid: float
+    spread_pct: Optional[float]
+    delta: float
+    oi_vol: int
+    roc_annualized: Optional[float]
+    otm_pct: float
+    is_em_strike: bool
+    iv_fallback: bool
+    stale_premium: bool
+
+
+class EmRankResultOut(BaseModel):
+    symbol: str
+    price: float
+    bb_upper: float
+    bb_middle: float
+    bb_lower: float
+    sma_ratio: float
+    rsi: float
+    iv_rank: Optional[float]
+    iv_percentile: Optional[float]
+    earnings_date: Optional[str]
+    earnings_within_dte: bool
+    vol_support_126_1: Optional[float]
+    vol_support_126_2: Optional[float]
+    vol_support_126_3: Optional[float]
+    dte: int
+    expiration: str
+    expected_move: float
+    chain_median_oi: float
+    dist_from_52w_high_pct: float
+    iv_hv_ratio: Optional[float]
+    strikes: List[EmRankStrikeOut]
+    best_roc: float
+    using_hv_fallback: bool
+
+
+class EmRankErrorOut(BaseModel):
+    symbol: str
+    reason: str
+
+
+class EmRankResponse(BaseModel):
+    results: List[EmRankResultOut]
+    errors: List[EmRankErrorOut]
+
+
+@router.post("/csp/em-rank", response_model=EmRankResponse)
+async def run_em_rank(request: EmRankRequest) -> EmRankResponse:
+    """
+    EM Rank screener (manual symbols).
+    Returns strikes just below the 1σ Expected Move, ranked by ROC.
+    """
+    if request.minDTE > request.maxDTE:
+        raise HTTPException(status_code=422, detail="minDTE must be <= maxDTE")
+
+    rf_rate = await asyncio.to_thread(get_risk_free_rate)
+    sem = asyncio.Semaphore(_CONCURRENCY)
+
+    async def process_one(symbol: str):
+        async with sem:
+            return await asyncio.to_thread(
+                process_em_symbol, symbol,
+                min_dte=request.minDTE, max_dte=request.maxDTE,
+                rf_rate=rf_rate, max_capital=request.maxCapital,
+            )
+
+    pairs = await asyncio.gather(*[process_one(s) for s in request.symbols])
+
+    results: list[EmRankResultOut] = []
+    errors: list[EmRankErrorOut] = []
+    for result_list, error in pairs:
+        for r in result_list:
+            results.append(_to_em_out(r))
+        if error is not None:
+            errors.append(EmRankErrorOut(symbol=error.symbol, reason=error.reason))
+
+    # Sort by best_roc descending across all expirations per symbol
+    results = _sort_em_by_roc(results)
+    return EmRankResponse(results=results, errors=errors)
+
+
+@router.get("/csp/em-scan", response_model=EmRankResponse)
+async def run_em_scan(
+    top_n: int = Query(default=20, ge=1, le=50),
+    min_dte: int = Query(default=30, ge=1, le=90),
+    max_dte: int = Query(default=60, ge=1, le=90),
+    universe: str = Query(default="all", description=f"Universe key: one of {sorted(UNIVERSES)}"),
+    max_capital: Optional[float] = Query(default=None, ge=100),
+) -> EmRankResponse:
+    """
+    EM Rank screener (universe scan).
+    Returns the top_n symbols ranked by highest annualized ROC at the EM strike.
+    """
+    if min_dte > max_dte:
+        raise HTTPException(status_code=422, detail="min_dte must be <= max_dte")
+
+    universe_key, symbols = get_universe(universe)
+    cache_key = f"em:{universe_key}:{top_n}:{min_dte}:{max_dte}:{max_capital}"
+    cached = _em_scan_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    rf_rate = await asyncio.to_thread(get_risk_free_rate)
+    logger.info(
+        "Starting EM scan universe=%s (%d stocks), DTE %d\u2013%d, top_n=%d",
+        universe_key, len(symbols), min_dte, max_dte, top_n,
+    )
+
+    sem = asyncio.Semaphore(10)
+
+    async def process_one(symbol: str):
+        async with sem:
+            return await asyncio.to_thread(
+                process_em_symbol, symbol,
+                min_dte=min_dte, max_dte=max_dte,
+                rf_rate=rf_rate, max_capital=max_capital,
+            )
+
+    pairs = await asyncio.gather(*[process_one(s) for s in symbols])
+
+    all_results: list[EmRankResultOut] = []
+    errors: list[EmRankErrorOut] = []
+    for result_list, error in pairs:
+        for r in result_list:
+            all_results.append(_to_em_out(r))
+        if error is not None:
+            errors.append(EmRankErrorOut(symbol=error.symbol, reason=error.reason))
+
+    # Rank symbols by their best ROC, then take top_n symbols' rows
+    sorted_results = _sort_em_by_roc(all_results)
+    top_symbols = _top_n_symbols(sorted_results, top_n)
+    top_results = [r for r in sorted_results if r.symbol in top_symbols]
+
+    logger.info(
+        "EM scan complete: universe=%s returning top %d of %d (errors=%d)",
+        universe_key, len(top_symbols), len(symbols), len(errors),
+    )
+    response = EmRankResponse(results=top_results, errors=errors)
+    _em_scan_cache.set(cache_key, response)
+    return response
+
+
+def _to_em_out(r: EmRankResult) -> EmRankResultOut:
+    return EmRankResultOut(
+        symbol=r.symbol,
+        price=r.price,
+        bb_upper=r.bb_upper,
+        bb_middle=r.bb_middle,
+        bb_lower=r.bb_lower,
+        sma_ratio=r.sma_ratio,
+        rsi=r.rsi,
+        iv_rank=r.iv_rank,
+        iv_percentile=r.iv_percentile,
+        earnings_date=r.earnings_date,
+        earnings_within_dte=r.earnings_within_dte,
+        vol_support_126_1=r.vol_support_126_1,
+        vol_support_126_2=r.vol_support_126_2,
+        vol_support_126_3=r.vol_support_126_3,
+        dte=r.dte,
+        expiration=r.expiration,
+        expected_move=r.expected_move,
+        chain_median_oi=r.chain_median_oi,
+        dist_from_52w_high_pct=r.dist_from_52w_high_pct,
+        iv_hv_ratio=r.iv_hv_ratio,
+        strikes=[
+            EmRankStrikeOut(
+                strike=s.strike,
+                bid=s.bid,
+                ask=s.ask,
+                mid=s.mid,
+                spread_pct=s.spread_pct,
+                delta=s.delta,
+                oi_vol=s.oi_vol,
+                roc_annualized=s.roc_annualized,
+                otm_pct=s.otm_pct,
+                is_em_strike=s.is_em_strike,
+                iv_fallback=s.iv_fallback,
+                stale_premium=s.stale_premium,
+            )
+            for s in r.strikes
+        ],
+        best_roc=r.best_roc,
+        using_hv_fallback=r.using_hv_fallback,
+    )
+
+
+def _sort_em_by_roc(results: list[EmRankResultOut]) -> list[EmRankResultOut]:
+    """Sort flat per-expiration rows so that rows belonging to higher-ROC symbols
+    appear first. Within a symbol, rows are ordered by DTE ascending."""
+    # Find each symbol's max best_roc across all its expiration rows
+    sym_best: dict[str, float] = {}
+    for r in results:
+        if r.symbol not in sym_best or r.best_roc > sym_best[r.symbol]:
+            sym_best[r.symbol] = r.best_roc
+    return sorted(results, key=lambda r: (sym_best.get(r.symbol, 0.0), r.best_roc), reverse=True)
+
+
+def _top_n_symbols(sorted_results: list[EmRankResultOut], n: int) -> set[str]:
+    """Return the first n distinct symbols from a pre-sorted list."""
+    seen: set[str] = set()
+    for r in sorted_results:
+        if len(seen) >= n:
+            break
+        seen.add(r.symbol)
+    return seen

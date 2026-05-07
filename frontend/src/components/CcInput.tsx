@@ -4,10 +4,10 @@ import { UNIVERSE_OPTIONS, DEFAULT_UNIVERSE, universeSize, type UniverseKey } fr
 
 const SCORE_LEGEND = [
   { factor: '— ENV SCORE (×0.4) —', weight: null, detail: '', definition: '', why: '', formula: '' },
-  { factor: 'IV / HV Ratio',   weight: 35,  detail: '<0.8=0 · 0.8–1.0→5 · 1.0–1.1→5→12.5 · 1.1–1.2→12.5→22.5 · 1.2–1.3→22.5→35 · ≥1.3=35. Stale IV (NaN or ≤0.01) → 0 + flag.',
-    definition: 'Implied Volatility divided by 30-day realized (Historical) Volatility. Measures whether options are priced rich or cheap relative to actual recent movement in the stock.',
-    why: "IV > HV means the market is pricing in more movement than the stock actually makes — the seller's edge. v3 elevated this to 35 pts because it's now the only volatility-derived factor (HV Rank was dropped as redundant).",
-    formula: 'iv_hv_ratio = yfinance_IV / HV_30d\n  v3 rescale: 28 → 35 pts (primary vol signal after HV Rank dropped)\n  Stale-IV trigger: IV is NaN or ≤ 0.01 → IV/HV pts = 0 and row is flagged' },
+  { factor: 'IV Percentile',   weight: 35,  detail: '<30th=0 · 30–50th→0→10 · 50–75th→10→25 · 75–90th→25→35 · ≥90th=35. HV-derived — never stale.',
+    definition: '% of the last 252 trading days where the 30-day Historical Volatility was lower than today\u2019s. Measures whether options are elevated relative to this stock\u2019s own recent history.',
+    why: 'Regime-agnostic: a stable stock (AAPL, KO) during its own elevated-IV period scores well even if its absolute IV/HV ratio is near 1.0. The old IV/HV ratio structurally favoured high-beta names because their elevated realized vol kept the ratio low during calm periods. IV percentile removes that bias.',
+    formula: 'hv = rolling_30d_std(log_returns) \u00d7 sqrt(252)\n  iv_percentile = % of last-252d where hv[t] < hv[today]\n  v3.3: replaces IV/HV ratio (35 pts). Curve: <30th=0, 30\u201350th\u21920\u219210, 50\u201375th\u219210\u219225, 75\u201390th\u219225\u219235, \u226590th=35' },
   { factor: 'Trend: 52W Dist',  weight: 15,  detail: 'CC tent: ≤5%=0 · 5–15%→0→15 · 15–35%→15→0 · >35%=0.',
     definition: 'Direction-aware trend factor based on distance from the 52-week high. v3.1 rescaled from 25 to 15 pts — 10 pts moved to SMA Alignment + SMA Slope sub-factors.',
     why: 'For CCs: stock at the 52W high has the most upside momentum and highest risk of being called away. Modest consolidation 5–15% below the high gives room to drift sideways while premium decays. v3.1 narrows the tent range (sweet spot peaks at 10% consolidation, zero at 35%).',

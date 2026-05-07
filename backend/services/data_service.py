@@ -46,6 +46,59 @@ def get_risk_free_rate() -> float:
     return _FALLBACK_RISK_FREE_RATE
 
 
+def get_ticker_info(symbol: str) -> dict:
+    """
+    Returns company profile + current market context for AI insight enrichment.
+
+    Fields returned:
+      sector, industry, business_summary (≤300 chars),
+      52w_high, 52w_low,
+      vix_current (float | None), vix_regime ("Calm" | "Normal" | "Elevated" | "Panic" | "Unknown")
+
+    Never raises — all fields default to None / "Unknown" on failure so the
+    insight service can still run with whatever data is available.
+    """
+    profile: dict = {
+        "sector": None,
+        "industry": None,
+        "business_summary": None,
+        "52w_high": None,
+        "52w_low": None,
+        "vix_current": None,
+        "vix_regime": "Unknown",
+    }
+    # --- ticker profile ---
+    try:
+        info = yf.Ticker(symbol).info or {}
+        profile["sector"] = info.get("sector")
+        profile["industry"] = info.get("industry")
+        summary: str = info.get("longBusinessSummary", "") or ""
+        profile["business_summary"] = summary[:300] if summary else None
+        profile["52w_high"] = info.get("fiftyTwoWeekHigh")
+        profile["52w_low"] = info.get("fiftyTwoWeekLow")
+    except Exception as exc:
+        logger.warning("Ticker info fetch failed for %s: %s", symbol, exc)
+
+    # --- VIX ---
+    try:
+        vix_df = yf.Ticker("^VIX").history(period="5d", auto_adjust=True)
+        if vix_df is not None and not vix_df.empty:
+            vix_val = float(vix_df["Close"].iloc[-1])
+            profile["vix_current"] = round(vix_val, 2)
+            if vix_val < 15:
+                profile["vix_regime"] = "Calm"
+            elif vix_val < 25:
+                profile["vix_regime"] = "Normal"
+            elif vix_val < 35:
+                profile["vix_regime"] = "Elevated"
+            else:
+                profile["vix_regime"] = "Panic"
+    except Exception as exc:
+        logger.warning("VIX fetch failed: %s", exc)
+
+    return profile
+
+
 def get_news(symbol: str, max_age_hours: int = 72, max_items: int = 8) -> list[dict]:
     """
     Returns recent news headlines for a symbol from Yahoo Finance.

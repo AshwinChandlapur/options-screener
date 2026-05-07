@@ -8,14 +8,18 @@ import { CcFilterPanel } from './components/CcFilterPanel'
 import { DitmInput } from './components/DitmInput'
 import { DitmFilterPanel } from './components/DitmFilterPanel'
 import { DitmTable } from './components/DitmTable'
+import { EmRankInput } from './components/EmRankInput'
+import { EmRankTable } from './components/EmRankTable'
 import { SupplyChainView } from './components/SupplyChainView'
 import { DcfView } from './components/DcfView'
 import { useCsp } from './hooks/useCsp'
 import { useCc } from './hooks/useCc'
 import { useDitm } from './hooks/useDitm'
+import { useEmScan } from './hooks/useEmScan'
 import type { CspFilterState, CspResult } from './types/csp'
 import type { CcFilterState, CcResult } from './types/cc'
 import type { DitmFilterState, DitmResult } from './types/ditm'
+import type { UniverseKey } from './constants/universes'
 
 const DEFAULT_CSP_FILTERS: CspFilterState = {
   smaRatioBullishOnly: false,
@@ -72,7 +76,7 @@ function applyDitmFilters(results: DitmResult[], filters: DitmFilterState): Ditm
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'csp' | 'cc' | 'ditm' | 'supply' | 'dcf'>('csp')
+  const [activeTab, setActiveTab] = useState<'csp' | 'cc' | 'ditm' | 'em-rank' | 'supply' | 'dcf'>('csp')
 
   // CSP state
   const { results: cspResults, errors: cspErrors, loading: cspLoading, symbolCount: cspSymbolCount, isScanMode: cspIsScanMode, errorMessage: cspErrorMessage, cachedAt: cspCachedAt, run: runCsp, scan: scanCsp } = useCsp()
@@ -88,6 +92,9 @@ export default function App() {
   const { results: ditmResults, errors: ditmErrors, loading: ditmLoading, symbolCount: ditmSymbolCount, isScanMode: ditmIsScanMode, errorMessage: ditmErrorMessage, cachedAt: ditmCachedAt, macroPass, vixLevel, vix5dChange, spyAboveSma200, run: runDitm, scan: scanDitm } = useDitm()
   const [ditmFilters, setDitmFilters] = useState<DitmFilterState>(DEFAULT_DITM_FILTERS)
   const filteredDitm = useMemo(() => applyDitmFilters(ditmResults, ditmFilters), [ditmResults, ditmFilters])
+
+  // EM Rank state
+  const { results: emResults, errors: emErrors, loading: emLoading, symbolCount: emSymbolCount, isScanMode: emIsScanMode, errorMessage: emErrorMessage, cachedAt: emCachedAt, run: runEm, scan: scanEm } = useEmScan()
 
   return (
     <div className="app">
@@ -111,6 +118,12 @@ export default function App() {
             onClick={() => setActiveTab('ditm')}
           >
             DITM — Long Call
+          </button>
+          <button
+            className={`tab-btn${activeTab === 'em-rank' ? ' tab-btn-active' : ''}`}
+            onClick={() => setActiveTab('em-rank')}
+          >
+            EM Rank
           </button>
           <button
             className={`tab-btn${activeTab === 'supply' ? ' tab-btn-active' : ''}`}
@@ -266,6 +279,49 @@ export default function App() {
             {!ditmLoading && ditmResults.length === 0 && !ditmErrorMessage && (
               <div className="empty-state">
                 <p>Enter symbols and click <strong>🚀 Run</strong> to screen DITM Long Call opportunities, or switch to <strong>⚡ Auto Scan</strong> for the curated universe.</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {activeTab === 'em-rank' && (
+          <>
+            <EmRankInput
+              onScan={(topN, minDTE, maxDTE, universe, maxCapital) => scanEm(topN, minDTE, maxDTE, universe as UniverseKey, maxCapital)}
+              onCustom={(symbols, minDTE, maxDTE, maxCapital) => runEm({ symbols, minDTE, maxDTE, ...(maxCapital !== undefined && { maxCapital }) })}
+              loading={emLoading}
+            />
+            {emLoading && (
+              <div className="loading-state">
+                <div className="spinner" />
+                {emIsScanMode
+                  ? <p>Scanning <strong>selected universe</strong> in parallel &mdash; est. <strong>~25s</strong></p>
+                  : <p>Fetching <strong>{emSymbolCount}</strong> symbol{emSymbolCount !== 1 ? 's' : ''} in parallel
+                      &nbsp;&mdash; est. <strong>~{Math.ceil(emSymbolCount / 5) * 4}s</strong></p>
+                }
+              </div>
+            )}
+            {emErrorMessage && (
+              <div className="error-banner"><strong>Error:</strong> {emErrorMessage}</div>
+            )}
+            {emErrors.length > 0 && (
+              <div className="error-summary">
+                <strong>{emErrors.length} symbol{emErrors.length > 1 ? 's' : ''} failed:</strong>
+                <ul>{emErrors.map(e => <li key={e.symbol}><strong>{e.symbol}</strong>: {e.reason}</li>)}</ul>
+              </div>
+            )}
+            {!emLoading && emResults.length > 0 && (
+              <div className="results-meta">
+                Showing <strong>{emResults.length}</strong> result{emResults.length !== 1 ? 's' : ''}
+                {emCachedAt !== null && (
+                  <span className="cache-notice"> · cached {Math.round((Date.now() - emCachedAt) / 60000) < 1 ? '< 1' : Math.round((Date.now() - emCachedAt) / 60000)} min ago</span>
+                )}
+              </div>
+            )}
+            <EmRankTable data={emResults} />
+            {!emLoading && emResults.length === 0 && !emErrorMessage && (
+              <div className="empty-state">
+                <p>Click <strong>⚡ Scan Now</strong> to rank the universe by ROC at the 1σ EM strike, or enter custom symbols.</p>
               </div>
             )}
           </>

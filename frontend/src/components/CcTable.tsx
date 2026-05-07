@@ -29,10 +29,10 @@ function parseEnvDetail(detail: string): Record<string, number> {
   }
   return out
 }
-const ENV_MAX: Record<string, number> = { IH: 35, Tr: 15, SMA: 5, SLP: 5, RSI: 20, OI: 20 }
+const ENV_MAX: Record<string, number> = { IVP: 35, Tr: 15, SMA: 5, SLP: 5, RSI: 20, OI: 20 }
 const STRIKE_MAX: Record<string, number> = { 'Δ': 25, 'BA': 25, 'LQ': 15, 'ROC': 35 }
 const DRAG_LABELS: Record<string, string> = {
-  IH: 'IV/HV Ratio', Tr: 'Trend (52W)', SMA: 'SMA Alignment', SLP: 'SMA Slope', RSI: 'RSI', OI: 'Chain OI',
+  IVP: 'IV Percentile', Tr: 'Trend (52W)', SMA: 'SMA Alignment', SLP: 'SMA Slope', RSI: 'RSI', OI: 'Chain OI',
   'Δ': 'Delta', BA: 'Bid-Ask Spread', LQ: 'Liquidity', ROC: 'Ann. ROC',
 }
 function topDrags(envDetail: string, strikeDetail: string, n = 2) {
@@ -112,10 +112,10 @@ const COLUMNS = [
     ),
     cell: () => null,
   }),
-  col.accessor('iv_hv_ratio', {
+  col.accessor('iv_percentile', {
     header: () => (
-      <span className="col-tip col-scored" title="Implied Volatility ÷ 30-day Historical Volatility · >1.0 = options priced above recent realized moves · <1.0 = options relatively cheap">
-        IV/HV ⓘ
+      <span className="col-tip col-scored" title="IV Percentile — % of last 252 trading days where 30d HV was lower than today’s · v3.3 scored factor (35 pts, replaced IV/HV ratio) · ≥90th = full marks · HV-derived, never stale">
+        IV Pct ⓘ
       </span>
     ),
     cell: () => null,
@@ -345,7 +345,7 @@ export function CcTable({ data }: Props) {
                 className="sortable"
                 onClick={() => scoreCol?.toggleSorting(scoreSorted === 'asc')}
               >
-                <span className="col-tip" title="Final Score = 0.4×Env + 0.6×Strike  ·  v3 lean 8-factor model&#10;&#10;ENV SCORE (100 pts)&#10;  IV / HV Ratio   35 pts  ≥1.3×=full (stale IV → 0)&#10;  Trend (52W)     25 pts  CC: 5–15% below 52W high=full (≤5%=0)&#10;  RSI(14)         20 pts  CC: 38–58=full (ceiling 75)&#10;  Chain Median OI 20 pts  log circuit-breaker&#10;  Earnings in DTE −15 pts  penalty&#10;&#10;STRIKE SCORE (100 pts)&#10;  Delta           20 pts  symmetric bell, ideal +0.225&#10;  Bid-Ask Spread  30 pts  ≤1%=full&#10;  OI / Volume     15 pts  per-strike circuit-breaker&#10;  Annualized ROC  35 pts  ≥20%=full (capital = price − credit)&#10;&#10;Diagnostic-only (not scored): EM Buffer, %OTM from Spot.">
+                <span className="col-tip" title="Final Score = 0.4×Env + 0.6×Strike  ·  v3.3 lean 8-factor model&#10;&#10;ENV SCORE (100 pts)&#10;  IV Percentile   35 pts  ≥90th pct=full; HV-derived, regime-agnostic&#10;  Trend (52W)     15 pts  CC: 5–15% below 52W high=full (≤5%=0)&#10;  SMA Alignment    5 pts  SMA50>SMA200&#10;  SMA Slope        5 pts  SMA50 10d momentum&#10;  RSI(14)         20 pts  CC: 38–58=full (ceiling 75)&#10;  Chain Median OI 20 pts  log circuit-breaker&#10;  Earnings in DTE −15 pts  penalty&#10;&#10;STRIKE SCORE (100 pts)&#10;  Delta           25 pts  symmetric bell, ideal +0.225&#10;  Bid-Ask Spread  25 pts  ≤1%=full&#10;  OI / Volume     15 pts  per-strike circuit-breaker&#10;  Annualized ROC  35 pts  ≥12%=full&#10;&#10;Diagnostic-only (not scored): EM Buffer, %OTM from Spot.">
                   Score ⓘ
                 </span>
                 {scoreSorted === 'asc' && ' ↑'}
@@ -411,11 +411,11 @@ export function CcTable({ data }: Props) {
                     }
                   </td>
                   <td rowSpan={totalRows}>
-                    {r.iv_hv_ratio == null
+                    {r.iv_percentile == null || isNaN(r.iv_percentile)
                       ? <span className="dim">—</span>
-                      : <><span style={{ color: envColor(envPts, 'IH') }}>
-                          {r.iv_hv_ratio.toFixed(2)}×
-                        </span><br />{envSub(envPts, 'IH')}</>
+                      : <><span style={{ color: envColor(envPts, 'IVP') }}>
+                          {r.iv_percentile.toFixed(0)}th
+                        </span><br />{envSub(envPts, 'IVP')}</>
                     }
                   </td>
                   <td rowSpan={totalRows}>

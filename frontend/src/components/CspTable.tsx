@@ -9,7 +9,7 @@ import {
 import { useState, useMemo } from 'react'
 import type { ReactElement } from 'react'
 import type { CspResult, GroupedCspResult } from '../types/csp'
-import type { InsightResult, InsightVerdict } from '../types/insight'
+import type { InsightResult, InsightVerdict, StockCycle } from '../types/insight'
 import { useInsight } from '../hooks/useInsight'
 
 const col = createColumnHelper<GroupedCspResult>()
@@ -35,10 +35,10 @@ function parseEnvDetail(detail: string): Record<string, number> {
   }
   return out
 }
-const ENV_MAX: Record<string, number> = { IH: 35, Tr: 15, SMA: 5, SLP: 5, RSI: 20, OI: 20 }
+const ENV_MAX: Record<string, number> = { IVP: 35, Tr: 15, SMA: 5, SLP: 5, RSI: 20, OI: 20 }
 const STRIKE_MAX: Record<string, number> = { 'Δ': 25, 'BA': 25, 'LQ': 15, 'ROC': 35 }
 const DRAG_LABELS: Record<string, string> = {
-  IH: 'IV/HV Ratio', Tr: 'Trend (52W)', SMA: 'SMA Alignment', SLP: 'SMA Slope', RSI: 'RSI', OI: 'Chain OI',
+  IVP: 'IV Percentile', Tr: 'Trend (52W)', SMA: 'SMA Alignment', SLP: 'SMA Slope', RSI: 'RSI', OI: 'Chain OI',
   'Δ': 'Delta', BA: 'Bid-Ask Spread', LQ: 'Liquidity', ROC: 'Ann. ROC',
 }
 function topDrags(envDetail: string, strikeDetail: string, n = 2) {
@@ -120,10 +120,10 @@ const COLUMNS = [
     ),
     cell: () => null,
   }),
-  col.accessor('iv_hv_ratio', {
+  col.accessor('iv_percentile', {
     header: () => (
-      <span className="col-tip col-scored" title="Implied Volatility ÷ 30-day Historical Volatility · >1.0 = options priced above recent realized moves · <1.0 = options relatively cheap">
-        IV/HV ⓘ
+      <span className="col-tip col-scored" title="IV Percentile — % of last 252 trading days where 30d HV was lower than today’s · v3.3 scored factor (35 pts, replaced IV/HV ratio) · ≥90th = full marks · HV-derived, never stale">
+        IV Pct ⓘ
       </span>
     ),
     cell: () => null,
@@ -160,29 +160,163 @@ function scorePatternTag(env: number, strike: number): ReactElement | null {
   return null
 }
 
+// ---------------------------------------------------------------------------
+// Regime / VIX matrix helpers
+// ---------------------------------------------------------------------------
+
+type VixRegime = 'Calm' | 'Normal' | 'Elevated' | 'Panic'
+
+/** Parse "$40\u201365" \u2192 { low: 40, high: 65 } or "$80+" \u2192 { low: 80, high: null } */
+function parseBand(band: string): { low: number; high: number | null } {
+  const cleaned = band.replace(/[$,]/g, '')
+  const dash = cleaned.indexOf('\u2013')
+  if (dash !== -1) {
+    const lo = parseFloat(cleaned.slice(0, dash))
+    const hi = parseFloat(cleaned.slice(dash + 1))
+    return { low: isNaN(lo) ? 0 : lo, high: isNaN(hi) ? null : hi }
+  }
+  const plus = cleaned.indexOf('+')
+  if (plus !== -1) {
+    const lo = parseFloat(cleaned.slice(0, plus))
+    return { low: isNaN(lo) ? 0 : lo, high: null }
+  }
+  const val = parseFloat(cleaned)
+  return { low: isNaN(val) ? 0 : val, high: null }
+}
+
+/** VIX multiplier table: [row=cycle][col=vix] \u2192 percentage adjustment (+/- as decimal) */
+const VIX_MULTIPLIER: Record<StockCycle, Record<VixRegime, number>> = {
+  Bear:   { Calm: -0.10, Normal:  0.00, Elevated:  0.05, Panic: -0.15 },
+  Normal: { Calm: -0.05, Normal:  0.00, Elevated:  0.10, Panic: -0.10 },
+  Bull:   { Calm:  0.00, Normal:  0.00, Elevated:  0.15, Panic: -0.20 },
+}
+
+function applyVixMultiplier(band: string, cycle: StockCycle, vix: VixRegime): string {
+  const { low, high } = parseBand(band)
+  const mult = VIX_MULTIPLIER[cycle]?.[vix] ?? 0
+  const adjLow = Math.round(low * (1 + mult))
+  if (high === null) return `$${adjLow}+`
+  const adjHigh = Math.round(high * (1 + mult))
+  return `$${adjLow}\u2013$${adjHigh}`
+}
+
+/** Returns a human-readable multiplier string e.g. "+10%" or "0%" or "-5%" */
+function formatMult(cycle: StockCycle, vix: VixRegime): string {
+  const m = VIX_MULTIPLIER[cycle]?.[vix] ?? 0
+  if (m === 0) return '0%'
+  return (m > 0 ? '+' : '') + (m * 100).toFixed(0) + '%'
+}
+
+const VIX_REGIMES: VixRegime[] = ['Calm', 'Normal', 'Elevated', 'Panic']
+const VIX_LABELS: Record<VixRegime, string> = {
+  Calm: 'Calm (<15)',
+  Normal: 'Normal (15\u201325)',
+  Elevated: 'Elevated (25\u201335)',
+  Panic: 'Panic (>35)',
+}
+const CYCLE_ROWS: StockCycle[] = ['Bear', 'Normal', 'Bull']
+
+// ---------------------------------------------------------------------------
+// InsightPanel
+// ---------------------------------------------------------------------------
+
 const VERDICT_STYLE: Record<InsightVerdict, { cls: string; label: string }> = {
   ENTER: { cls: 'insight-verdict-enter', label: 'ENTER' },
   WAIT:  { cls: 'insight-verdict-wait',  label: 'WAIT'  },
   SKIP:  { cls: 'insight-verdict-skip',  label: 'SKIP'  },
 }
 
-function InsightPanel({ insight }: { insight: InsightResult }) {
+function InsightPanel({ insight, vixRegime }: { insight: InsightResult; vixRegime: VixRegime }) {
   const vs = VERDICT_STYLE[insight.verdict as InsightVerdict] ?? VERDICT_STYLE.WAIT
+  const baseBands: Record<StockCycle, string> = {
+    Bear:   insight.bear_band,
+    Normal: insight.normal_band,
+    Bull:   insight.bull_band,
+  }
   return (
     <div className="insight-panel">
+      {/* Header row */}
       <div className="insight-header">
         <span className={`insight-verdict ${vs.cls}`}>{vs.label}</span>
         <span className="insight-confidence">{Math.round(insight.confidence * 100)}% confidence</span>
-        <span className="insight-summary">{insight.summary}</span>
+        <span className="insight-regime-drivers">{insight.regime_drivers}</span>
+        <span className="insight-current-regime">{insight.current_regime}</span>
       </div>
+
+      {/* VIX context line */}
+      <div className="insight-vix-line">
+        VIX regime: <strong>{vixRegime}</strong>
+        &nbsp;&middot;&nbsp;Stock cycle: <strong>{insight.stock_cycle}</strong>
+      </div>
+
+      {/* Base bands line */}
+      <div className="insight-base-bands">
+        <span className="insight-base-bands-label">LLM base </span>
+        {CYCLE_ROWS.map((c, i) => (
+          <span key={c} className={`insight-cycle-${c.toLowerCase()}`}>
+            {i > 0 && <span className="insight-base-bands-sep">·</span>}
+            {c} {baseBands[c]}
+          </span>
+        ))}
+        <span className="insight-base-bands-hint"> (VIX Normal baseline)</span>
+      </div>
+
+      {/* Band matrix */}
+      <div className="insight-matrix-wrapper">
+        <table className="insight-matrix">
+          <thead>
+            <tr>
+              <th></th>
+              {VIX_REGIMES.map(v => (
+                <th
+                  key={v}
+                  className={v === vixRegime ? 'insight-matrix-col-active' : ''}
+                >
+                  {VIX_LABELS[v]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {CYCLE_ROWS.map(cycle => (
+              <tr key={cycle}>
+                <td className={`insight-matrix-row-label insight-cycle-${cycle.toLowerCase()}${cycle === insight.stock_cycle ? ' insight-matrix-row-active' : ''}`}>
+                  {cycle}
+                </td>
+                {VIX_REGIMES.map(v => {
+                  const isActive = cycle === insight.stock_cycle && v === vixRegime
+                  const bandStr = applyVixMultiplier(baseBands[cycle], cycle, v)
+                  return (
+                    <td
+                      key={v}
+                      className={`insight-matrix-cell${isActive ? ' insight-matrix-cell-active' : ''}`}
+                    >
+                      {bandStr}
+                      <span className="insight-matrix-mult">{formatMult(cycle, v)}</span>
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Strike context + key risk */}
       <div className="insight-flags">
-        <div className="insight-flag"><span className="insight-flag-label">ENV</span>{insight.env_flag}</div>
-        <div className="insight-flag"><span className="insight-flag-label">Strike</span>{insight.strike_flag}</div>
-        <div className="insight-flag insight-flag-risk"><span className="insight-flag-label">Key risk</span>{insight.key_risk}</div>
-        {insight.verdict === 'WAIT' && insight.reentry_condition && (
-          <div className="insight-flag insight-flag-reentry"><span className="insight-flag-label">Re-entry</span>{insight.reentry_condition}</div>
-        )}
+        <div className="insight-flag">
+          <span className="insight-flag-label">Strike</span>{insight.strike_context}
+        </div>
+        <div className="insight-flag insight-flag-risk">
+          <span className="insight-flag-label">Key risk</span>{insight.key_risk}
+        </div>
       </div>
+
+      {/* Summary paragraph */}
+      <div className="insight-summary">{insight.summary}</div>
+
+      {/* Disclaimer */}
+      <div className="insight-disclaimer">* AI-estimated ranges, not fundamental valuations</div>
     </div>
   )
 }
@@ -382,7 +516,7 @@ export function CspTable({ data }: Props) {
                 className="sortable"
                 onClick={() => scoreCol?.toggleSorting(scoreSorted === 'asc')}
               >
-                <span className="col-tip" title="Final Score = 0.4×Env + 0.6×Strike  ·  v3 lean 8-factor model&#10;&#10;ENV SCORE (100 pts)&#10;  IV / HV Ratio   35 pts  ≥1.3×=full (stale IV → 0)&#10;  Trend (52W)     25 pts  CSP: ≤5% below 52W high=full&#10;  RSI(14)         20 pts  CSP: 42–62=full&#10;  Chain Median OI 20 pts  log circuit-breaker&#10;  Earnings in DTE −15 pts  penalty&#10;&#10;STRIKE SCORE (100 pts)&#10;  Delta           20 pts  symmetric bell, ideal −0.225&#10;  Bid-Ask Spread  30 pts  ≤1%=full&#10;  OI / Volume     15 pts  per-strike circuit-breaker&#10;  Annualized ROC  35 pts  ≥20%=full&#10;&#10;Diagnostic-only (not scored): EM Buffer, %OTM from Spot.">
+                <span className="col-tip" title="Final Score = 0.4×Env + 0.6×Strike  ·  v3.3 lean 8-factor model&#10;&#10;ENV SCORE (100 pts)&#10;  IV Percentile   35 pts  ≥90th pct=full; HV-derived, regime-agnostic&#10;  Trend (52W)     15 pts  CSP: ≤5% below 52W high=full&#10;  SMA Alignment    5 pts  SMA50>SMA200&#10;  SMA Slope        5 pts  SMA50 10d momentum&#10;  RSI(14)         20 pts  CSP: 42–62=full&#10;  Chain Median OI 20 pts  log circuit-breaker&#10;  Earnings in DTE −15 pts  penalty&#10;&#10;STRIKE SCORE (100 pts)&#10;  Delta           25 pts  symmetric bell, ideal −0.225&#10;  Bid-Ask Spread  25 pts  ≤1%=full&#10;  OI / Volume     15 pts  per-strike circuit-breaker&#10;  Annualized ROC  35 pts  ≥12%=full&#10;&#10;Diagnostic-only (not scored): EM Buffer, %OTM from Spot.">
                   Score ⓘ
                 </span>
                 {scoreSorted === 'asc' && ' ↑'}
@@ -451,11 +585,11 @@ export function CspTable({ data }: Props) {
                     }
                   </td>
                   <td rowSpan={totalRows}>
-                    {r.iv_hv_ratio == null
+                    {r.iv_percentile == null || isNaN(r.iv_percentile)
                       ? <span className="dim">—</span>
-                      : <><span style={{ color: envColor(envPts, 'IH') }}>
-                          {r.iv_hv_ratio.toFixed(2)}×
-                        </span><br />{envSub(envPts, 'IH')}</>
+                      : <><span style={{ color: envColor(envPts, 'IVP') }}>
+                          {r.iv_percentile.toFixed(0)}th
+                        </span><br />{envSub(envPts, 'IVP')}</>
                     }
                   </td>
                   <td rowSpan={totalRows}>
@@ -566,6 +700,7 @@ export function CspTable({ data }: Props) {
                           roc_annualized: bestStrike.roc_annualized ?? null,
                           rsi: r.rsi,
                           iv_hv_ratio: bestStrike.iv_hv_ratio ?? null,
+                          iv_percentile: r.iv_percentile ?? null,
                           dist_from_52w_high_pct: r.dist_from_52w_high_pct,
                         })
                       }
@@ -638,7 +773,7 @@ export function CspTable({ data }: Props) {
                     ) : insightErrors.get(key) ? (
                       <div className="insight-error">⚠ {insightErrors.get(key)}</div>
                     ) : insights.get(key) ? (
-                      <InsightPanel insight={insights.get(key)!} />
+                      <InsightPanel insight={insights.get(key)!} vixRegime={(insights.get(key)!.vix_regime as VixRegime) ?? 'Normal'} />
                     ) : null}
                   </td>
                 </tr>

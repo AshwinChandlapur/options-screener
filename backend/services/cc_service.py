@@ -290,6 +290,7 @@ def _legacy_process_cc_symbol(
                             iv_stale=iv_stale_row,
                             sma_ratio=sma_ratio,
                             sma50_slope_pct=sma50_slope_pct,
+                            iv_percentile=iv_percentile,
                         )
                         strike_s, strike_detail, strike_raw = compute_cc_strike_score(
                             delta=d,
@@ -427,6 +428,7 @@ def _cc_symbol_factory(_sym: str, df, current_price: float) -> tuple[Indicators,
         dte=0,
         rsi=rsi,
         hv_rank=hv_rank,
+        iv_percentile=iv_pct,
         sma_ratio=sma_r,
         sma50_slope_pct=sma50_slope_pct,
         vol_resistance_1=vol_res[0] if len(vol_res) > 0 else None,
@@ -487,6 +489,7 @@ def _cc_env_scorer(ind: Indicators) -> tuple[float, str]:
         iv_stale=ind.iv_stale,
         sma_ratio=ind.sma_ratio,
         sma50_slope_pct=ind.sma50_slope_pct,
+        iv_percentile=ind.iv_percentile,
     )
 
 

@@ -60,6 +60,7 @@ class Indicators:
     # CSP / CC only
     iv_hv_ratio: Optional[float] = None
     iv_stale: bool = False
+    iv_percentile: Optional[float] = None  # v3.3: % of last-252d where HV < today (scored)
     rsi: Optional[float] = None            # RSI(14) daily
     sma_ratio: float = 1.0                 # SMA50/SMA200 ratio (v3.1 SMA alignment factor)
     sma50_slope_pct: float = 0.0           # SMA50 10-day % change (v3.1 slope factor)

@@ -18,12 +18,13 @@ from __future__ import annotations
 # v3.1 = CSP/CC calibration (ADR-0009: trend split, delta bell, BA/ROC)
 # v3.2 = DITM de-correlation (trend R², 52W tent, return compress,
 #         delta 0.82-0.90, leverage hard cap 5×)
-SCORING_VERSION: str = "3.2.0"
+# v3.3 = IV/HV Ratio → IV Percentile (regime-agnostic vol signal)
+SCORING_VERSION: str = "3.3.0"
 
 # Environment-score factor weights (CSP/CC). Sum = 100.
 # Mirror of the per-factor caps inside `compute_env_score` in `env.py`.
 ENV_WEIGHTS: dict[str, float] = {
-    'IH':  35.0,   # IV / HV Ratio
+    'IVP': 35.0,   # IV Percentile (% of last-252d where HV < today) — v3.3 replaces IV/HV
     'Tr':  15.0,   # Trend: 52W high distance (direction-aware)
     'SMA':  5.0,   # Trend: SMA alignment (P>SMA50>SMA200 categorical)
     'SLP':  5.0,   # Trend: SMA50 10-day slope (momentum confirmation)

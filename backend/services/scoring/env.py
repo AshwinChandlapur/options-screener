@@ -28,7 +28,7 @@ __all__ = ["compute_env_score"]
 def compute_env_score(
     *,
     iv_rank: float | None,             # IGNORED (HV Rank dropped) — kept for back-compat
-    iv_hv_ratio: float | None,
+    iv_hv_ratio: float | None,         # IGNORED in scoring (v3.3) — kept for back-compat/display
     price_above_sma50: bool,           # IGNORED (raw bool; use sma_ratio for scoring)
     sma50_above_sma200: bool,          # IGNORED (raw bool; use sma_ratio for scoring)
     dist_from_52w_high_pct: float,
@@ -37,41 +37,50 @@ def compute_env_score(
     earnings_within_dte: bool,
     direction: str = 'csp',            # 'csp' or 'cc' — affects Trend and RSI curves
     dte: int | None = None,            # IGNORED (DTE Sweet Spot dropped) — kept for back-compat
-    iv_stale: bool = False,            # If True, IV/HV pts forced to 0
+    iv_stale: bool = False,            # IGNORED in scoring (v3.3) — percentile is HV-derived
     sma_ratio: float = 1.0,            # v3.1: SMA50/SMA200 ratio (1.0 = neutral default)
     sma50_slope_pct: float = 0.0,      # v3.1: SMA50 10-day % change (0.0 = flat default)
+    iv_percentile: float | None = None,  # v3.3: % of last-252d where HV < today (0–100)
 ) -> tuple[float, str]:
     """
     Environment Score 0–100 (+earnings penalty up to −15).
     Direction-aware: CSP rewards strength near 52W high; CC rewards
     consolidation 5–15% below the high.
 
-    Weights (v3.1): IV/HV 35 + Tr 15 + SMA 5 + SLP 5 + RSI 20 + OI 20 = 100
+    Weights (v3.3): IVP 35 + Tr 15 + SMA 5 + SLP 5 + RSI 20 + OI 20 = 100
     Penalty: Earnings within DTE = −15
 
-    Back-compat: `iv_rank`, `price_above_sma50`, `sma50_above_sma200`, `dte`
-    are accepted but unused.
+    v3.3 change: IV/HV Ratio (35 pts) replaced by IV Percentile (35 pts).
+    IV percentile = % of last-252-trading-day window where 30d HV < today's 30d HV.
+    Curve: <30th=0, 30–50th→0→10, 50–75th→10→25, 75–90th→25→35, ≥90th=35.
+    This makes the factor regime-agnostic: a stable stock in its own elevated-IV
+    period scores well regardless of absolute IV/HV level.
+
+    Back-compat: `iv_rank`, `iv_hv_ratio`, `price_above_sma50`, `sma50_above_sma200`,
+    `dte`, `iv_stale` are accepted but unused in scoring.
     """
-    _ = iv_rank, price_above_sma50, sma50_above_sma200, dte  # explicitly unused
+    _ = iv_rank, iv_hv_ratio, price_above_sma50, sma50_above_sma200, dte, iv_stale  # explicitly unused
     direction = direction.lower()
     score = 0.0
     bk: dict[str, float] = {}
 
-    # --- IV / HV Ratio (35 pts) — v3 rescale of v2 0.8/1.0/1.1/1.2/1.3 curve ---
-    # Stale-IV: when iv_stale=True (IV NaN or ≤0.01), award 0 pts and let UI flag the row.
+    # --- IV Percentile (35 pts) — v3.3 replacement for IV/HV Ratio ---
+    # iv_percentile = % of last-252-day window where 30d HV < today's 30d HV.
+    # Regime-agnostic: rewards options elevated *relative to this stock's own history*,
+    # not relative to a market-wide IV/HV ratio that favours high-beta names.
+    # Curve: <30th=0, 30-50th→0→10, 50-75th→10→25, 75-90th→25→35, ≥90th=35.
     p = 0.0
-    if not iv_stale and iv_hv_ratio is not None and not math.isnan(iv_hv_ratio):
-        if iv_hv_ratio >= 1.3:
+    if iv_percentile is not None and not math.isnan(iv_percentile):
+        pct = iv_percentile
+        if pct >= 90:
             p = 35.0
-        elif iv_hv_ratio >= 1.2:
-            p = 22.5 + (iv_hv_ratio - 1.2) / 0.1 * 12.5    # 22.5 → 35.0
-        elif iv_hv_ratio >= 1.1:
-            p = 12.5 + (iv_hv_ratio - 1.1) / 0.1 * 10.0    # 12.5 → 22.5
-        elif iv_hv_ratio >= 1.0:
-            p = 5.0 + (iv_hv_ratio - 1.0) / 0.1 * 7.5      # 5.0 → 12.5
-        elif iv_hv_ratio >= 0.8:
-            p = (iv_hv_ratio - 0.8) / 0.2 * 5.0            # 0 → 5.0
-    score += p; bk['IH'] = p
+        elif pct >= 75:
+            p = 25.0 + (pct - 75.0) / 15.0 * 10.0   # 25 → 35
+        elif pct >= 50:
+            p = 10.0 + (pct - 50.0) / 25.0 * 15.0   # 10 → 25
+        elif pct >= 30:
+            p = (pct - 30.0) / 20.0 * 10.0           # 0 → 10
+    score += p; bk['IVP'] = p
 
     # --- Trend: 52W High Distance (15 pts) — direction-aware, smooth curves ---
     # v3.1: scaled from 25 to 15 pts (10 pts moved to SMA+Slope sub-factors).

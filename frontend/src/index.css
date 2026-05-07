@@ -551,7 +551,7 @@ body {
   padding: 10px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .insight-header {
   display: flex;
@@ -575,6 +575,71 @@ body {
   color: #64748b;
   flex-shrink: 0;
 }
+.insight-regime-drivers {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+.insight-current-regime {
+  font-size: 11px;
+  color: #64748b;
+  font-style: italic;
+}
+.insight-vix-line {
+  font-size: 11px;
+  color: #64748b;
+}
+.insight-vix-line strong {
+  color: #cbd5e1;
+}
+
+/* Band matrix */
+.insight-matrix-wrapper {
+  overflow-x: auto;
+}
+.insight-matrix {
+  border-collapse: collapse;
+  font-size: 11px;
+  width: 100%;
+}
+.insight-matrix th,
+.insight-matrix td {
+  border: 1px solid #1e2533;
+  padding: 4px 10px;
+  text-align: center;
+  white-space: nowrap;
+}
+.insight-matrix th {
+  color: #64748b;
+  font-weight: 600;
+  font-size: 10px;
+  background: #0d111a;
+}
+.insight-matrix-col-active {
+  color: #e2e8f0 !important;
+  background: #131928 !important;
+}
+.insight-matrix-row-label {
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-align: left;
+  padding-left: 8px;
+}
+.insight-matrix-row-active {
+  background: #131928;
+}
+.insight-cycle-bear   { color: #f87171; }
+.insight-cycle-normal { color: #94a3b8; }
+.insight-cycle-bull   { color: #4ade80; }
+.insight-matrix-cell { color: #94a3b8; }
+.insight-matrix-cell-active {
+  color: #fcd34d !important;
+  font-weight: 700;
+  border: 2px solid #b45309 !important;
+  background: #1c1400 !important;
+}
+
 .insight-summary {
   font-size: 12px;
   color: #cbd5e1;
@@ -601,7 +666,47 @@ body {
   flex-shrink: 0;
 }
 .insight-flag-risk { color: #fca5a5; }
-.insight-flag-reentry { color: #6ee7b7; border-top: 1px solid #2d3748; margin-top: 4px; padding-top: 4px; }
+.insight-disclaimer {
+  font-size: 10px;
+  color: #334155;
+  font-style: italic;
+}
+
+/* Base bands line */
+.insight-base-bands {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.insight-base-bands-label {
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+.insight-base-bands-sep {
+  color: #475569;
+  margin: 0 4px;
+}
+.insight-base-bands-hint {
+  color: #475569;
+  font-style: italic;
+  font-size: 10px;
+}
+
+/* Per-cell multiplier badge */
+.insight-matrix-mult {
+  display: block;
+  font-size: 9px;
+  color: #64748b;
+  margin-top: 1px;
+  letter-spacing: 0.02em;
+}
 
 /* HV fallback tag next to delta */
 .iv-fallback-tag {

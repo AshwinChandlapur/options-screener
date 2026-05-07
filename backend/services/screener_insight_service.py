@@ -1,11 +1,13 @@
 """
-LLM-powered trade insight for a single CSP screener row.
+LLM-powered trade insight for a single CSP screener row — v2 regime-aware.
 
-Fetches recent news via data_service, computes 1-day return from OHLC,
-then calls Azure OpenAI to produce a structured ENTER / WAIT / SKIP verdict.
+Produces cycle-adjusted value bands (Bear / Normal / Bull) for any ticker,
+evaluates the CSP strike against those bands, and applies a VIX × cycle
+matrix gate before issuing ENTER / WAIT / SKIP.
 
-The insight is grounded only in data that is explicitly passed to the prompt —
-the LLM is instructed not to hallucinate facts beyond what it receives.
+Enriches each request with company profile + VIX regime from data_service
+before calling Azure OpenAI. The LLM is instructed not to hallucinate facts
+beyond what it receives.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from typing import Literal, Optional
 
 from openai import AzureOpenAI
 
-from services.data_service import get_news, get_ohlc
+from services.data_service import get_news, get_ohlc, get_ticker_info
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +47,12 @@ class InsightRequest:
     env_score: float
     strike_score: float
     final_score: float
-    env_detail: str        # e.g. "IH:12 Tr:15 SMA:0 SLP:0 RSI:0 OI:18"
+    env_detail: str        # e.g. "IVP:25 Tr:15 SMA:3 SLP:0 RSI:16 OI:18"
     strike_detail: str     # e.g. "Δ:20 BA:24 LQ:15 ROC:35"
     roc_annualized: Optional[float]
     rsi: float
-    iv_hv_ratio: Optional[float]
+    iv_hv_ratio: Optional[float]      # kept for back-compat — NOT used in prompt
+    iv_percentile: Optional[float]    # v3.3 scored ENV factor (0–100)
     dist_from_52w_high_pct: float
 
 
@@ -58,11 +61,15 @@ class InsightResult:
     verdict: Literal["ENTER", "WAIT", "SKIP"]
     confidence: float
     summary: str
-    env_flag: str
-    strike_flag: str
-    key_risk: str
-    reentry_condition: Optional[str]
-
+    regime_drivers: str    # "BTC price + AI data center capex"
+    current_regime: str    # "Mid-cycle — BTC ~$82K, recovering from Jan lows"
+    stock_cycle: str       # "Bear" | "Normal" | "Bull"
+    bear_band: str         # "$15–$35"
+    normal_band: str       # "$40–$65"
+    bull_band: str         # "$80+" or "$80–$120+"
+    strike_context: str    # "Strike $50 sits at the floor of Normal — solid if mid-cycle holds"
+    key_risk: str          # single sentence
+    vix_regime: str        # "Calm" | "Normal" | "Elevated" | "Panic" | "Unknown"
 
 class InsightError(Exception):
     """Raised when the insight call cannot be completed."""
@@ -72,10 +79,10 @@ class InsightError(Exception):
 # Prompt construction helpers
 # ---------------------------------------------------------------------------
 
-_ENV_MAX = {"IH": 35, "Tr": 15, "SMA": 5, "SLP": 5, "RSI": 20, "OI": 20}
+_ENV_MAX = {"IVP": 35, "Tr": 15, "SMA": 5, "SLP": 5, "RSI": 20, "OI": 20}
 _ENV_LABELS = {
-    "IH": "IV/HV Ratio",
-    "Tr": "52W High Distance",
+    "IVP": "IV Percentile",
+    "Tr":  "52W High Distance",
     "SMA": "SMA50/200 Alignment",
     "SLP": "SMA50 10d Slope",
     "RSI": "RSI(14)",
@@ -135,50 +142,82 @@ def _compute_1d_change(symbol: str) -> Optional[float]:
 _SYSTEM_PROMPT = """\
 You are an expert options trader specialising in Cash-Secured Puts (CSP).
 
-You receive a scored CSP trade candidate plus recent news headlines. Your task is to
-interpret the score breakdown in the context of current news and produce a clear verdict.
+Your task is NOT to rephrase the screener score. Your task is to produce an
+independent, regime-conditioned framework that helps the trader decide whether
+they are comfortable owning 100 shares at the strike price.
 
-Scoring model reference:
-  ENV score (0-100, weight 40%):
-    IH  IV/HV Ratio        35 pts  seller's edge; ≥1.3× = full
-    Tr  52W High Distance  15 pts  CSP: ≤5% below 52W high = full
-    SMA SMA50/200 Align     5 pts  structural trend confirmation
-    SLP SMA50 10d Slope     5 pts  momentum continuation
-    RSI RSI(14)            20 pts  sweet spot 42-62; >75 = 0 (overbought)
-    OI  Chain Liquidity    20 pts  log circuit-breaker
-    Earnings penalty: -15 if earnings within DTE window
-  Strike score (0-100, weight 60%):
-    Δ   Delta Position     25 pts  ideal -0.225
-    BA  Bid-Ask Spread     25 pts  ≤1% = full
-    LQ  Strike Liquidity   15 pts  OI/volume circuit-breaker
-    ROC Annualised Return  35 pts  ≥12% annualised = full
-  Final = 0.4 × ENV + 0.6 × Strike
+Follow these five steps exactly:
 
-Verdict guide (use judgment, not rigid thresholds):
-  ENTER — both ENV and Strike support entry; no significant timing or news risk
-  WAIT  — mechanics are good but timing is off; better entry likely in coming days
-           (common causes: gap-up today, RSI overbought, event-driven IV, catalyst that may reverse)
-  SKIP  — structural problem in score or news makes this trade inadvisable
+STEP 1 — IDENTIFY REGIME DRIVERS
+  From ticker_profile (sector, industry, business_summary) and recent_headlines,
+  identify 1–2 primary external drivers that determine this stock’s valuation cycle.
+  Examples: “BTC price + AI capex”, “consumer spending + commodity costs”,
+  “interest rates + credit spreads”, “oil price + refining margins”.
+  Output → regime_drivers (10 words max)
 
-Rules:
-- Reason ONLY from data and headlines you are given. Do not invent or assume facts.
-- If no headlines are provided, reason from scores and data alone.
-- summary: 2-3 sentences max. env_flag and strike_flag: 1 sentence each.
-- key_risk: single sentence — the one scenario that would cause maximum loss.
-- reentry_condition: WAIT verdicts only — 1-2 sentences stating concrete re-entry triggers
-  (e.g. specific price level to watch, RSI cooling below a threshold, post-earnings IV crush,
-  a catalyst resolving, or a date range). Be specific. Set to null for ENTER and SKIP.
-- confidence: 0.0-1.0 reflecting how clear the verdict is given available data.
+STEP 2 — ASSESS CURRENT REGIME
+  From recent_headlines and one_day_change_pct, classify the current cycle:
+  Bear (stress / contraction), Normal (stable / ranging), or Bull (expansion / momentum).
+  Briefly state why (one clause, e.g. “BTC ~$82K, recovering from Jan lows”).
+  Output → current_regime (15 words max), stock_cycle (exactly one of: Bear, Normal, Bull)
+
+STEP 3 — PRODUCE VALUE BANDS
+  Produce three non-overlapping dollar bands:
+  - bear_band:   floor near 52w_low, ceiling below Normal floor
+  - normal_band: must satisfy low < current_price < high (brackets current price)
+  - bull_band:   floor at Normal ceiling; open-ended top is acceptable (e.g. "$80+")
+  Format: "$X–$Y" for bounded, "$X+" for open-ended. Integer dollar values only.
+  Output → bear_band, normal_band, bull_band
+
+STEP 4 — EVALUATE THE STRIKE
+  Compare the given strike to the three bands.
+  State where the strike sits relative to the Normal band floor and the bear band ceiling.
+  State what assignment at this strike means in a bear-cycle scenario.
+  Output → strike_context (20 words max)
+
+STEP 5 — VERDICT using VIX × cycle matrix
+  Use the following gate:
+
+  stock_cycle / vix_regime |  Calm   Normal  Elevated  Panic
+  -------------------------+--------------------------------------
+  Bear                     |  SKIP   SKIP    WAIT      SKIP
+  Normal                   |  WAIT   ENTER   ENTER     WAIT
+  Bull                     |  ENTER  ENTER   ENTER     WAIT
+
+  Override rules:
+  - If strike > Normal band ceiling → always SKIP (catching falling knife on assignment)
+  - If earnings_within_dte is true and stock_cycle is Bear → always SKIP
+  - WAIT is preferred over SKIP when regime is uncertain or data is thin
+
+  Output → verdict (ENTER | WAIT | SKIP)
+
+Output rules:
+  - Reason ONLY from data you are given. Do not invent or assume facts.
+  - If no headlines are provided, reason from ticker_profile and scores alone.
+  - summary: 2–3 sentences on the regime + verdict rationale. Do not repeat the numbers.
+  - key_risk: one sentence — the single scenario that would cause maximum loss.
+  - confidence: 0.0–1.0 reflecting how clearly the data supports the verdict.
 """
 
 
-def _build_user_prompt(req: InsightRequest, one_day_change_pct: Optional[float], news: list[dict]) -> str:
+def _build_user_prompt(req: InsightRequest, one_day_change_pct: Optional[float], news: list[dict], ticker_profile: dict) -> str:
     env_factors = _format_factors(req.env_detail, _ENV_MAX, _ENV_LABELS)
     strike_factors = _format_factors(req.strike_detail, _STRIKE_MAX, _STRIKE_LABELS)
     payload = {
         "symbol": req.symbol,
         "current_price": req.price,
         "one_day_change_pct": one_day_change_pct,
+        "ticker_profile": {
+            "sector": ticker_profile.get("sector"),
+            "industry": ticker_profile.get("industry"),
+            "business_summary": ticker_profile.get("business_summary"),
+            "52w_high": ticker_profile.get("52w_high"),
+            "52w_low": ticker_profile.get("52w_low"),
+        },
+        "market_context": {
+            "vix": ticker_profile.get("vix_current"),
+            "vix_regime": ticker_profile.get("vix_regime", "Unknown"),
+        },
         "trade": {
             "strike": req.strike,
             "premium": req.premium,
@@ -196,7 +235,7 @@ def _build_user_prompt(req: InsightRequest, one_day_change_pct: Optional[float],
         "strike_factors": strike_factors,
         "supporting_data": {
             "rsi_14": round(req.rsi, 1) if not math.isnan(req.rsi) else None,
-            "iv_hv_ratio": round(req.iv_hv_ratio, 3) if req.iv_hv_ratio is not None else None,
+            "iv_percentile": round(req.iv_percentile, 1) if req.iv_percentile is not None else None,
             "dist_from_52w_high_pct": round(req.dist_from_52w_high_pct, 1),
             "roc_annualized_pct": round(req.roc_annualized, 1) if req.roc_annualized is not None else None,
         },
@@ -211,15 +250,24 @@ _RESPONSE_SCHEMA = {
     "schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["verdict", "confidence", "summary", "env_flag", "strike_flag", "key_risk", "reentry_condition"],
+        "required": [
+            "verdict", "confidence", "summary",
+            "regime_drivers", "current_regime", "stock_cycle",
+            "bear_band", "normal_band", "bull_band",
+            "strike_context", "key_risk",
+        ],
         "properties": {
-            "verdict": {"type": "string", "enum": ["ENTER", "WAIT", "SKIP"]},
-            "confidence": {"type": "number"},
-            "summary": {"type": "string"},
-            "env_flag": {"type": "string"},
-            "strike_flag": {"type": "string"},
-            "key_risk": {"type": "string"},
-            "reentry_condition": {"type": ["string", "null"]},
+            "verdict":        {"type": "string", "enum": ["ENTER", "WAIT", "SKIP"]},
+            "confidence":     {"type": "number"},
+            "summary":        {"type": "string"},
+            "regime_drivers": {"type": "string"},
+            "current_regime": {"type": "string"},
+            "stock_cycle":    {"type": "string", "enum": ["Bear", "Normal", "Bull"]},
+            "bear_band":      {"type": "string"},
+            "normal_band":    {"type": "string"},
+            "bull_band":      {"type": "string"},
+            "strike_context": {"type": "string"},
+            "key_risk":       {"type": "string"},
         },
     },
 }
@@ -241,6 +289,7 @@ def get_insight(req: InsightRequest) -> InsightResult:
 
     news = get_news(req.symbol, max_age_hours=72, max_items=8)
     one_day_change = _compute_1d_change(req.symbol)
+    ticker_profile = get_ticker_info(req.symbol)
 
     client = AzureOpenAI(
         api_key=_AZURE_KEY,
@@ -253,11 +302,11 @@ def get_insight(req: InsightRequest) -> InsightResult:
             model=_AZURE_DEPLOYMENT,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _build_user_prompt(req, one_day_change, news)},
+                {"role": "user", "content": _build_user_prompt(req, one_day_change, news, ticker_profile)},
             ],
             response_format={"type": "json_schema", "json_schema": _RESPONSE_SCHEMA},
             temperature=0.3,
-            max_tokens=600,
+            max_tokens=900,
         )
     except Exception as exc:
         logger.exception("Azure OpenAI call failed for %s insight", req.symbol)
@@ -274,13 +323,17 @@ def get_insight(req: InsightRequest) -> InsightResult:
     if verdict not in ("ENTER", "WAIT", "SKIP"):
         verdict = "WAIT"
 
-    raw_reentry = data.get("reentry_condition")
     return InsightResult(
         verdict=verdict,
         confidence=float(max(0.0, min(1.0, data.get("confidence", 0.5)))),
         summary=str(data.get("summary", "")),
-        env_flag=str(data.get("env_flag", "")),
-        strike_flag=str(data.get("strike_flag", "")),
+        regime_drivers=str(data.get("regime_drivers", "")),
+        current_regime=str(data.get("current_regime", "")),
+        stock_cycle=str(data.get("stock_cycle", "Normal")),
+        bear_band=str(data.get("bear_band", "")),
+        normal_band=str(data.get("normal_band", "")),
+        bull_band=str(data.get("bull_band", "")),
+        strike_context=str(data.get("strike_context", "")),
         key_risk=str(data.get("key_risk", "")),
-        reentry_condition=str(raw_reentry) if raw_reentry is not None else None,
+        vix_regime=str(ticker_profile.get("vix_regime", "Unknown")),
     )
