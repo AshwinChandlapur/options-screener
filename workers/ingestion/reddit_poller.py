@@ -48,6 +48,12 @@ class RedditPoller:
 
     Fetches recent posts and their top-level comments per subreddit.
     A single httpx.Client is reused across calls for connection pooling.
+
+    Dedup: _last_seen_utc tracks the highest created_utc returned per
+    subreddit. Subsequent calls pass `after=<utc>` so Arctic Shift only
+    returns posts newer than the last seen one. This is in-memory — on
+    worker restart a single catch-up batch is ingested; the EH consumer
+    checkpoint prevents that batch from being extracted twice.
     """
 
     def __init__(
@@ -65,6 +71,8 @@ class RedditPoller:
             timeout=20.0,
             follow_redirects=True,
         )
+        # subreddit → highest created_utc seen; used as `after` cursor.
+        self._last_seen_utc: dict[str, int] = {}
 
     @retry(
         retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
@@ -73,14 +81,17 @@ class RedditPoller:
         reraise=True,
     )
     def _fetch_posts(self, subreddit_name: str) -> list[dict]:
+        params: dict[str, object] = {
+            "subreddit": subreddit_name,
+            "limit": self._post_limit,
+            "sort": "desc",
+            "fields": _POST_FIELDS,
+        }
+        if subreddit_name in self._last_seen_utc:
+            params["after"] = self._last_seen_utc[subreddit_name]
         resp = self._client.get(
             f"{_ARCTIC_SHIFT_BASE}/posts/search",
-            params={
-                "subreddit": subreddit_name,
-                "limit": self._post_limit,
-                "sort": "desc",
-                "fields": _POST_FIELDS,
-            },
+            params=params,
         )
         resp.raise_for_status()
         return resp.json().get("data", [])
@@ -105,12 +116,21 @@ class RedditPoller:
         return resp.json().get("data", [])
 
     def poll_subreddit(self, subreddit_name: str) -> Iterator[RawEvent]:
-        """Yield RawEvents for recent posts and their top comments."""
+        """Yield RawEvents for posts newer than the last seen one + their top comments."""
         try:
             posts = self._fetch_posts(subreddit_name)
         except Exception:
             logger.exception("Failed to fetch posts for r/%s", subreddit_name)
             return
+
+        if not posts:
+            return
+
+        # Advance the cursor to the newest post in this batch so the next
+        # call only fetches posts created after this point.
+        max_utc = max(int(p.get("created_utc", 0)) for p in posts)
+        self._last_seen_utc[subreddit_name] = max_utc
+        logger.debug("r/%s: %d new posts (cursor → %d)", subreddit_name, len(posts), max_utc)
 
         for post in posts:
             post_id: str = post.get("id", "")
