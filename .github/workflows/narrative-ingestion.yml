@@ -61,4 +61,7 @@ jobs:
           az containerapp update \
             --name ca-ingestion \
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-            --image ${{ secrets.GHCR_IMAGE_BASE }}:${{ steps.tag.outputs.tag }}
+            --image ${{ secrets.GHCR_IMAGE_BASE }}:${{ steps.tag.outputs.tag }} \
+            --registry-server ghcr.io \
+            --registry-username ${{ github.actor }} \
+            --registry-password ${{ secrets.GITHUB_TOKEN }}
