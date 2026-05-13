@@ -40,9 +40,7 @@ def run() -> None:
 
     secrets = fetch_secrets(config.keyvault_uri)
     poller = RedditPoller(
-        client_id=secrets.reddit_client_id,
-        client_secret=secrets.reddit_client_secret,
-        user_agent=secrets.reddit_user_agent,
+        user_agent=config.reddit_user_agent,
         author_salt=secrets.reddit_author_salt,
     )
     blob_writer = BlobBatchWriter(
@@ -63,7 +61,7 @@ def run() -> None:
             cycle_start = time.monotonic()
             for sub in subreddits:
                 try:
-                    budget.consume(2)  # 1 listing + 1 expansion
+                    budget.consume(1)  # 1 listing request per subreddit
                     events = list(poller.poll_subreddit(sub))
                 except Exception:
                     logger.exception("Poll failed for r/%s; skipping", sub)

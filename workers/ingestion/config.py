@@ -4,16 +4,24 @@ Env contract (set by Container Apps):
 - KEYVAULT_URI         e.g. https://kv-narrative-<suffix>.vault.azure.net/
 - EVENT_HUB_NAMESPACE  e.g. evhns-narrative-<suffix>.servicebus.windows.net
 - BLOB_ACCOUNT_NAME    e.g. stnarrative<suffix>
+- REDDIT_USER_AGENT    polite UA string (default provided; override if desired)
 - LOG_LEVEL            INFO / DEBUG (default INFO)
 
 Secret contract (Key Vault, fetched once at startup):
-- reddit-client-id, reddit-client-secret, reddit-user-agent
 - reddit-author-salt   used for SHA-256(username + salt). Never logged.
+
+Note: reddit-client-id / reddit-client-secret are NOT required until Reddit
+OAuth access is approved. The worker uses the public JSON API in the interim.
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+_DEFAULT_UA = (
+    "narrative-screener/1.0 "
+    "(options-screener; +https://github.com/AshwinChandlapur/options-screener)"
+)
 
 
 @dataclass(frozen=True)
@@ -22,10 +30,11 @@ class WorkerConfig:
     event_hub_namespace: str
     blob_account_name: str
     log_level: str
+    reddit_user_agent: str = _DEFAULT_UA
     raw_events_hub: str = "reddit-raw-events"
     blob_container: str = "reddit-raw"
     poll_interval_seconds: int = 60
-    reddit_rate_limit_per_min: int = 60  # OAuth limit, hard cap
+    reddit_rate_limit_per_min: int = 30  # conservative unauthenticated cap
 
 
 def load_from_env() -> WorkerConfig:
@@ -34,6 +43,7 @@ def load_from_env() -> WorkerConfig:
         event_hub_namespace=_required("EVENT_HUB_NAMESPACE"),
         blob_account_name=_required("BLOB_ACCOUNT_NAME"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
+        reddit_user_agent=os.getenv("REDDIT_USER_AGENT", _DEFAULT_UA),
     )
 
 
