@@ -17,7 +17,7 @@
 targetScope = 'subscription'
 
 @description('Name of the resource group hosting all narrative platform resources.')
-param resourceGroupName string = 'rg-narrative'
+param resourceGroupName string = 'options-rg'
 
 @description('Azure region for all resources. Existing stack lives in centralus.')
 param location string = 'centralus'

@@ -67,11 +67,13 @@ jobs:
             '{
               "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
               "contentVersion": "1.0.0.0",
-              "parameters": {
-                "resourceGroupName": { "value": $rg },
-                "nameSuffix": { "value": $suffix },
-                "keyVaultAdminObjectIds": { "value": $admins }
-              }
+              "parameters": (
+                {
+                  "nameSuffix": { "value": $suffix },
+                  "keyVaultAdminObjectIds": { "value": $admins }
+                }
+                | if $rg != "" then . + { "resourceGroupName": { "value": $rg } } else . end
+              )
             }' > infra/main.parameters.json
           # Print without secrets (admins array length only).
           echo "resourceGroupName=$RESOURCE_GROUP"
