@@ -40,8 +40,6 @@ def run() -> None:
 
     secrets = fetch_secrets(config.keyvault_uri)
     poller = RedditPoller(
-        client_id=secrets.reddit_client_id,
-        client_secret=secrets.reddit_client_secret,
         user_agent=config.reddit_user_agent,
         author_salt=secrets.reddit_author_salt,
     )

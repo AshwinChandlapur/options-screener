@@ -1,17 +1,25 @@
-"""Reddit polling via OAuth client credentials (no user login required).
+"""Reddit polling via public Atom RSS feeds (no auth required).
 
-Uses the Reddit OAuth2 client_credentials grant — requires a Reddit app
-(script type) registered at reddit.com/prefs/apps. Tokens are refreshed
-automatically when they expire (typically 24h). Azure datacenter IPs are
-blocked by Reddit for unauthenticated requests; OAuth bypasses this.
+Reddit's /r/{sub}/new/.rss endpoint is publicly accessible from any IP
+including Azure datacenters — no OAuth, no app registration, no Devvit.
+Rate limit: 30 req/min (same conservative cap as before).
+
+Trade-off vs JSON API:
+- No author field in RSS (author_hash set to empty string)
+- Score/award counts not in RSS (set to 0)
+- Title + content:encoded body are present — sufficient for extraction
+
+Migration note: if Reddit ever exposes these fields in RSS or we obtain OAuth,
+swap in the OAuth poller from git history. Schema is unchanged.
 """
 from __future__ import annotations
 
 import logging
-import threading
-import time
+import re
 from collections.abc import Iterator
+import datetime
 
+import defusedxml.ElementTree as ET
 import httpx
 from tenacity import (
     retry,
@@ -25,51 +33,30 @@ from schema import RawEvent
 
 logger = logging.getLogger(__name__)
 
-_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
-_API_BASE = "https://oauth.reddit.com"
+_RSS_BASE = "https://www.reddit.com"
+_ATOM_NS = "http://www.w3.org/2005/Atom"
+_MEDIA_NS = "http://search.yahoo.com/mrss/"
 
 
 class RedditPoller:
-    """Polls Reddit subreddits using OAuth client credentials.
+    """Polls Reddit subreddits via public Atom RSS — no credentials required.
 
-    Fetches a Bearer token on first use and refreshes it 60 s before expiry.
-    Thread-safe token refresh is handled internally.
+    A single httpx.Client is reused across calls for connection pooling.
     """
 
     def __init__(
         self,
-        client_id: str,
-        client_secret: str,
         user_agent: str,
         author_salt: str,
         post_limit_per_subreddit: int = 100,
     ) -> None:
-        self._client_id = client_id
-        self._client_secret = client_secret
-        self._user_agent = user_agent
         self._salt = author_salt
         self._post_limit = post_limit_per_subreddit
-        self._access_token: str | None = None
-        self._token_expires_at: float = 0.0
-        self._lock = threading.Lock()
-        self._http = httpx.Client(timeout=15.0, follow_redirects=True)
-
-    def _ensure_token(self) -> str:
-        with self._lock:
-            if self._access_token and time.monotonic() < self._token_expires_at - 60:
-                return self._access_token
-            resp = self._http.post(
-                _TOKEN_URL,
-                auth=(self._client_id, self._client_secret),
-                data={"grant_type": "client_credentials"},
-                headers={"User-Agent": self._user_agent},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            self._access_token = data["access_token"]
-            self._token_expires_at = time.monotonic() + int(data.get("expires_in", 3600))
-            logger.info("Reddit OAuth token refreshed, expires in %ds", data.get("expires_in", 3600))
-            return self._access_token
+        self._client = httpx.Client(
+            headers={"User-Agent": user_agent},
+            timeout=15.0,
+            follow_redirects=True,
+        )
 
     @retry(
         retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
@@ -77,56 +64,67 @@ class RedditPoller:
         stop=stop_after_attempt(3),
         reraise=True,
     )
-    def _fetch_listing(self, subreddit_name: str) -> list[dict]:
-        token = self._ensure_token()
-        url = f"{_API_BASE}/r/{subreddit_name}/new"
-        resp = self._http.get(
-            url,
-            params={"limit": self._post_limit, "raw_json": "1"},
-            headers={"Authorization": f"Bearer {token}", "User-Agent": self._user_agent},
-        )
-        if resp.status_code == 401:
-            # Token rejected — force refresh on next call
-            with self._lock:
-                self._access_token = None
+    def _fetch_rss(self, subreddit_name: str) -> ET.Element:
+        url = f"{_RSS_BASE}/r/{subreddit_name}/new/.rss"
+        resp = self._client.get(url, params={"limit": self._post_limit})
         resp.raise_for_status()
-        return resp.json().get("data", {}).get("children", [])
+        return ET.fromstring(resp.text)
 
     def poll_subreddit(self, subreddit_name: str) -> Iterator[RawEvent]:
         try:
-            children = self._fetch_listing(subreddit_name)
+            root = self._fetch_rss(subreddit_name)
         except Exception:
-            logger.exception("Failed to fetch r/%s", subreddit_name)
+            logger.exception("Failed to fetch RSS for r/%s", subreddit_name)
             return
 
-        for child in children:
-            if child.get("kind") == "t3":
-                yield self._post_to_event(child.get("data", {}), subreddit_name)
+        for entry in root.findall(f"{{{_ATOM_NS}}}entry"):
+            yield self._entry_to_event(entry, subreddit_name)
 
-    def _post_to_event(self, post: dict, subreddit_name: str) -> RawEvent:
-        body = (post.get("title") or "") + "\n\n" + (post.get("selftext") or "")
+    def _entry_to_event(self, entry: ET.Element, subreddit_name: str) -> RawEvent:
+        def _text(tag: str) -> str:
+            el = entry.find(f"{{{_ATOM_NS}}}{tag}")
+            return (el.text or "") if el is not None else ""
+
+        title = _text("title")
+        # content:encoded lives in the default namespace in Reddit's Atom feed
+        content_el = entry.find(f"{{{_ATOM_NS}}}content")
+        body_html = (content_el.text or "") if content_el is not None else ""
+        # Strip HTML tags crudely — extractor works on plain text
+        body = re.sub(r"<[^>]+>", " ", body_html).strip()
+        body = title + "\n\n" + body
+
+        link_el = entry.find(f"{{{_ATOM_NS}}}link")
+        permalink = link_el.attrib.get("href", "") if link_el is not None else ""
+        # post id is the last path segment of the permalink
+        post_id = permalink.rstrip("/").split("/")[-1] if permalink else ""
+
+        updated = _text("updated")  # ISO8601
+        try:
+            dt = datetime.datetime.fromisoformat(updated.replace("Z", "+00:00"))
+            created_utc = int(dt.timestamp())
+        except Exception:
+            created_utc = 0
+
         return RawEvent(
             event_id=RawEvent.new_event_id(),
-            source="reddit_oauth",
+            source="reddit_rss",
             subreddit=subreddit_name,
-            post_id=post.get("id", ""),
+            post_id=post_id,
             parent_id=None,
-            author_hash=hash_author(post.get("author"), self._salt),
-            created_utc=int(post.get("created_utc") or 0),
+            author_hash=hash_author(None, self._salt),  # RSS omits author
+            created_utc=created_utc,
             body=body[:8000],
-            score=int(post.get("score") or 0),
-            awards=int(post.get("total_awards_received") or 0),
-            flair=post.get("link_flair_text"),
+            score=0,   # not in RSS
+            awards=0,  # not in RSS
+            flair=None,
             ingested_at=RawEvent.now_iso(),
             kind="post",
-            metadata={
-                "num_comments": int(post.get("num_comments") or 0),
-                "permalink": post.get("permalink", ""),
-            },
+            metadata={"permalink": permalink},
         )
 
     def close(self) -> None:
-        self._http.close()
+        self._client.close()
+
 
 
 class RateBudget:

@@ -1,7 +1,8 @@
 # Pinned per ADR-0014 / copilot-instructions hard rule:
 # new top-level deps require justification in PR body.
 #
-# httpx                 — Reddit public JSON API polling (replaces praw until OAuth approved)
+# httpx                 — Reddit RSS feed polling
+# defusedxml            — safe XML parse of Atom RSS (prevents XXE)
 # azure-identity        — DefaultAzureCredential for managed identity
 # azure-keyvault-secrets— pull author salt at startup
 # azure-eventhub        — publish raw events to reddit-raw-events
@@ -9,6 +10,7 @@
 # tenacity              — exponential backoff for Reddit 429s / transport errors
 
 httpx==0.27.2
+defusedxml==0.7.1
 azure-identity==1.17.1
 azure-keyvault-secrets==4.8.0
 azure-eventhub==5.12.1
