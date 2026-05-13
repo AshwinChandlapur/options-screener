@@ -75,7 +75,10 @@ class Extractor:
         body: str = event.get("body", "")
         score: int = int(event.get("score", 0))
 
-        if score < _MIN_SCORE or len(body) < _MIN_BODY_LEN:
+        # RSS ingestion always sets score=0 (not available in feeds).
+        # Gate: skip only if body is too short to contain meaningful signal.
+        # Score is used as a soft boost only when available.
+        if len(body) < _MIN_BODY_LEN:
             return []
 
         raw = self._call_openai(body[:4000])  # cap prompt size
