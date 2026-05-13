@@ -4,7 +4,7 @@
 //
 // Subscription-scoped (creates/uses the resource group), region: centralus.
 // Wires together: Storage, Event Hubs (Basic), Key Vault, Container Apps env,
-// App Insights, and (in Phase 2) Postgres Flexible Server B1ms.
+// App Insights, and Postgres Flexible Server B1ms (Phase 2).
 //
 // See docs/NARRATIVE_METHODOLOGY.md §8 for phasing. This file is safe to
 // `bicep build` today but the full Phase 1 deployment requires the parameters
@@ -29,6 +29,9 @@ param nameSuffix string
 
 @description('Azure AD principal IDs (object IDs) that should receive Key Vault Secrets Officer.')
 param keyVaultAdminObjectIds array = []
+
+@description('Azure AD object ID of the Postgres Entra admin principal. Required for Phase 2.')
+param postgresAdminObjectId string = ''
 
 @description('Tag map applied to every resource.')
 param tags object = {
@@ -95,10 +98,21 @@ module containerapps 'modules/containerapps.bicep' = {
   }
 }
 
-// Phase 2 will add: module postgres 'modules/postgres.bicep' = ...
+// Phase 2 — Postgres Flexible Server B1ms + pgvector
+module postgres 'modules/postgres.bicep' = if (!empty(postgresAdminObjectId)) {
+  scope: rg
+  name: 'postgres'
+  params: {
+    location: location
+    nameSuffix: nameSuffix
+    tags: tags
+    postgresAdminObjectId: postgresAdminObjectId
+  }
+}
 
 output storageAccountName string = storage.outputs.storageAccountName
 output eventHubsNamespace string = eventhubs.outputs.namespaceName
 output keyVaultName string = keyvault.outputs.keyVaultName
 output containerAppsEnvId string = containerapps.outputs.envId
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
+output postgresFqdn string = !empty(postgresAdminObjectId) ? postgres.outputs.serverFqdn : ''
