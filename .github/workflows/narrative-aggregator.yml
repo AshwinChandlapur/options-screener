@@ -15,6 +15,10 @@ concurrency:
 jobs:
   deploy:
     uses: ./.github/workflows/narrative-worker.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     with:
       worker_dir: aggregator
       job_name: job-aggregator
