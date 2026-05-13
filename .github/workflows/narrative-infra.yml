@@ -53,7 +53,7 @@ jobs:
           NAME_SUFFIX: ${{ secrets.NARRATIVE_NAME_SUFFIX }}
           KV_ADMIN_OBJECT_IDS: ${{ secrets.NARRATIVE_KV_ADMIN_OBJECT_IDS }}
         run: |
-          # Build an ARM parameters file. Using env vars (not direct ${{ }}
+          # Build an ARM parameters file. Using env vars (not direct expression
           # expansion) avoids shell-quoting issues with the JSON array.
           # Validate KV_ADMIN_OBJECT_IDS is a JSON array first.
           echo "$KV_ADMIN_OBJECT_IDS" | jq -e 'type == "array"' > /dev/null \
