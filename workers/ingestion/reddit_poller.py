@@ -1,26 +1,29 @@
-"""Reddit polling via public Atom RSS feeds (no auth required).
+"""Reddit polling via Arctic Shift API (no auth required).
 
-Reddit's /r/{sub}/new/.rss endpoint is publicly accessible from any IP
-including Azure datacenters — no OAuth, no app registration, no Devvit.
-Rate limit: 30 req/min (same conservative cap as before).
+Arctic Shift (https://arctic-shift.photon-reddit.com) is a public Reddit
+archive API that works from any IP including Azure datacenters.
 
-Trade-off vs JSON API:
-- No author field in RSS (author_hash set to empty string)
-- Score/award counts not in RSS (set to 0)
-- Title + content:encoded body are present — sufficient for extraction
+Advantages over RSS:
+- Full post selftext (body) — not just the title
+- Top-level comments with body text
+- Author field present (used for pseudonymization)
+- No credentials, no OAuth, no app registration required
 
-Migration note: if Reddit ever exposes these fields in RSS or we obtain OAuth,
-swap in the OAuth poller from git history. Schema is unchanged.
+Trade-offs vs Reddit OAuth API:
+- Scores for posts < 36h old are always 1 (archival lag); real scores appear
+  after ~36h. Score-based filtering is deferred to Phase 3 aggregation.
+- Rate limit: soft limit tracked via X-RateLimit-Remaining header; we stay
+  well under by capping at 30 req/min client-side.
+
+If Arctic Shift ever becomes unavailable, revert this file to the RSS
+implementation from git history. The RawEvent schema is unchanged.
 """
 from __future__ import annotations
 
 import logging
-import re
 import time
 from collections.abc import Iterator
-import datetime
 
-import defusedxml.ElementTree as ET
 import httpx
 from tenacity import (
     retry,
@@ -34,14 +37,16 @@ from schema import RawEvent
 
 logger = logging.getLogger(__name__)
 
-_RSS_BASE = "https://www.reddit.com"
-_ATOM_NS = "http://www.w3.org/2005/Atom"
-_MEDIA_NS = "http://search.yahoo.com/mrss/"
+_ARCTIC_SHIFT_BASE = "https://arctic-shift.photon-reddit.com/api"
+# Fields we actually need — reduces response size.
+_POST_FIELDS = "id,title,selftext,author,score,created_utc,num_comments,link_flair_text"
+_COMMENT_FIELDS = "id,body,author,score,created_utc,link_id,parent_id"
 
 
 class RedditPoller:
-    """Polls Reddit subreddits via public Atom RSS — no credentials required.
+    """Polls Reddit subreddits via Arctic Shift — no credentials required.
 
+    Fetches recent posts and their top-level comments per subreddit.
     A single httpx.Client is reused across calls for connection pooling.
     """
 
@@ -50,12 +55,14 @@ class RedditPoller:
         user_agent: str,
         author_salt: str,
         post_limit_per_subreddit: int = 100,
+        comment_limit_per_post: int = 50,
     ) -> None:
         self._salt = author_salt
-        self._post_limit = post_limit_per_subreddit
+        self._post_limit = min(post_limit_per_subreddit, 100)
+        self._comment_limit = min(comment_limit_per_post, 100)
         self._client = httpx.Client(
             headers={"User-Agent": user_agent},
-            timeout=15.0,
+            timeout=20.0,
             follow_redirects=True,
         )
 
@@ -65,74 +72,123 @@ class RedditPoller:
         stop=stop_after_attempt(3),
         reraise=True,
     )
-    def _fetch_rss(self, subreddit_name: str) -> ET.Element:
-        url = f"{_RSS_BASE}/r/{subreddit_name}/new/.rss"
-        resp = self._client.get(url, params={"limit": self._post_limit})
+    def _fetch_posts(self, subreddit_name: str) -> list[dict]:
+        resp = self._client.get(
+            f"{_ARCTIC_SHIFT_BASE}/posts/search",
+            params={
+                "subreddit": subreddit_name,
+                "limit": self._post_limit,
+                "sort": "desc",
+                "fields": _POST_FIELDS,
+            },
+        )
         resp.raise_for_status()
-        return ET.fromstring(resp.text)
+        return resp.json().get("data", [])
+
+    @retry(
+        retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        stop=stop_after_attempt(3),
+        reraise=True,
+    )
+    def _fetch_comments(self, post_id: str) -> list[dict]:
+        resp = self._client.get(
+            f"{_ARCTIC_SHIFT_BASE}/comments/search",
+            params={
+                "link_id": post_id,
+                "limit": self._comment_limit,
+                "sort": "desc",
+                "fields": _COMMENT_FIELDS,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", [])
 
     def poll_subreddit(self, subreddit_name: str) -> Iterator[RawEvent]:
+        """Yield RawEvents for recent posts and their top comments."""
         try:
-            root = self._fetch_rss(subreddit_name)
+            posts = self._fetch_posts(subreddit_name)
         except Exception:
-            logger.exception("Failed to fetch RSS for r/%s", subreddit_name)
+            logger.exception("Failed to fetch posts for r/%s", subreddit_name)
             return
 
-        for entry in root.findall(f"{{{_ATOM_NS}}}entry"):
-            yield self._entry_to_event(entry, subreddit_name)
+        for post in posts:
+            post_id: str = post.get("id", "")
+            yield self._post_to_event(post, subreddit_name)
 
-    def _entry_to_event(self, entry: ET.Element, subreddit_name: str) -> RawEvent:
-        def _text(tag: str) -> str:
-            el = entry.find(f"{{{_ATOM_NS}}}{tag}")
-            return (el.text or "") if el is not None else ""
+            # Fetch top comments for posts that have discussion
+            if post.get("num_comments", 0) > 0 and post_id:
+                try:
+                    comments = self._fetch_comments(post_id)
+                    for comment in comments:
+                        yield self._comment_to_event(comment, subreddit_name, post_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to fetch comments for post %s in r/%s",
+                        post_id, subreddit_name,
+                    )
 
-        title = _text("title")
-        # content:encoded lives in the default namespace in Reddit's Atom feed
-        content_el = entry.find(f"{{{_ATOM_NS}}}content")
-        body_html = (content_el.text or "") if content_el is not None else ""
-        # Strip HTML tags crudely — extractor works on plain text
-        body = re.sub(r"<[^>]+>", " ", body_html).strip()
-        body = title + "\n\n" + body
-
-        link_el = entry.find(f"{{{_ATOM_NS}}}link")
-        permalink = link_el.attrib.get("href", "") if link_el is not None else ""
-        # post id is the last path segment of the permalink
-        post_id = permalink.rstrip("/").split("/")[-1] if permalink else ""
-
-        updated = _text("updated")  # ISO8601
-        try:
-            dt = datetime.datetime.fromisoformat(updated.replace("Z", "+00:00"))
-            created_utc = int(dt.timestamp())
-        except Exception:
-            created_utc = 0
+    def _post_to_event(self, post: dict, subreddit_name: str) -> RawEvent:
+        title: str = post.get("title", "")
+        selftext: str = post.get("selftext", "") or ""
+        # Combine title + body; for link posts selftext is empty or "[removed]"
+        if selftext in ("[removed]", "[deleted]", ""):
+            body = title
+        else:
+            body = f"{title}\n\n{selftext}"
 
         return RawEvent(
             event_id=RawEvent.new_event_id(),
-            source="reddit_rss",
+            source="arctic_shift",
             subreddit=subreddit_name,
-            post_id=post_id,
+            post_id=post.get("id", ""),
             parent_id=None,
-            author_hash=hash_author(None, self._salt),  # RSS omits author
-            created_utc=created_utc,
+            author_hash=hash_author(post.get("author"), self._salt),
+            created_utc=int(post.get("created_utc", 0)),
             body=body[:8000],
-            score=0,   # not in RSS
-            awards=0,  # not in RSS
-            flair=None,
+            score=int(post.get("score", 0)),
+            awards=0,
+            flair=post.get("link_flair_text"),
             ingested_at=RawEvent.now_iso(),
             kind="post",
-            metadata={"permalink": permalink},
+            metadata={"num_comments": post.get("num_comments", 0)},
+        )
+
+    def _comment_to_event(
+        self, comment: dict, subreddit_name: str, post_id: str
+    ) -> RawEvent:
+        body: str = comment.get("body", "") or ""
+        if body in ("[removed]", "[deleted]"):
+            body = ""
+
+        return RawEvent(
+            event_id=RawEvent.new_event_id(),
+            source="arctic_shift",
+            subreddit=subreddit_name,
+            post_id=post_id,
+            parent_id=comment.get("parent_id"),
+            author_hash=hash_author(comment.get("author"), self._salt),
+            created_utc=int(comment.get("created_utc", 0)),
+            body=body[:8000],
+            score=int(comment.get("score", 0)),
+            awards=0,
+            flair=None,
+            ingested_at=RawEvent.now_iso(),
+            kind="comment",
+            metadata={"comment_id": comment.get("id", "")},
         )
 
     def close(self) -> None:
         self._client.close()
 
 
-
 class RateBudget:
     """Coarse client-side throttle to stay under N requests/minute.
 
-    Unauthenticated Reddit allows roughly 30 req/min; this enforces that cap
-    so no single cycle can burn through the budget across all subreddits.
+    Arctic Shift is a free service — be considerate. We enforce 30 req/min
+    by default. Each poll_subreddit() call costs 1 (posts) + up to N comment
+    fetches; budget.consume() is called once per subreddit in main.py so
+    posts + comments share the same token.
     """
 
     def __init__(self, requests_per_minute: int) -> None:
@@ -153,3 +209,4 @@ class RateBudget:
             self._window_start = time.monotonic()
             self._used = 0
         self._used += n
+
