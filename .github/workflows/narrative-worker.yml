@@ -48,6 +48,7 @@ jobs:
         with:
           context: workers/${{ inputs.worker_dir }}
           push: true
+          no-cache: true
           tags: |
             ${{ inputs.image_base }}:${{ github.sha }}
             ${{ inputs.image_base }}:latest
