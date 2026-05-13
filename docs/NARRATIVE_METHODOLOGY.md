@@ -329,10 +329,10 @@ Key Vault. Images via ghcr.io.
 ### Phase 1 — Foundation (weeks 1–3)
 
 - Bicep: Event Hubs Basic, Blob, Key Vault, Container Apps env, App Insights
-- Code: `ca-ingestion` (always-on, MinReplicas=1, MaxReplicas=2), PRAW only,
-  Blob-first durability, Event Hubs publish second
-- Test: 6-month historical replay for 5 tickers, zero loss, UTC alignment,
-  deterministic author hashes
+- Code: `ca-ingestion` (always-on, MinReplicas=1, MaxReplicas=2); Arctic Shift
+  API polling (original plan was PRAW; shipped with RSS polling, then switched
+  to Arctic Shift during Phase 2 — see ADR-0016); Blob-first durability,
+  Event Hubs publish second
 - CI/CD: GitHub Actions builds image → ghcr.io → `az containerapp update`
 
 ### Phase 2 — Extraction (weeks 4–5)

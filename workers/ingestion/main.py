@@ -1,15 +1,15 @@
 """Ingestion worker entry point.
 
 Long-running poll loop: every `poll_interval_seconds`, iterate the configured
-subreddits, fetch new posts + top-level comments via PRAW, write each
-subreddit's batch to Blob (durability), then publish to Event Hubs.
+subreddits, fetch new posts + top-level comments via Arctic Shift API, write
+each subreddit's batch to Blob (durability), then publish to Event Hubs.
 
 Failure semantics:
 - Per-subreddit failures are logged and skipped; one bad subreddit does not
   crash the worker.
 - If Blob write succeeds but EH publish fails, the data is durable; an
-  out-of-band replay tool (Phase 2) can re-publish from Blob. We do NOT
-  delete or move blobs that fail to publish.
+  out-of-band replay tool can re-publish from Blob. We do NOT delete or move
+  blobs that fail to publish.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _setup_logging(level: str) -> None:
 def run() -> None:
     config = load_from_env()
     _setup_logging(config.log_level)
-    logger.info("Starting narrative ingestion worker (Phase 1)")
+    logger.info("Starting narrative ingestion worker (Arctic Shift)")
 
     secrets = fetch_secrets(config.keyvault_uri)
     poller = RedditPoller(

@@ -4,14 +4,11 @@ Env contract (set by Container Apps):
 - KEYVAULT_URI         e.g. https://kv-narrative-<suffix>.vault.azure.net/
 - EVENT_HUB_NAMESPACE  e.g. evhns-narrative-<suffix>.servicebus.windows.net
 - BLOB_ACCOUNT_NAME    e.g. stnarrative<suffix>
-- REDDIT_USER_AGENT    polite UA string (default provided; override if desired)
+- REDDIT_USER_AGENT    User-Agent sent to Arctic Shift API (default provided)
 - LOG_LEVEL            INFO / DEBUG (default INFO)
 
 Secret contract (Key Vault, fetched once at startup):
 - reddit-author-salt   used for SHA-256(username + salt). Never logged.
-
-Note: reddit-client-id / reddit-client-secret are NOT required until Reddit
-OAuth access is approved. The worker uses the public JSON API in the interim.
 """
 from __future__ import annotations
 
@@ -33,7 +30,7 @@ class WorkerConfig:
     raw_events_hub: str = "reddit-raw-events"
     blob_container: str = "reddit-raw"
     poll_interval_seconds: int = 60
-    reddit_rate_limit_per_min: int = 30  # conservative unauthenticated cap
+    reddit_rate_limit_per_min: int = 30  # Arctic Shift soft cap; stay well under
 
 
 def load_from_env() -> WorkerConfig:
