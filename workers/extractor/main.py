@@ -113,7 +113,6 @@ def main() -> None:
         except Exception:
             logger.exception("Extraction failed for post %s", event_data.get("post_id"))
 
-    writer.close()
     logger.info(
         "Extractor done. events=%d signals_written=%d",
         events_processed, signals_written,

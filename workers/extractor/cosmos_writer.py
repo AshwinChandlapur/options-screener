@@ -54,4 +54,4 @@ class CosmosWriter:
         return written
 
     def close(self) -> None:
-        self._client.close()
+        pass  # CosmosClient has no close() method in azure-cosmos 4.x
