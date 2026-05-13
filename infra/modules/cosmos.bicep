@@ -100,10 +100,20 @@ resource signalsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
 }
 
 // ticker_timeline: one document per (ticker, bucket_date). Written by
-// job-aggregator every 15 min. TTL 90 days — old snapshots auto-expire.
-// Schema: { ticker, bucket_date, window_days, mention_count, unique_authors,
-//           gini, decay_weighted_density, daily_counts[], avg_body_len,
-//           dd_post_ratio, financial_term_density, computed_at }
+// job-aggregator every 15 min (upsert, id = "{ticker}_{bucket_date}").
+// TTL 90 days — old snapshots auto-expire.
+//
+// Schema (see backend/services/narrative/types.py → TickerTimelineSnapshot):
+//   Identity:    id, ticker (pk), bucket_date, computed_at
+//   Volume:      mentions_7d/14d/30d
+//   Persistence: decay_weighted_density_7d/14d/30d, daily_buckets[]
+//   Accel:       acceleration_7d
+//   Diversity:   unique_authors_14d, gini_14d
+//   Depth:       avg_body_len, dd_post_ratio, financial_term_density
+//   Sentiment:   bullish_ratio, bearish_ratio, avg_confidence
+//   Phase 4+:    conviction_* fields (added by classifier job)
+//   Phase 5+:    lifecycle_stage, stage_confidence
+//   Phase 6+:    rs_14d, opt_ratio, institutional_13f_change
 resource tickerTimelineContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
   parent: database
   name: 'ticker_timeline'
