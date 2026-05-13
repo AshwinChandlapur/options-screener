@@ -1,16 +1,14 @@
-"""Reddit polling via the public JSON API (no OAuth required).
+"""Reddit polling via OAuth client credentials (no user login required).
 
-Hits /r/{sub}/new.json with a polite User-Agent. Unauthenticated access is
-rate-limited by Reddit to roughly 1 req/2s; RateBudget enforces 30 req/min to
-stay well clear. Comment fetching is deferred until OAuth approval lands — post
-titles + selftext alone carry sufficient signal for Phase 1 extraction.
-
-Migration note: when Reddit API access is approved, swap this module for the
-PRAW-based poller in git history. No other files in this worker need to change.
+Uses the Reddit OAuth2 client_credentials grant — requires a Reddit app
+(script type) registered at reddit.com/prefs/apps. Tokens are refreshed
+automatically when they expire (typically 24h). Azure datacenter IPs are
+blocked by Reddit for unauthenticated requests; OAuth bypasses this.
 """
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Iterator
 
@@ -27,30 +25,51 @@ from schema import RawEvent
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://www.reddit.com"
+_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+_API_BASE = "https://oauth.reddit.com"
 
 
 class RedditPoller:
-    """Polls Reddit's public JSON endpoints without OAuth credentials.
+    """Polls Reddit subreddits using OAuth client credentials.
 
-    A single httpx.Client is reused across calls for connection pooling.
-    Reddit blocks the default Python UA; the caller must supply a descriptive
-    user_agent (e.g. "narrative-screener/1.0 by u/yourname").
+    Fetches a Bearer token on first use and refreshes it 60 s before expiry.
+    Thread-safe token refresh is handled internally.
     """
 
     def __init__(
         self,
+        client_id: str,
+        client_secret: str,
         user_agent: str,
         author_salt: str,
         post_limit_per_subreddit: int = 100,
     ) -> None:
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._user_agent = user_agent
         self._salt = author_salt
         self._post_limit = post_limit_per_subreddit
-        self._client = httpx.Client(
-            headers={"User-Agent": user_agent},
-            timeout=15.0,
-            follow_redirects=True,
-        )
+        self._access_token: str | None = None
+        self._token_expires_at: float = 0.0
+        self._lock = threading.Lock()
+        self._http = httpx.Client(timeout=15.0, follow_redirects=True)
+
+    def _ensure_token(self) -> str:
+        with self._lock:
+            if self._access_token and time.monotonic() < self._token_expires_at - 60:
+                return self._access_token
+            resp = self._http.post(
+                _TOKEN_URL,
+                auth=(self._client_id, self._client_secret),
+                data={"grant_type": "client_credentials"},
+                headers={"User-Agent": self._user_agent},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            self._access_token = data["access_token"]
+            self._token_expires_at = time.monotonic() + int(data.get("expires_in", 3600))
+            logger.info("Reddit OAuth token refreshed, expires in %ds", data.get("expires_in", 3600))
+            return self._access_token
 
     @retry(
         retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
@@ -59,8 +78,17 @@ class RedditPoller:
         reraise=True,
     )
     def _fetch_listing(self, subreddit_name: str) -> list[dict]:
-        url = f"{_BASE_URL}/r/{subreddit_name}/new.json"
-        resp = self._client.get(url, params={"limit": self._post_limit, "raw_json": "1"})
+        token = self._ensure_token()
+        url = f"{_API_BASE}/r/{subreddit_name}/new"
+        resp = self._http.get(
+            url,
+            params={"limit": self._post_limit, "raw_json": "1"},
+            headers={"Authorization": f"Bearer {token}", "User-Agent": self._user_agent},
+        )
+        if resp.status_code == 401:
+            # Token rejected — force refresh on next call
+            with self._lock:
+                self._access_token = None
         resp.raise_for_status()
         return resp.json().get("data", {}).get("children", [])
 
@@ -79,7 +107,7 @@ class RedditPoller:
         body = (post.get("title") or "") + "\n\n" + (post.get("selftext") or "")
         return RawEvent(
             event_id=RawEvent.new_event_id(),
-            source="reddit_json",
+            source="reddit_oauth",
             subreddit=subreddit_name,
             post_id=post.get("id", ""),
             parent_id=None,
@@ -98,7 +126,7 @@ class RedditPoller:
         )
 
     def close(self) -> None:
-        self._client.close()
+        self._http.close()
 
 
 class RateBudget:
