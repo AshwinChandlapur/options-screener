@@ -23,8 +23,8 @@ param tags object
 @description('Resource ID of the Log Analytics workspace from the monitoring module.')
 param logAnalyticsWorkspaceId string
 
-@description('Container image for the ingestion worker. Defaults to a placeholder; CI deploy overrides.')
-param ingestionImage string = 'ghcr.io/placeholder/narrative-ingestion:latest'
+@description('Container image for the ingestion worker. Defaults to a public MCR placeholder; CI deploy overrides with the real ghcr.io image.')
+param ingestionImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
 @description('Key Vault URI passed to workers as KEYVAULT_URI.')
 param keyVaultUri string = ''
