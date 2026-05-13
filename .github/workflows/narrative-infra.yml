@@ -84,7 +84,7 @@ jobs:
         if: ${{ inputs.mode == 'what-if' }}
         run: |
           az deployment sub what-if \
-            --location centralus \
+            --location eastus \
             --template-file infra/main.bicep \
             --parameters infra/main.parameters.json
 
@@ -93,6 +93,6 @@ jobs:
         run: |
           az deployment sub create \
             --name narrative-$(date +%Y%m%d%H%M%S) \
-            --location centralus \
+            --location eastus \
             --template-file infra/main.bicep \
             --parameters infra/main.parameters.json
