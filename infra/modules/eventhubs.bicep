@@ -1,14 +1,14 @@
 // =============================================================================
 // Event Hubs — Basic SKU, 1 throughput unit.
 //
-// Two topics:
+// One topic:
 //   - reddit-raw-events  (4 partitions, 1d retention)  ← ingestion publishes
-//   - ticker-events      (4 partitions, 1d retention)  ← extractor republishes
 //
-// Basic SKU only allows ONE consumer group per topic. We accept this and
-// substitute the second `ticker-events` topic for fanout. Blob is the durable
-// backing store; if a consumer falls behind beyond 1d, replay from Blob.
+// Basic SKU only allows ONE consumer group per topic. The extractor consumes
+// reddit-raw-events and writes signals directly to Cosmos DB (ADR-0015).
+// Downstream aggregation (Phase 3+) polls Cosmos DB, not Event Hubs.
 //
+// Removed: ticker-events hub (dead infra — see ADR-0015).
 // See ADR-0014 for the cost rationale (~$11/mo vs ~$45/mo for Standard 2 TU).
 // =============================================================================
 
@@ -48,16 +48,6 @@ resource rawEvents 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = {
   }
 }
 
-resource tickerEvents 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = {
-  parent: ns
-  name: 'ticker-events'
-  properties: {
-    partitionCount: 4
-    messageRetentionInDays: 1
-  }
-}
-
 output namespaceName string = ns.name
 output namespaceId string = ns.id
 output rawEventsName string = rawEvents.name
-output tickerEventsName string = tickerEvents.name

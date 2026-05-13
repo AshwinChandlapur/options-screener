@@ -10,9 +10,11 @@
 // Free tier applied if available on the subscription (1000 RU/s + 25 GiB).
 //
 // Containers:
-//   raw-posts       — partition key /subreddit, TTL 90 days
 //   signals         — partition key /ticker, no TTL (permanent record)
 //   narratives      — partition key /ticker, no TTL (Phase 4+)
+//
+// Removed: raw-posts container — ingestion writes to Blob Storage only.
+//   Cosmos raw-posts was never written to (see ADR-0015).
 //
 // Auth: managed identity via built-in Cosmos DB roles (no connection strings).
 // See docs/NARRATIVE_METHODOLOGY.md §8.
@@ -69,29 +71,6 @@ resource database 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15
   name: databaseName
   properties: {
     resource: { id: databaseName }
-  }
-}
-
-// raw-posts: Blob-level dedup source, 90-day TTL.
-resource rawPostsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
-  parent: database
-  name: 'raw-posts'
-  properties: {
-    resource: {
-      id: 'raw-posts'
-      partitionKey: {
-        paths: ['/subreddit']
-        kind: 'Hash'
-        version: 2
-      }
-      defaultTtl: 7776000  // 90 days in seconds
-      indexingPolicy: {
-        indexingMode: 'consistent'
-        automatic: true
-        includedPaths: [{ path: '/*' }]
-        excludedPaths: [{ path: '/body/?' }]  // body is large; exclude from index
-      }
-    }
   }
 }
 

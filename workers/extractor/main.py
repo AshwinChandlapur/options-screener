@@ -84,15 +84,17 @@ def main() -> None:
     try:
         # receive() blocks forever — run it in a daemon thread and close after
         # the budget window so the job exits cleanly.
+        starting_position = "-1" if config.replay_from_start else "@latest"
         receive_thread = threading.Thread(
             target=eh_client.receive,
-            kwargs={"on_event": _on_event, "starting_position": "-1"},
+            kwargs={"on_event": _on_event, "starting_position": starting_position},
             daemon=True,
         )
+        receive_start = time.monotonic()
         receive_thread.start()
-        time.sleep(30)  # collect events for 30 seconds
-        eh_client.close()
+        time.sleep(config.receive_window_seconds)
         receive_thread.join(timeout=10)
+        logger.info("Receive window elapsed: %.1fs", time.monotonic() - receive_start)
     except Exception:
         logger.exception("Event Hubs receive error")
     finally:

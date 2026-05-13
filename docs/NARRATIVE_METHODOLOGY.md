@@ -17,6 +17,8 @@ Companion architectural records:
 
 - [ADR-0013 — Platform decision](adr/0013-narrative-intelligence-platform.md)
 - [ADR-0014 — Cost substitutions for the $150/mo budget](adr/0014-narrative-cost-substitutions.md)
+- [ADR-0015 — Extractor architecture simplification (no ticker-events hub, no raw-posts container)](adr/0015-extractor-architecture-simplification.md)
+- [ADR-0016 — Extractor runtime defaults: body-only gate, receive window, @latest position](adr/0016-extractor-runtime-defaults.md)
 
 ## Sections
 
@@ -335,12 +337,20 @@ Key Vault. Images via ghcr.io.
 
 ### Phase 2 — Extraction (weeks 4–5)
 
-- Bicep: Postgres Flexible B1ms with `pgvector`, `pg_cron`, `uuid-ossp`,
-  `timescaledb` enabled at provision
-- Code: `job-extractor` Container Apps Job; Layers 1–5; OpenAI Layer 3
-  cost-gated; in-process LRU instead of Redis
-- Schema: `ticker_events`, `ticker_universe`, `ticker_blacklist` (see code for
-  the DDL of record)
+- Bicep: Cosmos DB Serverless (replaces Postgres — subscription-restricted,
+  see ADR-0014); two containers: `signals` (partition `/ticker`) and
+  `narratives` (partition `/ticker`, Phase 4+). `raw-posts` container removed
+  — ingestion writes to Blob Storage only (see ADR-0015).
+- Ingestion: switched from PRAW/RSS to Arctic Shift API
+  (`arctic-shift.photon-reddit.com`) — full post body + top comments, no auth
+  required, works from Azure IPs.
+- Code: `job-extractor` Container Apps Job; Layer 1 cost gate: skip posts with
+  body < 20 chars. Score-based filtering deferred to Phase 3 — Arctic Shift
+  returns `score=1` for posts < 36h old (archival lag makes score unreliable
+  in real-time). See ADR-0016.
+- Receive window: `RECEIVE_WINDOW_SECONDS=25` (default); EH `starting_position`
+  defaults to `@latest` (skip stale backlog). Set
+  `EXTRACTOR_REPLAY_FROM_START=true` for initial catch-up replay. See ADR-0016.
 - Test: precision ≥ 0.92 (high) / ≥ 0.80 (medium) on 500 hand-labeled mentions
 
 ### Phase 3 — Attention modeling (weeks 6–7)

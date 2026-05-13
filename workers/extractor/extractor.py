@@ -4,9 +4,10 @@ Extraction prompt asks GPT-4o-mini to return a JSON array of signals.
 Each signal has: ticker, sentiment (bullish/bearish/neutral), confidence (0-1),
 and a one-sentence rationale.
 
-Cost gate: posts with score < 2 OR body length < 50 chars skip OpenAI and are
-discarded (Layer 1 filter). This keeps the monthly OpenAI bill under ~$5 at
-our ingestion volume per ADR-0014.
+Cost gate (Layer 1): posts with body length < 20 chars skip OpenAI and are
+discarded. Score-based filtering is deferred to Phase 3 aggregation — Arctic
+Shift returns score=1 for posts < 36h old (archival lag), making score an
+unreliable real-time gate. See NARRATIVE_METHODOLOGY.md §3 and ADR-0016.
 """
 from __future__ import annotations
 
@@ -22,7 +23,8 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = """\
 You are a financial signal extractor. Given a Reddit post or comment, extract
 every stock ticker mentioned with a clear bullish or bearish opinion expressed
-by the author. Return ONLY a valid JSON array — no markdown, no prose.
+by the author. Return a JSON object with a single key "signals" whose value is
+an array — no markdown, no prose.
 
 Each element must have exactly these fields:
   "ticker"     : string — uppercase US stock ticker (e.g. "NVDA")
@@ -33,7 +35,7 @@ Each element must have exactly these fields:
 Rules:
 - Omit tickers where opinion is absent or ambiguous (confidence < 0.3).
 - Omit crypto, ETFs, and non-US tickers.
-- Return [] if no clear signals exist.
+- Return {"signals": []} if no clear signals exist.
 - Never invent tickers not present in the text."""
 
 # Layer 1 cost gate — skip posts too short to contain meaningful signal.
@@ -73,11 +75,8 @@ class Extractor:
     def extract(self, event: dict) -> list[ExtractedSignal]:
         """Run Layer 1 gate then call OpenAI. Returns [] if gated or no signals."""
         body: str = event.get("body", "")
-        score: int = int(event.get("score", 0))
 
-        # RSS ingestion always sets score=0 (not available in feeds).
-        # Gate: skip only if body is too short to contain meaningful signal.
-        # Score is used as a soft boost only when available.
+        # Gate: skip posts too short to contain meaningful signal.
         if len(body) < _MIN_BODY_LEN:
             logger.debug("Gated post %s: body_len=%d", event.get('post_id'), len(body))
             return []
@@ -118,13 +117,16 @@ class Extractor:
             temperature=0.0,
             response_format={"type": "json_object"},
         )
-        content = response.choices[0].message.content or "[]"
-        # OpenAI may wrap the array in a key — unwrap if needed.
+        content = response.choices[0].message.content or "{}"
+        # Prompt requests {"signals": [...]}; unwrap the key.
+        # Bare-list fallback retained for defensive robustness.
         parsed = json.loads(content)
+        if isinstance(parsed, dict) and "signals" in parsed and isinstance(parsed["signals"], list):
+            return parsed["signals"]
         if isinstance(parsed, list):
             return parsed
-        # Try common wrapper keys.
-        for key in ("signals", "results", "data", "tickers"):
+        # Try other common wrapper keys as a last resort.
+        for key in ("results", "data", "tickers"):
             if key in parsed and isinstance(parsed[key], list):
                 return parsed[key]
         logger.warning("Unexpected OpenAI response shape: %s", list(parsed.keys()))
