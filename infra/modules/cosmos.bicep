@@ -10,8 +10,9 @@
 // Free tier applied if available on the subscription (1000 RU/s + 25 GiB).
 //
 // Containers:
-//   signals         — partition key /ticker, no TTL (permanent record)
-//   narratives      — partition key /ticker, no TTL (Phase 4+)
+//   signals          — partition key /ticker, no TTL (permanent record)
+//   ticker_timeline  — partition key /ticker, TTL 90 days (Phase 3 aggregator)
+//   narratives       — partition key /ticker, no TTL (Phase 4+)
 //
 // Removed: raw-posts container — ingestion writes to Blob Storage only.
 //   Cosmos raw-posts was never written to (see ADR-0015).
@@ -94,6 +95,38 @@ resource signalsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
       }
       // Note: vectorEmbeddingPolicy + vectorIndexes are enabled post-deploy via
       // az cosmosdb sql container update once the preview feature is registered.
+    }
+  }
+}
+
+// ticker_timeline: one document per (ticker, bucket_date). Written by
+// job-aggregator every 15 min. TTL 90 days — old snapshots auto-expire.
+// Schema: { ticker, bucket_date, window_days, mention_count, unique_authors,
+//           gini, decay_weighted_density, daily_counts[], avg_body_len,
+//           dd_post_ratio, financial_term_density, computed_at }
+resource tickerTimelineContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: 'ticker_timeline'
+  properties: {
+    resource: {
+      id: 'ticker_timeline'
+      partitionKey: {
+        paths: ['/ticker']
+        kind: 'Hash'
+        version: 2
+      }
+      defaultTtl: 7776000  // 90 days in seconds
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/ticker/?' }
+          { path: '/bucket_date/?' }
+          { path: '/window_days/?' }
+          { path: '/computed_at/?' }
+        ]
+        excludedPaths: [{ path: '/*' }]  // daily_counts array excluded — not queried directly
+      }
     }
   }
 }
