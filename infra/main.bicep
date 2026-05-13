@@ -33,6 +33,9 @@ param keyVaultAdminObjectIds array = []
 @description('Azure AD object ID of the Postgres Entra admin principal. Required for Phase 2.')
 param postgresAdminObjectId string = ''
 
+@description('Region for Postgres Flexible Server. Defaults to eastus2 (eastus has quota restrictions).')
+param postgresLocation string = 'eastus2'
+
 @description('Tag map applied to every resource.')
 param tags object = {
   workload: 'narrative-intelligence'
@@ -103,7 +106,7 @@ module postgres 'modules/postgres.bicep' = if (!empty(postgresAdminObjectId)) {
   scope: rg
   name: 'postgres'
   params: {
-    location: location
+    location: postgresLocation
     nameSuffix: nameSuffix
     tags: tags
     postgresAdminObjectId: postgresAdminObjectId
@@ -115,4 +118,4 @@ output eventHubsNamespace string = eventhubs.outputs.namespaceName
 output keyVaultName string = keyvault.outputs.keyVaultName
 output containerAppsEnvId string = containerapps.outputs.envId
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
-output postgresFqdn string = !empty(postgresAdminObjectId) ? postgres.outputs.serverFqdn : ''
+output postgresFqdn string = !empty(postgresAdminObjectId) ? postgres!.outputs.serverFqdn : ''

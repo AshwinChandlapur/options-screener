@@ -94,7 +94,6 @@ resource aadAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2023
     principalName: 'narrative-admin'
     tenantId: postgresTenantId
   }
-  dependsOn: [server]
 }
 
 // Enable pgvector and pg_cron extensions.
