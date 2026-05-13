@@ -111,24 +111,10 @@ resource signalsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
         indexingMode: 'consistent'
         automatic: true
         includedPaths: [{ path: '/*' }]
-        excludedPaths: [{ path: '/embedding/?' }]  // exclude vector from index
-        vectorIndexes: [
-          {
-            path: '/embedding'
-            type: 'diskANN'
-          }
-        ]
+        excludedPaths: [{ path: '/embedding/?' }]  // exclude vector blob from standard index
       }
-      vectorEmbeddingPolicy: {
-        vectorEmbeddings: [
-          {
-            path: '/embedding'
-            dataType: 'float32'
-            distanceFunction: 'cosine'
-            dimensions: 1536  // text-embedding-3-small
-          }
-        ]
-      }
+      // Note: vectorEmbeddingPolicy + vectorIndexes are enabled post-deploy via
+      // az cosmosdb sql container update once the preview feature is registered.
     }
   }
 }

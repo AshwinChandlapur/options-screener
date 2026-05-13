@@ -30,7 +30,10 @@ param nameSuffix string
 @description('Azure AD principal IDs (object IDs) that should receive Key Vault Secrets Officer.')
 param keyVaultAdminObjectIds array = []
 
-@description('Principal IDs granted Cosmos DB Built-in Data Contributor (workers + backend MI). Pass as JSON array.')
+@description('Region for Cosmos DB account. Defaults to westus2 (eastus has capacity constraints).')
+param cosmosLocation string = 'westus2'
+
+@description('Principal IDs granted Cosmos DB Built-in Data Contributor.')
 param cosmosDataContributorPrincipalIds array = []
 
 @description('Tag map applied to every resource.')
@@ -103,7 +106,7 @@ module cosmos 'modules/cosmos.bicep' = {
   scope: rg
   name: 'cosmos'
   params: {
-    location: location
+    location: cosmosLocation
     nameSuffix: nameSuffix
     tags: tags
     dataContributorPrincipalIds: cosmosDataContributorPrincipalIds

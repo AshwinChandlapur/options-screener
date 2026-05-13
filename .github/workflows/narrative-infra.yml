@@ -56,6 +56,7 @@ jobs:
           RESOURCE_GROUP: ${{ secrets.NARRATIVE_RESOURCE_GROUP }}
           KV_ADMIN_OBJECT_IDS: ${{ secrets.NARRATIVE_KV_ADMIN_OBJECT_IDS }}
           COSMOS_PRINCIPAL_IDS: ${{ secrets.NARRATIVE_COSMOS_PRINCIPAL_IDS }}
+          COSMOS_LOCATION: ${{ vars.NARRATIVE_COSMOS_LOCATION }}
         run: |
           # Build an ARM parameters file. Using env vars (not direct expression
           # expansion) avoids shell-quoting issues with the JSON arrays.
@@ -68,6 +69,7 @@ jobs:
           jq -n \
             --arg suffix "$NAME_SUFFIX" \
             --arg rg "$RESOURCE_GROUP" \
+            --arg cosmosLoc "$COSMOS_LOCATION" \
             --argjson admins "$KV_ADMIN_OBJECT_IDS" \
             --argjson cosmosPrincipals "$COSMOS_IDS_JSON" \
             '{
@@ -80,6 +82,7 @@ jobs:
                   "cosmosDataContributorPrincipalIds": { "value": $cosmosPrincipals }
                 }
                 | if $rg != "" then . + { "resourceGroupName": { "value": $rg } } else . end
+                | if $cosmosLoc != "" then . + { "cosmosLocation": { "value": $cosmosLoc } } else . end
               )
             }' > infra/main.parameters.json
           echo "resourceGroupName=$RESOURCE_GROUP"
