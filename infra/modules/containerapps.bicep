@@ -2,11 +2,12 @@
 // Container Apps environment + ingestion app + scheduled batch jobs.
 //
 // One Consumption-plan environment hosts:
-//   job-ingestor          — always-on ingestion worker
-//   job-extractor         — scheduled every 5 min (EH → GPT-4o-mini → Cosmos signals)
-//   job-aggregator        — scheduled every 15 min (Cosmos signals → ticker_timeline)
-//   job-classifier        — scheduled every 30 min (conviction-state classification + embeddings)
+//   job-ingestor           — always-on ingestion worker
+//   job-extractor          — scheduled every 5 min (EH → GPT-4o-mini → Cosmos signals)
+//   job-aggregator         — scheduled every 15 min (Cosmos signals → ticker_timeline)
+//   job-classifier         — scheduled every 30 min (conviction-state classification + embeddings)
 //   job-narrative-detector — scheduled hourly (HDBSCAN clustering → lifecycle stage assignment)
+//   job-acs-scorer         — scheduled every 15 min (ACS components A–D → ticker_timeline)
 //
 // Jobs are provisioned here as stubs with a placeholder image; CI workflows
 // update the image on every push to main via `az containerapp job update`.
@@ -46,6 +47,9 @@ param classifierImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 
 @description('Container image for job-narrative-detector. Preserved from live deployment by infra workflow.')
 param detectorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
+@description('Container image for job-acs-scorer. Preserved from live deployment by infra workflow.')
+param scorerImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 
 @description('Key Vault URI passed to workers as KEYVAULT_URI.')
 param keyVaultUri string = ''
@@ -292,6 +296,43 @@ resource detectorJob 'Microsoft.App/jobs@2024-03-01' = {
   }
 }
 
+resource scorerJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-acs-scorer'
+  location: location
+  tags: tags
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    environmentId: env.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 840  // 14 min — fits inside 15-min cron window with buffer
+      scheduleTriggerConfig: {
+        cronExpression: '*/15 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [] // CI workflow patches in ghcr.io credentials
+    }
+    template: {
+      containers: [
+        {
+          name: 'acs-scorer'
+          image: scorerImage
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: [
+            { name: 'KEYVAULT_URI',    value: keyVaultUri }
+            { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
+            { name: 'LOG_LEVEL',       value: 'INFO' }
+          ]
+        }
+      ]
+    }
+  }
+}
+
 output envId string = env.id
 output envName string = env.name
 output ingestionAppName string = ingestion.name
@@ -300,6 +341,7 @@ output extractorJobPrincipalId string = extractorJob.identity.principalId
 output aggregatorJobPrincipalId string = aggregatorJob.identity.principalId
 output classifierJobPrincipalId string = classifierJob.identity.principalId
 output detectorJobPrincipalId string = detectorJob.identity.principalId
+output scorerJobPrincipalId string = scorerJob.identity.principalId
 
 resource detectorKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(keyVaultId)) {
   name: guid(keyVaultId, detectorJob.name, roleSecretsUser)
@@ -307,6 +349,16 @@ resource detectorKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
   properties: {
     roleDefinitionId: roleSecretsUser
     principalId: detectorJob.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource scorerKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(keyVaultId)) {
+  name: guid(keyVaultId, scorerJob.name, roleSecretsUser)
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: roleSecretsUser
+    principalId: scorerJob.identity.principalId
     principalType: 'ServicePrincipal'
   }
 }

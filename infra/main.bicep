@@ -56,6 +56,9 @@ param classifierImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 @description('Container image for job-narrative-detector. Preserved by infra workflow.')
 param detectorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 
+@description('Container image for job-acs-scorer. Preserved by infra workflow.')
+param scorerImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
 @description('Tag map applied to every resource.')
 param tags object = {
   workload: 'narrative-intelligence'
@@ -131,6 +134,7 @@ module containerapps 'modules/containerapps.bicep' = {
     aggregatorImage: aggregatorImage
     classifierImage: classifierImage
     detectorImage: detectorImage
+    scorerImage: scorerImage
   }
 }
 

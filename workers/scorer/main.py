@@ -1,21 +1,99 @@
-"""ACS scorer (Phase 6).
+"""ACS scorer entry point (Phase 6).
 
-Phase 0 stub. Phase 6 PR fills in the 15-min cron scorer that reads
-acs-component-weights from Key Vault and writes acs_scores to Postgres,
-then refreshes Redis caches per docs/NARRATIVE_METHODOLOGY.md §5 + §8.
+Container Apps Job — runs on a 15-minute cron schedule.
+
+What it does:
+1. Reads today's ticker_timeline documents from Cosmos.
+2. For each doc, computes ACS components A–D (E=0, deferred) per §5 of
+   NARRATIVE_METHODOLOGY.md using component max weights from Key Vault
+   secret `acs-component-weights` (falls back to design defaults if absent).
+3. Applies Gini, deceleration, and late-stage haircuts.
+4. Writes acs, acs_ci_lower, acs_ci_upper, decay_acs, acs_components, acs_flags,
+   and acs_scored_at back onto the same ticker_timeline document.
+
+Idempotent: re-running produces the same result for the same input doc.
+FastAPI backend reads directly from Cosmos ticker_timeline (no Redis, Phase 6).
+
+Env contract:
+    KEYVAULT_URI        https://kv-narrative-<suffix>.vault.azure.net/
+    COSMOS_ENDPOINT     https://cosmos-nr-<suffix>.documents.azure.com:443/
+    COSMOS_DB           narrative  (default)
+    LOG_LEVEL           INFO / DEBUG  (default INFO)
+    TICKERS_PER_RUN     max tickers scored per execution (default 500)
 """
 from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime, timezone
+
+from config import load_from_env
+from cosmos_client import ScorerCosmosClient
+from kv_secrets import fetch_secrets
+from scorer import compute_acs
+
+logger = logging.getLogger(__name__)
+
+
+def _setup_logging(level: str) -> None:
+    logging.basicConfig(
+        level=level.upper(),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
-    logging.getLogger(__name__).info(
-        "narrative-scorer: Phase 0 stub. See docs/NARRATIVE_METHODOLOGY.md §8 (Phase 6)."
+    config = load_from_env()
+    _setup_logging(config.log_level)
+    logger.info("Starting ACS scorer (Phase 6)")
+
+    secrets = fetch_secrets(config.keyvault_uri)
+    cosmos = ScorerCosmosClient(
+        endpoint=config.cosmos_endpoint,
+        database=config.cosmos_db,
     )
+
+    today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    docs = cosmos.fetch_today_docs(today, limit=config.tickers_per_run)
+    logger.info("Scoring %d ticker_timeline docs for %s", len(docs), today)
+
+    scored = 0
+    errors = 0
+
+    for doc in docs:
+        ticker = doc.get("ticker", "?")
+        try:
+            result = compute_acs(doc, secrets.weights)
+            cosmos.write_acs(
+                doc,
+                acs=result.acs,
+                acs_ci_lower=result.acs_ci_lower,
+                acs_ci_upper=result.acs_ci_upper,
+                decay_acs=result.decay_acs,
+                components=result.components,
+                flags=result.flags,
+            )
+            scored += 1
+            logger.debug(
+                "%s → acs=%.1f decay=%.1f stage=%s flags=%s",
+                ticker, result.acs, result.decay_acs,
+                doc.get("lifecycle_stage", "?"), result.flags,
+            )
+        except Exception:
+            logger.exception("Failed to score ticker %s", ticker)
+            errors += 1
+
+    logger.info(
+        "Scorer complete — scored=%d errors=%d",
+        scored, errors,
+    )
+
+    if errors > 0 and scored == 0:
+        logger.error("All tickers failed — exiting non-zero")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
+

@@ -103,9 +103,8 @@ function applyDitmFilters(results: DitmResult[], filters: DitmFilterState): Ditm
   })
 }
 
-// Narrative tab is hidden by default until Phase 6 lands data; opt-in via
-// VITE_NARRATIVE_ENABLED=1. Same pattern as DCF (which is hidden behind a comment).
-const NARRATIVE_ENABLED = import.meta.env.VITE_NARRATIVE_ENABLED === '1'
+// Narrative tab is shown by default (Phase 6). Set VITE_NARRATIVE_ENABLED=0 to hide.
+const NARRATIVE_ENABLED = import.meta.env.VITE_NARRATIVE_ENABLED !== '0'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'csp' | 'cc' | 'ditm' | 'swing' | 'em-rank' | 'supply' | 'dcf' | 'narrative'>('csp')
