@@ -54,8 +54,8 @@ def _required(name: str) -> str:
 # Stored in code (not Key Vault) so PRs are reviewable; tier membership is a
 # methodology decision, not a secret.
 SUBREDDIT_TIERS: dict[str, list[str]] = {
-    "tier1": ["investing", "stocks", "SecurityAnalysis", "ValueInvesting"],
-    "tier2": ["wallstreetbets", "options", "smallstreetbets", "pennystocks"],
+    "tier1": ["investing", "stocks", "SecurityAnalysis", "ValueInvesting", "Bogleheads"],
+    "tier2": ["wallstreetbets", "options", "smallstreetbets", "pennystocks", "TheRaceTo10Million", "swingtrading"],
     "tier3": ["artificial", "SemiConductors", "energy", "biotech", "space", "geopolitics"],
 }
 

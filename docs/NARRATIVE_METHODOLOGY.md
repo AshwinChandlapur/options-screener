@@ -183,10 +183,11 @@ the snapshot:
 | 6 | Saturation | `emotional_bull` dominant, Gini rising | Avoid (bagholder phase) |
 
 `tier1_pct` and `tier2_pct` are the share of mentions in Tier 1 (`r/investing`,
-`r/stocks`, `r/SecurityAnalysis`, `r/ValueInvesting`) and Tier 2 (`r/wallstreetbets`,
-`r/options`, `r/smallstreetbets`, `r/pennystocks`) respectively. Tier 3 is
-sector-specific (`r/artificial`, `r/SemiConductors`, `r/energy`, `r/biotech`,
-`r/space`, `r/DefenseContractors`).
+`r/stocks`, `r/SecurityAnalysis`, `r/ValueInvesting`, `r/Bogleheads`) and Tier 2
+(`r/wallstreetbets`, `r/options`, `r/smallstreetbets`, `r/pennystocks`,
+`r/TheRaceTo10Million`, `r/swingtrading`) respectively. Tier 3 is sector-specific
+(`r/artificial`, `r/SemiConductors`, `r/energy`, `r/biotech`, `r/space`,
+`r/geopolitics`).
 
 Lifecycle classification runs hourly in `job-narrative-detector` after HDBSCAN
 clustering on the 72h embedding window per ticker.
