@@ -3,5 +3,4 @@ azure-identity==1.17.1
 azure-cosmos==4.7.0
 numpy==2.0.1
 scikit-learn==1.5.1
-hdbscan==0.8.38
 tenacity==9.0.0

@@ -19,7 +19,7 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from hdbscan import HDBSCAN
+from sklearn.cluster import HDBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
