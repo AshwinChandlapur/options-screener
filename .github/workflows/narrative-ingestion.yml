@@ -1,7 +1,7 @@
 name: Narrative — 01 Ingestion (Phase 1 · always-on poller)
 
 # Builds workers/ingestion/ image, pushes to ghcr.io, updates the
-# ca-ingestion Container App in Azure.
+# job-ingestor Container App in Azure.
 #
 # Required repo secrets:
 #   AZURE_CREDENTIALS                — SP with Contributor on the resource group
@@ -60,12 +60,12 @@ jobs:
       - name: Update Container App
         run: |
           az containerapp registry set \
-            --name ca-ingestion \
+            --name job-ingestor \
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
             --server ghcr.io \
             --username ${{ github.actor }} \
             --password ${{ secrets.GHCR_PAT }}
           az containerapp update \
-            --name ca-ingestion \
+            --name job-ingestor \
             --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
             --image ${{ vars.GHCR_IMAGE_BASE }}:${{ steps.tag.outputs.tag }}

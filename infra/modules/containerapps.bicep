@@ -2,7 +2,7 @@
 // Container Apps environment + ingestion app + scheduled batch jobs.
 //
 // One Consumption-plan environment hosts:
-//   ca-ingestion   — always-on ingestion worker
+//   job-ingestor   — always-on ingestion worker
 //   job-extractor  — scheduled every 5 min (EH → GPT-4o-mini → Cosmos signals)
 //   job-aggregator — scheduled every 15 min (Cosmos signals → ticker_timeline)
 //   job-classifier — scheduled every 30 min (conviction-state classification)
@@ -78,7 +78,7 @@ resource env 'Microsoft.App/managedEnvironments@2024-03-01' = {
 }
 
 resource ingestion 'Microsoft.App/containerApps@2024-03-01' = {
-  name: 'ca-ingestion'
+  name: 'job-ingestor'
   location: location
   tags: tags
   identity: { type: 'SystemAssigned' }
