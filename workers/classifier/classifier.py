@@ -10,10 +10,9 @@ untrusted Reddit post body is sent as a separate `user` message. The model's
 alignment ensures system instructions take precedence over user content.
 
 Phase 5 addition: EmbeddingGenerator batches rationale text through the
-Azure OpenAI embeddings REST endpoint (raw httpx — see class docstring) and
-returns 1 536-dim float vectors for text-embedding-ada-002. Called alongside
-classification in main.py; errors are soft-failed so conviction state is
-never blocked by an embedding failure.
+Azure OpenAI embeddings deployment (text-embedding-ada-002, 1 536-dim) via
+the `openai` SDK. Called alongside classification in main.py; errors are
+soft-failed so conviction state is never blocked by an embedding failure.
 """
 from __future__ import annotations
 
@@ -21,7 +20,6 @@ import json
 import logging
 from typing import Sequence
 
-import httpx
 from openai import AzureOpenAI
 
 logger = logging.getLogger(__name__)
@@ -151,10 +149,9 @@ _EMBEDDING_MODEL = "text-embedding-ada-002"
 _EMBEDDING_DIMS = 1536
 # Azure OpenAI embeddings API hard limit per request.
 _EMBED_BATCH_LIMIT = 100
-# Stable embeddings API version (GA). Distinct from the chat api_version, which
-# tracks newer previews for structured outputs.
+# Stable embeddings API version (GA). Distinct from the chat api_version,
+# which tracks newer previews for structured outputs.
 _EMBED_API_VERSION = "2024-02-01"
-_EMBED_HTTP_TIMEOUT = 60.0
 
 
 class EmbeddingGenerator:
@@ -164,29 +161,17 @@ class EmbeddingGenerator:
     Inputs that exceed the token limit are truncated server-side; no client-
     side truncation needed.
 
-    Implementation: direct httpx POST to the embeddings REST endpoint instead
-    of the openai SDK. The SDK works fine here, but a thin raw client keeps
-    the embedding path independent of any future SDK / chat-client coupling
-    in the same process and makes the wire contract obvious.
-
     Error handling: the caller (main.py) wraps calls in a try/except so that
     embedding failures never block conviction-state writes.
     """
 
     def __init__(self, api_key: str, endpoint: str, deployment: str) -> None:
+        self._client = AzureOpenAI(
+            api_key=api_key,
+            azure_endpoint=endpoint,
+            api_version=_EMBED_API_VERSION,
+        )
         self._deployment = deployment
-        base = endpoint.rstrip("/")
-        self._url = (
-            f"{base}/openai/deployments/{deployment}/embeddings"
-            f"?api-version={_EMBED_API_VERSION}"
-        )
-        self._client = httpx.Client(
-            timeout=_EMBED_HTTP_TIMEOUT,
-            headers={
-                "api-key": api_key,
-                "Content-Type": "application/json",
-            },
-        )
 
     def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         """Return embeddings for each text. Raises on API error.
@@ -200,22 +185,14 @@ class EmbeddingGenerator:
         results: list[list[float]] = []
         for i in range(0, len(safe_texts), _EMBED_BATCH_LIMIT):
             chunk = safe_texts[i : i + _EMBED_BATCH_LIMIT]
-            resp = self._client.post(self._url, json={"input": chunk})
-            resp.raise_for_status()
-            data = resp.json()["data"]
-            # API returns items in input order, but sort defensively by index.
+            resp = self._client.embeddings.create(
+                model=self._deployment,
+                input=list(chunk),
+            )
+            # SDK returns items in input order, but sort defensively by index.
             chunk_vecs = [
-                item["embedding"]
-                for item in sorted(data, key=lambda x: x["index"])
+                item.embedding
+                for item in sorted(resp.data, key=lambda x: x.index)
             ]
             results.extend(chunk_vecs)
         return results
-
-    def close(self) -> None:
-        self._client.close()
-
-    def __enter__(self) -> "EmbeddingGenerator":
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        self.close()

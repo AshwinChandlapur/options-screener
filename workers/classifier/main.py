@@ -76,81 +76,78 @@ def main() -> None:
     remaining = config.max_signals_per_run
     _skipped_ids: set[str] = set()  # prevents re-processing write-failed docs in same run
 
-    try:
-        while remaining > 0:
-            batch_size = min(config.batch_size, remaining)
-            signals = client.fetch_unclassified(batch_size, skip_ids=_skipped_ids)
-            if not signals:
-                logger.info("No unclassified signals remaining")
-                break
+    while remaining > 0:
+        batch_size = min(config.batch_size, remaining)
+        signals = client.fetch_unclassified(batch_size, skip_ids=_skipped_ids)
+        if not signals:
+            logger.info("No unclassified signals remaining")
+            break
 
-            # --- Phase 5: batch-embed all rationales in this chunk ---
-            rationales = [doc.get("rationale", "") for doc in signals]
-            embeddings: list[list[float] | None] = [None] * len(signals)
+        # --- Phase 5: batch-embed all rationales in this chunk ---
+        rationales = [doc.get("rationale", "") for doc in signals]
+        embeddings: list[list[float] | None] = [None] * len(signals)
+        try:
+            vecs = embedder.embed_batch(rationales)
+            embeddings = list(vecs)  # type: ignore[assignment]
+            logger.debug("Embedded %d signals", len(vecs))
+        except Exception:
+            logger.exception(
+                "Embedding batch failed for %d signals — conviction writes proceed without embedding",
+                len(signals),
+            )
+
+        for idx, doc in enumerate(signals):
+            ticker = doc.get("ticker", "")
+            sentiment = doc.get("sentiment", "neutral")
+            rationale = doc.get("rationale", "")
+
             try:
-                vecs = embedder.embed_batch(rationales)
-                embeddings = list(vecs)  # type: ignore[assignment]
-                logger.debug("Embedded %d signals", len(vecs))
+                state, confidence = clf.classify(ticker, sentiment, rationale)
+                client.write_conviction(
+                    doc,
+                    state,
+                    confidence,
+                    embedding=embeddings[idx],
+                    embedding_model=secrets.embed_deployment,
+                )
+                classified += 1
+                logger.debug(
+                    "  %s [%s] → %s (%.2f) embedded=%s",
+                    ticker, doc.get("id", "")[:8], state, confidence,
+                    embeddings[idx] is not None,
+                )
             except Exception:
                 logger.exception(
-                    "Embedding batch failed for %d signals — conviction writes proceed without embedding",
-                    len(signals),
+                    "Failed to classify signal %s for ticker %s",
+                    doc.get("id", "?"), ticker,
                 )
+                _skipped_ids.add(doc.get("id", ""))
+                skipped += 1
 
-            for idx, doc in enumerate(signals):
-                ticker = doc.get("ticker", "")
-                sentiment = doc.get("sentiment", "neutral")
-                rationale = doc.get("rationale", "")
+        remaining -= len(signals)
+        # If we got fewer than requested, we've drained the queue.
+        if len(signals) < batch_size:
+            break
 
-                try:
-                    state, confidence = clf.classify(ticker, sentiment, rationale)
-                    client.write_conviction(
-                        doc,
-                        state,
-                        confidence,
-                        embedding=embeddings[idx],
-                        embedding_model=secrets.embed_deployment,
-                    )
-                    classified += 1
-                    logger.debug(
-                        "  %s [%s] → %s (%.2f) embedded=%s",
-                        ticker, doc.get("id", "")[:8], state, confidence,
-                        embeddings[idx] is not None,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to classify signal %s for ticker %s",
-                        doc.get("id", "?"), ticker,
-                    )
-                    _skipped_ids.add(doc.get("id", ""))
-                    skipped += 1
-
-            remaining -= len(signals)
-            # If we got fewer than requested, we've drained the queue.
-            if len(signals) < batch_size:
-                break
-
-        # --- Phase 5 backfill: embed docs that were classified before embeddings worked ---
-        # Catches docs where embedding soft-failed on a prior run (e.g. missing KV secret,
-        # transient API error). Conviction is not re-classified — only embedding is added.
-        while True:
-            docs = client.fetch_missing_embeddings(config.batch_size)
-            if not docs:
-                break
-            rationales = [doc.get("rationale", "") for doc in docs]
-            try:
-                vecs = embedder.embed_batch(rationales)
-                for doc, vec in zip(docs, vecs):
-                    client.write_embedding(doc, vec, secrets.embed_deployment)
-                    backfilled += 1
-                logger.info("Backfilled embeddings for %d signals", len(docs))
-            except Exception:
-                logger.exception("Embedding backfill batch failed — will retry on next run")
-                break
-            if len(docs) < config.batch_size:
-                break
-    finally:
-        embedder.close()
+    # --- Phase 5 backfill: embed docs that were classified before embeddings worked ---
+    # Catches docs where embedding soft-failed on a prior run (e.g. missing KV secret,
+    # transient API error). Conviction is not re-classified — only embedding is added.
+    while True:
+        docs = client.fetch_missing_embeddings(config.batch_size)
+        if not docs:
+            break
+        rationales = [doc.get("rationale", "") for doc in docs]
+        try:
+            vecs = embedder.embed_batch(rationales)
+            for doc, vec in zip(docs, vecs):
+                client.write_embedding(doc, vec, secrets.embed_deployment)
+                backfilled += 1
+            logger.info("Backfilled embeddings for %d signals", len(docs))
+        except Exception:
+            logger.exception("Embedding backfill batch failed — will retry on next run")
+            break
+        if len(docs) < config.batch_size:
+            break
 
     logger.info(
         "Classifier complete — classified=%d skipped=%d backfilled=%d",
