@@ -163,17 +163,19 @@ class EmbeddingGenerator:
     """
 
     def __init__(self, api_key: str, endpoint: str, deployment: str) -> None:
-        # azure_deployment pins the deployment at the client level.
-        # Passing model= in embeddings.create() alone is not reliable in some
-        # openai SDK versions — it can be ignored and the call misrouted to
-        # chat/completions. Setting azure_deployment on the constructor fixes this.
-        self._client = AzureOpenAI(
-            api_key=api_key,
-            azure_endpoint=endpoint,
-            azure_deployment=deployment,
-            api_version="2024-02-01",
-        )
+        # NOTE: We bypass the openai SDK entirely here. With multiple AzureOpenAI
+        # client instances in the same process (one for chat, one for embeddings),
+        # the SDK was misrouting embeddings.create() calls to the chat deployment's
+        # /chat/completions endpoint. A direct httpx POST to the embeddings URL
+        # removes all SDK ambiguity.
+        self._api_key = api_key
+        # Strip trailing slash for clean URL construction.
+        self._endpoint = endpoint.rstrip("/")
         self._deployment = deployment
+        self._url = (
+            f"{self._endpoint}/openai/deployments/{deployment}/embeddings"
+            f"?api-version=2024-02-01"
+        )
 
     def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         """Return embeddings for each text. Raises on API error.
@@ -181,15 +183,21 @@ class EmbeddingGenerator:
         Splits into sub-batches of at most _EMBED_BATCH_LIMIT items.
         Empty strings are replaced with a single space to avoid API rejection.
         """
+        import httpx
+
         results: list[list[float]] = []
         safe_texts = [t if t.strip() else " " for t in texts]
+        headers = {
+            "api-key": self._api_key,
+            "Content-Type": "application/json",
+        }
         for i in range(0, len(safe_texts), _EMBED_BATCH_LIMIT):
             chunk = safe_texts[i : i + _EMBED_BATCH_LIMIT]
-            response = self._client.embeddings.create(
-                model=self._deployment,
-                input=chunk,
-            )
-            # API returns items sorted by index.
-            chunk_vecs = [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
+            with httpx.Client(timeout=60.0) as http:
+                resp = http.post(self._url, headers=headers, json={"input": chunk})
+            resp.raise_for_status()
+            data = resp.json()["data"]
+            # API returns items sorted by index already, but sort defensively.
+            chunk_vecs = [item["embedding"] for item in sorted(data, key=lambda x: x["index"])]
             results.extend(chunk_vecs)
         return results
