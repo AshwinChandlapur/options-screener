@@ -66,7 +66,7 @@ var roleBlobContributor = subscriptionResourceId('Microsoft.Authorization/roleDe
 // Built-in: Azure Event Hubs Data Sender
 var roleEhSender = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2b629674-e913-4c01-ae53-ef4638d8f975')
 // Built-in: Azure Event Hubs Data Receiver
-var roleEhReceiver = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a638d3c8-0f6e-4e09-a2b7-3e4440e0f4d5')
+var roleEhReceiver = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde')
 
 // Placeholder used only if individual image params are not supplied (should not happen after first deploy).
 
