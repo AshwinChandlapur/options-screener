@@ -39,6 +39,15 @@ param cosmosDataContributorPrincipalIds array = []
 @description('Container image for the ingestion worker. Infra deploy preserves the live image; only falls back to placeholder on first deploy.')
 param ingestionImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+@description('Container image for job-extractor. Preserved by infra workflow.')
+param extractorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
+@description('Container image for job-aggregator. Preserved by infra workflow.')
+param aggregatorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
+@description('Container image for job-classifier. Preserved by infra workflow.')
+param classifierImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
 @description('Tag map applied to every resource.')
 param tags object = {
   workload: 'narrative-intelligence'
@@ -108,6 +117,9 @@ module containerapps 'modules/containerapps.bicep' = {
     blobAccountName: storage.outputs.storageAccountName
     blobStorageId: storage.outputs.storageAccountId
     ingestionImage: ingestionImage
+    extractorImage: extractorImage
+    aggregatorImage: aggregatorImage
+    classifierImage: classifierImage
   }
 }
 

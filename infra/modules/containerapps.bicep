@@ -29,6 +29,15 @@ param logAnalyticsWorkspaceId string
 @description('Container image for the ingestion worker. Defaults to a public MCR placeholder; CI deploy overrides with the real ghcr.io image.')
 param ingestionImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+@description('Container image for job-extractor. Preserved from live deployment by infra workflow.')
+param extractorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
+@description('Container image for job-aggregator. Preserved from live deployment by infra workflow.')
+param aggregatorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
+@description('Container image for job-classifier. Preserved from live deployment by infra workflow.')
+param classifierImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
 @description('Key Vault URI passed to workers as KEYVAULT_URI.')
 param keyVaultUri string = ''
 
@@ -52,8 +61,7 @@ var roleSecretsUser = subscriptionResourceId('Microsoft.Authorization/roleDefini
 // Built-in: Storage Blob Data Contributor
 var roleBlobContributor = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 
-// Placeholder image for jobs. CI deploy overwrites with the real ghcr.io image.
-var placeholderJobImage = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+// Placeholder used only if individual image params are not supplied (should not happen after first deploy).
 
 var envName = 'cae-narrative-${nameSuffix}'
 
@@ -142,7 +150,7 @@ resource extractorJob 'Microsoft.App/jobs@2024-03-01' = {
       containers: [
         {
           name: 'extractor'
-          image: placeholderJobImage
+          image: extractorImage
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -180,7 +188,7 @@ resource aggregatorJob 'Microsoft.App/jobs@2024-03-01' = {
       containers: [
         {
           name: 'aggregator'
-          image: placeholderJobImage
+          image: aggregatorImage
           resources: {
             cpu: json('0.25')
             memory: '0.5Gi'
@@ -216,7 +224,7 @@ resource classifierJob 'Microsoft.App/jobs@2024-03-01' = {
       containers: [
         {
           name: 'classifier'
-          image: placeholderJobImage
+          image: classifierImage
           resources: {
             cpu: json('0.5')
             memory: '1.0Gi'
