@@ -166,7 +166,8 @@ class EmbeddingGenerator:
         self._client = AzureOpenAI(
             api_key=api_key,
             azure_endpoint=endpoint,
-            api_version="2024-08-01-preview",
+            api_version="2024-02-01",  # stable embeddings API version; preview version
+            # 2024-08-01-preview incorrectly routes ada-002 to chat/completions
         )
         self._deployment = deployment
 
