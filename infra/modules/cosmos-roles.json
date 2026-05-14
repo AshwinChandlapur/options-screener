@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.43.8.12551",
+      "templateHash": "3648267273099319274"
+    }
+  },
+  "parameters": {
+    "cosmosAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Existing Cosmos DB account name (no globally-unique check; must already exist)."
+      }
+    },
+    "principalIds": {
+      "type": "array",
+      "metadata": {
+        "description": "Principal IDs (managed-identity object IDs) to grant Cosmos Data Contributor."
+      }
+    }
+  },
+  "variables": {
+    "dataContributorRoleId": "00000000-0000-0000-0000-000000000002"
+  },
+  "resources": [
+    {
+      "copy": {
+        "name": "workerAssignments",
+        "count": "[length(parameters('principalIds'))]"
+      },
+      "condition": "[not(empty(parameters('principalIds')[copyIndex()]))]",
+      "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+      "apiVersion": "2024-05-15",
+      "name": "[format('{0}/{1}', parameters('cosmosAccountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName')), parameters('principalIds')[copyIndex()], variables('dataContributorRoleId')))]",
+      "properties": {
+        "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/{1}', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName')), variables('dataContributorRoleId'))]",
+        "principalId": "[parameters('principalIds')[copyIndex()]]",
+        "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName'))]"
+      }
+    }
+  ]
+}

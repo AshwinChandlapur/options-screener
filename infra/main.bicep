@@ -150,6 +150,26 @@ module cosmos 'modules/cosmos.bicep' = {
   }
 }
 
+// Auto-grant Cosmos Data Contributor to worker MIs. Decoupled from the cosmos
+// module to break the circular dependency (containerapps depends on cosmos
+// endpoint; cosmos roles depend on containerapps principalIds).
+// External admin object IDs continue to flow through cosmos.bicep via
+// cosmosDataContributorPrincipalIds.
+module cosmosRoles 'modules/cosmos-roles.bicep' = {
+  scope: rg
+  name: 'cosmos-roles'
+  params: {
+    cosmosAccountName: cosmos.outputs.accountName
+    principalIds: [
+      containerapps.outputs.extractorJobPrincipalId
+      containerapps.outputs.aggregatorJobPrincipalId
+      containerapps.outputs.classifierJobPrincipalId
+      containerapps.outputs.detectorJobPrincipalId
+      containerapps.outputs.scorerJobPrincipalId
+    ]
+  }
+}
+
 output storageAccountName string = storage.outputs.storageAccountName
 output eventHubsNamespace string = eventhubs.outputs.namespaceName
 output keyVaultName string = keyvault.outputs.keyVaultName
@@ -158,4 +178,6 @@ output appInsightsConnectionString string = monitoring.outputs.appInsightsConnec
 output extractorJobPrincipalId string = containerapps.outputs.extractorJobPrincipalId
 output aggregatorJobPrincipalId string = containerapps.outputs.aggregatorJobPrincipalId
 output classifierJobPrincipalId string = containerapps.outputs.classifierJobPrincipalId
+output detectorJobPrincipalId string = containerapps.outputs.detectorJobPrincipalId
+output scorerJobPrincipalId string = containerapps.outputs.scorerJobPrincipalId
 output cosmosEndpoint string = cosmos.outputs.accountEndpoint

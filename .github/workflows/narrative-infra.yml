@@ -49,6 +49,7 @@ jobs:
           az bicep build --file infra/modules/containerapps.bicep
           az bicep build --file infra/modules/monitoring.bicep
           az bicep build --file infra/modules/cosmos.bicep
+          az bicep build --file infra/modules/cosmos-roles.bicep
 
       - name: Render parameters file
         env:
