@@ -143,7 +143,9 @@ class ConvictionClassifier:
 # Phase 5 — embedding generator
 # ---------------------------------------------------------------------------
 
-_EMBEDDING_MODEL = "text-embedding-3-small"
+# Default embedding model name — overridden by KV secret embed-deployment.
+# text-embedding-ada-002 is 1536-dim; text-embedding-3-large defaults to 3072-dim.
+_EMBEDDING_MODEL = "text-embedding-ada-002"
 _EMBEDDING_DIMS = 1536
 # OpenAI embedding API hard limit per request.
 _EMBED_BATCH_LIMIT = 100

@@ -41,6 +41,6 @@ def fetch_secrets(keyvault_uri: str) -> ClassifierSecrets:
         openai_api_key=_get("openai-api-key"),
         openai_endpoint=_get("openai-endpoint"),
         openai_deployment=_get_optional("openai-deployment", "gpt-4o-mini"),
-        embed_deployment=_get_optional("embed-deployment", "text-embedding-3-small"),
+        embed_deployment=_get_optional("embed-deployment", "text-embedding-ada-002"),
         prompt_template=_get_optional("conviction-prompt-v1", DEFAULT_SYSTEM_PROMPT),
     )
