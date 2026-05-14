@@ -287,6 +287,7 @@ resource detectorJob 'Microsoft.App/jobs@2024-03-01' = {
             memory: '1.0Gi'
           }
           env: [
+            { name: 'KEYVAULT_URI',    value: keyVaultUri }
             { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
             { name: 'LOG_LEVEL',       value: 'INFO' }
           ]
