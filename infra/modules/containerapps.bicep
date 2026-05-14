@@ -45,7 +45,7 @@ param cosmosEndpoint string = ''
 param keyVaultId string = ''
 
 // Built-in: Key Vault Secrets User
-var roleSecretsUser = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e0')
+var roleSecretsUser = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 
 // Placeholder image for jobs. CI deploy overwrites with the real ghcr.io image.
 var placeholderJobImage = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
