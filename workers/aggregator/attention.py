@@ -318,6 +318,7 @@ def build_snapshot(
     flairs_14d: list[str | None] = []
     sentiments_14d: list[str] = []
     confidences_14d: list[float] = []
+    sigs_14d: list[dict] = []  # collected in the main loop — both bounds enforced there
 
     cutoff_30d = bucket_date - timedelta(days=_WINDOW_30D)
     cutoff_14d = bucket_date - timedelta(days=_WINDOW_14D)
@@ -339,6 +340,7 @@ def build_snapshot(
             flairs_14d.append(sig.get("flair"))
             sentiments_14d.append(sig.get("sentiment", "neutral"))
             confidences_14d.append(float(sig.get("confidence", 0.0)))
+            sigs_14d.append(sig)
 
     # --- Build daily_buckets for 30d window ---
     daily_buckets = [
@@ -393,14 +395,8 @@ def build_snapshot(
     )
 
     # --- §3 Conviction ratios (Phase 4 — None until classifier runs) ---
-    signals_14d = [
-        sig for sig in signals
-        if (lambda ts: datetime.fromtimestamp(ts, tz=timezone.utc).date() if ts else bucket_date)(
-            sig.get("created_utc", 0)
-        ) >= cutoff_14d
-    ]
     rb_ratio, rbr_ratio, eb_ratio, conviction_dd_norm, conviction_classified_14d = (
-        compute_conviction_ratios(signals_14d)
+        compute_conviction_ratios(sigs_14d)
     )
 
     return TickerTimelineSnapshot(

@@ -27,11 +27,16 @@ class CosmosClassifierClient:
         stop=stop_after_attempt(3),
         reraise=True,
     )
-    def fetch_unclassified(self, batch_size: int) -> list[dict]:
-        """Return up to batch_size signal documents without conviction_state set."""
+    def fetch_unclassified(self, batch_size: int, skip_ids: set[str] | None = None) -> list[dict]:
+        """Return up to batch_size signal documents without conviction_state set.
+
+        ORDER BY c._ts ASC ensures deterministic ordering across consecutive calls
+        so OFFSET 0 LIMIT N is stable within a job run. skip_ids excludes
+        documents that failed to write in a previous batch iteration.
+        """
         query = (
             "SELECT * FROM c WHERE NOT IS_DEFINED(c.conviction_state) "
-            "OFFSET 0 LIMIT @batch_size"
+            "ORDER BY c._ts ASC OFFSET 0 LIMIT @batch_size"
         )
         params = [{"name": "@batch_size", "value": batch_size}]
         items = list(
@@ -41,6 +46,8 @@ class CosmosClassifierClient:
                 enable_cross_partition_query=True,
             )
         )
+        if skip_ids:
+            items = [i for i in items if i.get("id") not in skip_ids]
         logger.debug("Fetched %d unclassified signals", len(items))
         return items
 

@@ -2,16 +2,16 @@
 // Container Apps environment + ingestion app + scheduled batch jobs.
 //
 // One Consumption-plan environment hosts:
-//   ca-ingestion  — always-on ingestion worker
-//   job-extractor — scheduled every 5 min (EH → GPT-4o-mini → Cosmos signals)
-//   job-aggregator— scheduled every 15 min (Cosmos signals → ticker_timeline)
+//   ca-ingestion   — always-on ingestion worker
+//   job-extractor  — scheduled every 5 min (EH → GPT-4o-mini → Cosmos signals)
+//   job-aggregator — scheduled every 15 min (Cosmos signals → ticker_timeline)
+//   job-classifier — scheduled every 30 min (conviction-state classification)
 //
 // Jobs are provisioned here as stubs with a placeholder image; CI workflows
-// (narrative-extractor.yml / narrative-aggregator.yml) update the image on
-// every push to main.
+// update the image on every push to main via `az containerapp job update`.
 //
-// Pull credentials for ghcr.io are patched in by the CI workflow via
-// `az containerapp job registry set`.
+// Key Vault Secrets User role assignments are created here (next to the consumer)
+// per the convention stated in modules/keyvault.bicep.
 // =============================================================================
 
 @description('Azure region.')
@@ -40,6 +40,12 @@ param blobAccountName string = ''
 
 @description('Cosmos DB account endpoint passed to extractor and aggregator workers as COSMOS_ENDPOINT.')
 param cosmosEndpoint string = ''
+
+@description('Resource ID of the Key Vault. Used to assign Key Vault Secrets User to worker managed identities.')
+param keyVaultId string = ''
+
+// Built-in: Key Vault Secrets User
+var roleSecretsUser = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e0')
 
 // Placeholder image for jobs. CI deploy overwrites with the real ghcr.io image.
 var placeholderJobImage = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
@@ -193,7 +199,7 @@ resource classifierJob 'Microsoft.App/jobs@2024-03-01' = {
     environmentId: env.id
     configuration: {
       triggerType: 'Schedule'
-      replicaTimeout: 300
+      replicaTimeout: 1500  // 25 min — fits inside 30-min cron window with buffer
       scheduleTriggerConfig: {
         cronExpression: '*/30 * * * *'
         parallelism: 1
@@ -207,8 +213,8 @@ resource classifierJob 'Microsoft.App/jobs@2024-03-01' = {
           name: 'classifier'
           image: placeholderJobImage
           resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
+            cpu: json('0.5')
+            memory: '1.0Gi'
           }
           env: [
             { name: 'KEYVAULT_URI',    value: keyVaultUri }
@@ -228,3 +234,38 @@ output ingestionPrincipalId string = ingestion.identity.principalId
 output extractorJobPrincipalId string = extractorJob.identity.principalId
 output aggregatorJobPrincipalId string = aggregatorJob.identity.principalId
 output classifierJobPrincipalId string = classifierJob.identity.principalId
+
+// ---------------------------------------------------------------------------
+// Key Vault Secrets User role assignments for workers that read KV secrets.
+// Aggregator reads only Cosmos (no KV); no assignment needed for it.
+// ---------------------------------------------------------------------------
+
+resource ingestionKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(keyVaultId)) {
+  name: guid(keyVaultId, ingestion.name, roleSecretsUser)
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: roleSecretsUser
+    principalId: ingestion.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource extractorKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(keyVaultId)) {
+  name: guid(keyVaultId, extractorJob.name, roleSecretsUser)
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: roleSecretsUser
+    principalId: extractorJob.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource classifierKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(keyVaultId)) {
+  name: guid(keyVaultId, classifierJob.name, roleSecretsUser)
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: roleSecretsUser
+    principalId: classifierJob.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}

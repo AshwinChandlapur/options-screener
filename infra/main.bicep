@@ -99,6 +99,7 @@ module containerapps 'modules/containerapps.bicep' = {
     tags: tags
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
     keyVaultUri: keyvault.outputs.keyVaultUri
+    keyVaultId: keyvault.outputs.keyVaultId
     eventHubNamespaceFqdn: '${eventhubs.outputs.namespaceName}.servicebus.windows.net'
     cosmosEndpoint: cosmos.outputs.accountEndpoint
   }

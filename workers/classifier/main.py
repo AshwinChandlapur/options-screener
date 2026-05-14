@@ -62,10 +62,11 @@ def main() -> None:
     classified = 0
     skipped = 0
     remaining = config.max_signals_per_run
+    _skipped_ids: set[str] = set()  # prevents re-processing write-failed docs in same run
 
     while remaining > 0:
         batch_size = min(config.batch_size, remaining)
-        signals = client.fetch_unclassified(batch_size)
+        signals = client.fetch_unclassified(batch_size, skip_ids=_skipped_ids)
         if not signals:
             logger.info("No unclassified signals remaining")
             break
@@ -88,6 +89,7 @@ def main() -> None:
                     "Failed to classify signal %s for ticker %s",
                     doc.get("id", "?"), ticker,
                 )
+                _skipped_ids.add(doc.get("id", ""))
                 skipped += 1
 
         remaining -= len(signals)
@@ -99,6 +101,12 @@ def main() -> None:
         "Classifier complete — classified=%d skipped=%d",
         classified, skipped,
     )
+
+    # Exit non-zero if every attempted signal failed — surfaces as job failure
+    # so Container Apps retries and the on-call alert fires.
+    if classified == 0 and skipped > 0:
+        logger.error("All %d signals failed classification — exiting non-zero", skipped)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
