@@ -152,22 +152,21 @@ _EMBED_BATCH_LIMIT = 100
 
 
 class EmbeddingGenerator:
-    """Wraps text-embedding-3-small for batch embedding of rationale text.
+    """Batch embedding generator for rationale text via Azure OpenAI.
 
-    Returns a list of 1 536-dim float vectors, one per input text.
-    Inputs that exceed the token limit are truncated to 8 191 tokens by the
-    API automatically; no client-side truncation needed.
+    Returns a list of float vectors (1536-dim for ada-002), one per input text.
+    Inputs that exceed the token limit are truncated server-side; no client-
+    side truncation needed.
+
+    Implementation: direct httpx POST to the embeddings REST endpoint rather
+    than the openai SDK. Avoids any client-instance interaction with the chat
+    AzureOpenAI client in the same process.
 
     Error handling: the caller (main.py) wraps calls in a try/except so that
     embedding failures never block conviction-state writes.
     """
 
     def __init__(self, api_key: str, endpoint: str, deployment: str) -> None:
-        # NOTE: We bypass the openai SDK entirely here. With multiple AzureOpenAI
-        # client instances in the same process (one for chat, one for embeddings),
-        # the SDK was misrouting embeddings.create() calls to the chat deployment's
-        # /chat/completions endpoint. A direct httpx POST to the embeddings URL
-        # removes all SDK ambiguity.
         self._api_key = api_key
         # Strip trailing slash for clean URL construction.
         self._endpoint = endpoint.rstrip("/")
