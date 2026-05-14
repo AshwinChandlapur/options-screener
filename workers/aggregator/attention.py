@@ -54,6 +54,20 @@ _DD_TERMS: frozenset[str] = frozenset({
     "writeup", "write-up", "bull case", "bear case",
 })
 
+# Conviction state weights per §3 of NARRATIVE_METHODOLOGY.md.
+_CONVICTION_WEIGHTS: dict[str, float] = {
+    "researched_bull":    1.0,
+    "researched_bear":    1.0,
+    "emotional_bull":     0.4,
+    "emotional_bear":     0.4,
+    "uncertainty":        0.0,
+    "earnings_focused":   0.8,
+    "product_thesis":     0.8,
+    "ecosystem_thesis":   0.8,
+    "institutional_watch": 0.9,
+    "exit_signal":       -0.5,
+}
+
 
 # ---------------------------------------------------------------------------
 # §2.1 — Persistence: decay-weighted density
@@ -238,6 +252,38 @@ def compute_attention_quality(
 
 
 # ---------------------------------------------------------------------------
+# §3 — Conviction ratios (populated when Phase 4 classifier has run)
+# ---------------------------------------------------------------------------
+
+def compute_conviction_ratios(
+    signals_14d: list[dict],
+) -> tuple[float | None, float | None, float | None, float | None, int | None]:
+    """Return (researched_bull_ratio, researched_bear_ratio, emotional_bull_ratio,
+    conviction_dd_norm, classified_count) computed over signals in the 14d window
+    that have a conviction_state set.
+
+    Returns (None, None, None, None, None) when no signals have been classified.
+    conviction_dd_norm is the weighted conviction score (mean of per-state weights
+    over classified signals), range [-0.5, 1.0] per §3 weights table.
+    """
+    classified = [s for s in signals_14d if s.get("conviction_state")]
+    n = len(classified)
+    if n == 0:
+        return None, None, None, None, None
+
+    def _ratio(state: str) -> float:
+        return sum(1 for s in classified if s["conviction_state"] == state) / n
+
+    rb = _ratio("researched_bull")
+    rbr = _ratio("researched_bear")
+    eb = _ratio("emotional_bull")
+    weighted = sum(
+        _CONVICTION_WEIGHTS.get(s["conviction_state"], 0.0) for s in classified
+    ) / n
+    return rb, rbr, eb, weighted, n
+
+
+# ---------------------------------------------------------------------------
 # Main builder — called by the Phase 3 aggregator
 # ---------------------------------------------------------------------------
 
@@ -346,6 +392,17 @@ def build_snapshot(
         sum(len(b) for b in bodies_14d) / len(bodies_14d) if bodies_14d else 0.0
     )
 
+    # --- §3 Conviction ratios (Phase 4 — None until classifier runs) ---
+    signals_14d = [
+        sig for sig in signals
+        if (lambda ts: datetime.fromtimestamp(ts, tz=timezone.utc).date() if ts else bucket_date)(
+            sig.get("created_utc", 0)
+        ) >= cutoff_14d
+    ]
+    rb_ratio, rbr_ratio, eb_ratio, conviction_dd_norm, conviction_classified_14d = (
+        compute_conviction_ratios(signals_14d)
+    )
+
     return TickerTimelineSnapshot(
         id=f"{ticker}_{bucket_str}",
         ticker=ticker,
@@ -367,4 +424,9 @@ def build_snapshot(
         bullish_ratio=bullish_ratio,
         bearish_ratio=bearish_ratio,
         avg_confidence=avg_confidence,
+        conviction_researched_bull_ratio=rb_ratio,
+        conviction_researched_bear_ratio=rbr_ratio,
+        conviction_emotional_bull_ratio=eb_ratio,
+        conviction_dd_norm=conviction_dd_norm,
+        conviction_classified_14d=conviction_classified_14d,
     )

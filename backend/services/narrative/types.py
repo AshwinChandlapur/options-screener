@@ -92,10 +92,16 @@ class TickerTimelineSnapshot:
     avg_confidence: float = 0.0        # mean confidence score across all signals in 14d
 
     # --- Phase 4+ fields (None until conviction classifier runs) ---
-    # conviction_researched_bull_ratio: float | None = None
-    # conviction_researched_bear_ratio: float | None = None
-    # conviction_emotional_bull_ratio: float | None = None
-    # conviction_dd_norm: float | None = None
+    # Ratios computed over classified signals in the 14d window only.
+    # None = no signals have been classified yet (classifier hasn't run).
+    conviction_researched_bull_ratio: float | None = None
+    conviction_researched_bear_ratio: float | None = None
+    conviction_emotional_bull_ratio: float | None = None
+    # Weighted conviction score: mean(weight[state]) over classified signals.
+    # Range: [-0.5, 1.0] per weights table in §3. None until classified.
+    conviction_dd_norm: float | None = None
+    # Count of classified signals in 14d window (denominator for ratios above).
+    conviction_classified_14d: int | None = None
 
     # --- Phase 5+ fields (None until narrative detector runs) ---
     # lifecycle_stage: int | None = None        # 1..6

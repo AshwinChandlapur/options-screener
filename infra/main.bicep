@@ -123,4 +123,5 @@ output containerAppsEnvId string = containerapps.outputs.envId
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output extractorJobPrincipalId string = containerapps.outputs.extractorJobPrincipalId
 output aggregatorJobPrincipalId string = containerapps.outputs.aggregatorJobPrincipalId
+output classifierJobPrincipalId string = containerapps.outputs.classifierJobPrincipalId
 output cosmosEndpoint string = cosmos.outputs.accountEndpoint

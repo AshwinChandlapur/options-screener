@@ -184,9 +184,47 @@ resource aggregatorJob 'Microsoft.App/jobs@2024-03-01' = {
   }
 }
 
+resource classifierJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-classifier'
+  location: location
+  tags: tags
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    environmentId: env.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 300
+      scheduleTriggerConfig: {
+        cronExpression: '*/30 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [] // CI workflow patches in ghcr.io credentials
+    }
+    template: {
+      containers: [
+        {
+          name: 'classifier'
+          image: placeholderJobImage
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: [
+            { name: 'KEYVAULT_URI',    value: keyVaultUri }
+            { name: 'COSMOS_ENDPOINT', value: cosmosEndpoint }
+            { name: 'LOG_LEVEL',       value: 'INFO' }
+          ]
+        }
+      ]
+    }
+  }
+}
+
 output envId string = env.id
 output envName string = env.name
 output ingestionAppName string = ingestion.name
 output ingestionPrincipalId string = ingestion.identity.principalId
 output extractorJobPrincipalId string = extractorJob.identity.principalId
 output aggregatorJobPrincipalId string = aggregatorJob.identity.principalId
+output classifierJobPrincipalId string = classifierJob.identity.principalId
