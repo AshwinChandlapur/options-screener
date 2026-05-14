@@ -44,8 +44,13 @@ param cosmosEndpoint string = ''
 @description('Resource ID of the Key Vault. Used to assign Key Vault Secrets User to worker managed identities.')
 param keyVaultId string = ''
 
+@description('Resource ID of the Blob storage account. Used to assign Storage Blob Data Contributor to job-ingestor.')
+param blobStorageId string = ''
+
 // Built-in: Key Vault Secrets User
 var roleSecretsUser = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+// Built-in: Storage Blob Data Contributor
+var roleBlobContributor = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 
 // Placeholder image for jobs. CI deploy overwrites with the real ghcr.io image.
 var placeholderJobImage = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
@@ -245,6 +250,16 @@ resource ingestionKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   scope: resourceGroup()
   properties: {
     roleDefinitionId: roleSecretsUser
+    principalId: ingestion.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource ingestionBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(blobStorageId)) {
+  name: guid(blobStorageId, ingestion.name, roleBlobContributor)
+  scope: resourceGroup()
+  properties: {
+    roleDefinitionId: roleBlobContributor
     principalId: ingestion.identity.principalId
     principalType: 'ServicePrincipal'
   }

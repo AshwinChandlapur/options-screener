@@ -103,6 +103,7 @@ module containerapps 'modules/containerapps.bicep' = {
     eventHubNamespaceFqdn: '${eventhubs.outputs.namespaceName}.servicebus.windows.net'
     cosmosEndpoint: cosmos.outputs.accountEndpoint
     blobAccountName: storage.outputs.storageAccountName
+    blobStorageId: storage.outputs.storageAccountId
   }
 }
 
