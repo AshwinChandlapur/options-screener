@@ -163,11 +163,15 @@ class EmbeddingGenerator:
     """
 
     def __init__(self, api_key: str, endpoint: str, deployment: str) -> None:
+        # azure_deployment pins the deployment at the client level.
+        # Passing model= in embeddings.create() alone is not reliable in some
+        # openai SDK versions — it can be ignored and the call misrouted to
+        # chat/completions. Setting azure_deployment on the constructor fixes this.
         self._client = AzureOpenAI(
             api_key=api_key,
             azure_endpoint=endpoint,
-            api_version="2024-02-01",  # stable embeddings API version; preview version
-            # 2024-08-01-preview incorrectly routes ada-002 to chat/completions
+            azure_deployment=deployment,
+            api_version="2024-02-01",
         )
         self._deployment = deployment
 
@@ -182,7 +186,6 @@ class EmbeddingGenerator:
         for i in range(0, len(safe_texts), _EMBED_BATCH_LIMIT):
             chunk = safe_texts[i : i + _EMBED_BATCH_LIMIT]
             response = self._client.embeddings.create(
-                model=self._deployment,
                 input=chunk,
             )
             # API returns items sorted by index.
