@@ -41,6 +41,12 @@ _ARCTIC_SHIFT_BASE = "https://arctic-shift.photon-reddit.com/api"
 # Fields we actually need — reduces response size.
 _POST_FIELDS = "id,title,selftext,author,score,created_utc,num_comments,link_flair_text"
 _COMMENT_FIELDS = "id,body,author,score,created_utc,link_id,parent_id"
+# Look-back window passed as `after` on every poll. Arctic Shift indexes posts
+# non-uniformly — a post with created_utc=T-30min can appear in the API hours
+# after a post from T-5min. An advancing cursor would permanently skip those
+# late-indexed posts. Using a fixed look-back means every cycle re-fetches the
+# same window; Cosmos upsert (id=post_id+ticker) deduplicates downstream.
+_LOOKBACK_SECONDS: int = 6 * 3600
 
 
 class RedditPoller:
@@ -49,11 +55,10 @@ class RedditPoller:
     Fetches recent posts and their top-level comments per subreddit.
     A single httpx.Client is reused across calls for connection pooling.
 
-    Dedup: _last_seen_utc tracks the highest created_utc returned per
-    subreddit. Subsequent calls pass `after=<utc>` so Arctic Shift only
-    returns posts newer than the last seen one. This is in-memory — on
-    worker restart a single catch-up batch is ingested; the EH consumer
-    checkpoint prevents that batch from being extracted twice.
+    Every poll fetches posts from the last `_LOOKBACK_SECONDS` (6 h). Arctic
+    Shift's non-uniform indexing lag means an advancing cursor permanently
+    misses posts that are indexed late. The fixed look-back window recovers
+    them; Cosmos upsert (id=post_id+ticker) handles duplicates downstream.
     """
 
     def __init__(
@@ -71,8 +76,6 @@ class RedditPoller:
             timeout=20.0,
             follow_redirects=True,
         )
-        # subreddit → highest created_utc seen; used as `after` cursor.
-        self._last_seen_utc: dict[str, int] = {}
 
     @retry(
         retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
@@ -85,10 +88,9 @@ class RedditPoller:
             "subreddit": subreddit_name,
             "limit": self._post_limit,
             "sort": "desc",
+            "after": int(time.time()) - _LOOKBACK_SECONDS,
             "fields": _POST_FIELDS,
         }
-        if subreddit_name in self._last_seen_utc:
-            params["after"] = self._last_seen_utc[subreddit_name]
         resp = self._client.get(
             f"{_ARCTIC_SHIFT_BASE}/posts/search",
             params=params,
@@ -126,11 +128,7 @@ class RedditPoller:
         if not posts:
             return
 
-        # Advance the cursor to the newest post in this batch so the next
-        # call only fetches posts created after this point.
-        max_utc = max(int(p.get("created_utc", 0)) for p in posts)
-        self._last_seen_utc[subreddit_name] = max_utc
-        logger.debug("r/%s: %d new posts (cursor → %d)", subreddit_name, len(posts), max_utc)
+        logger.debug("r/%s: %d posts in look-back window", subreddit_name, len(posts))
 
         for post in posts:
             post_id: str = post.get("id", "")
