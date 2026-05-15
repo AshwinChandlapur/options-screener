@@ -134,6 +134,12 @@ resource tickerTimelineContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatab
           { path: '/bucket_date/?' }
           { path: '/window_days/?' }
           { path: '/computed_at/?' }
+          // Phase 6 read path: backend ORDER BY needs these indexed.
+          // `cosmos_client.query_top_acs` and `query_emerging` order by `acs`;
+          // `cosmos_client.query_ticker` orders by `computed_at` (system `_ts`
+          // cannot be explicitly indexed when `/*` is excluded).
+          { path: '/acs/?' }
+          { path: '/lifecycle_stage/?' }
         ]
         excludedPaths: [{ path: '/*' }]  // daily_counts array excluded — not queried directly
       }

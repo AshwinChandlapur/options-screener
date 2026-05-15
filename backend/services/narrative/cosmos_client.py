@@ -89,7 +89,7 @@ def query_ticker(ticker: str) -> dict | None:
     query = (
         "SELECT * FROM c "
         "WHERE c.ticker = @ticker "
-        "ORDER BY c._ts DESC "
+        "ORDER BY c.computed_at DESC "
         "OFFSET 0 LIMIT 1"
     )
     results = list(
