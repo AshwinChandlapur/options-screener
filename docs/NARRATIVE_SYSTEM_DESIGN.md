@@ -36,7 +36,7 @@ Reddit (17 subreddits, 3 tiers)
       │  Arctic Shift API  (60s poll, 6h look-back)
       ▼
 ┌─────────────────┐    Blob Storage
-│  ca-ingestion   │ ──────────────────► reddit-raw/ (durable backup)
+│  job-ingestor   │ ──────────────────► reddit-raw/ (durable backup)
 │  (always-on)    │
 └────────┬────────┘
          │  Event Hubs  (reddit-raw-events)
@@ -89,7 +89,7 @@ Reddit (17 subreddits, 3 tiers)
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ WRITE PATH (workers — Azure Container Apps Jobs + one always-on App)         │
 │                                                                              │
-│  Arctic Shift ──► ca-ingestion ──► Event Hubs ──► job-extractor             │
+│  Arctic Shift ──► job-ingestor ──► Event Hubs ──► job-extractor             │
 │                         │                               │                   │
 │                    Blob Storage                    signals (Cosmos)          │
 │                   (audit trail)                         │                   │
@@ -134,7 +134,7 @@ worker's HTTP API. The FastAPI backend is strictly read-only against Cosmos.
 
 ### What
 
-`ca-ingestion` is an **always-on** Container App (MinReplicas=1, MaxReplicas=2).
+`job-ingestor` is an **always-on** Container App (MinReplicas=1, MaxReplicas=2).
 It polls the Arctic Shift Reddit archive API across 17 subreddits every 60 seconds,
 writes each batch to **Blob Storage first** (durability), then publishes to **Event
 Hubs** (delivery). Posts older than 36 hours are published as-is; scores for newer
@@ -142,7 +142,7 @@ posts are frozen at 1 by Arctic Shift's archival lag.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  ca-ingestion (always-on, 60s poll loop)                                 │
+│  job-ingestor (always-on, 60s poll loop)                                 │
 │                                                                          │
 │  ┌────────────────┐   per subreddit (17 total, 3 tiers):                 │
 │  │  Arctic Shift  │   - tier1: investing, stocks, SecurityAnalysis,      │
@@ -619,7 +619,7 @@ Redis remains in the plan for Phase 7+ if query volume grows.
 │                                                                         │
 │  Container Apps Environment: cae-narrative-tinkerhub                   │
 │  ┌──────────────────┬────────────────────────────────────────────────┐  │
-│  │ Always-on Apps   │ ca-ingestion  (MinR=1, MaxR=2)                 │  │
+│  │ Always-on Apps   │ job-ingestor  (MinR=1, MaxR=2)                 │  │
 │  ├──────────────────┼────────────────────────────────────────────────┤  │
 │  │ Scheduled Jobs   │ job-extractor        5-min cron, timeout 300s  │  │
 │  │ (scale-to-zero)  │ job-aggregator       15-min cron               │  │
@@ -668,7 +668,7 @@ container it does not own.
 
 | Component | Reads from | Writes to | Key fields produced |
 |---|---|---|---|
-| `ca-ingestion` | Arctic Shift API | EH `reddit-raw-events`, Blob `reddit-raw/` | `post_id`, `body`, `authorHash`, `createdUtc`, `subreddit`, `flair` |
+| `job-ingestor` | Arctic Shift API | EH `reddit-raw-events`, Blob `reddit-raw/` | `post_id`, `body`, `authorHash`, `createdUtc`, `subreddit`, `flair` |
 | `job-extractor` | EH `reddit-raw-events`, `signals` (dedup check) | `signals` | `ticker`, `sentiment`, `confidence`, `rationale`, `postId`, `extractedAt` |
 | `job-aggregator` | `signals` | `ticker_timeline` | `dwd_14d`, `gini_14d`, `acceleration_7d`, `dd_post_ratio`, `financial_term_density`, `conviction_*_ratio`, `conviction_dd_norm`, `daily_buckets`, `attention_quality` |
 | `job-classifier` | `signals` (unclassified) | `signals` | `conviction_state`, `conviction_confidence`, `embedding`, `embedding_model` |
@@ -679,7 +679,7 @@ container it does not own.
 **Scheduling dependency** (not enforced by code — purely temporal):
 
 ```
-ca-ingestion (continuous)
+job-ingestor (continuous)
   → job-extractor (every 5 min)
     → job-aggregator (every 15 min)   ← reads signals written by extractor
     → job-classifier (every 30 min)   ← reads signals written by extractor
@@ -697,7 +697,7 @@ respectively. The scorer reads the combined output of all three.
 
 | Failure | Detection | Recovery |
 |---|---|---|
-| `ca-ingestion` crashes | Container Apps auto-restart (MinReplicas=1). App Insights alert on gap in EH publish rate. | Automatic. Blob is durable; if EH was missed, replay with `EXTRACTOR_REPLAY_FROM_START=true` on next extractor run. |
+| `job-ingestor` crashes | Container Apps auto-restart (MinReplicas=1). App Insights alert on gap in EH publish rate. | Automatic. Blob is durable; if EH was missed, replay with `EXTRACTOR_REPLAY_FROM_START=true` on next extractor run. |
 | `job-extractor` DeadlineExceeded | System log `DeadlineExceeded` event in Log Analytics. | Increase `replicaTimeout` or reduce `MAX_EVENTS_PER_RUN`. Current timeout is 300s at 40 events/run. |
 | OpenAI 429 rate limit | Extractor retries on `RateLimitError` with 15–60s backoff (3 attempts). | Reduce `MAX_EVENTS_PER_RUN` or increase throttle interval. |
 | EH consumer lag > 2000 | App Insights alert `event_hub_consumer_lag > 2000`. | Manual scale-up of extractor Job concurrency via Azure portal. |
