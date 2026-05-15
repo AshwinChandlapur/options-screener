@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.43.8.12551",
-      "templateHash": "6148497227086561994"
+      "templateHash": "542408607668923859"
     }
   },
   "parameters": {
@@ -50,6 +50,13 @@
       "defaultValue": [],
       "metadata": {
         "description": "Principal IDs granted Cosmos DB Built-in Data Contributor."
+      }
+    },
+    "cosmosDataReaderPrincipalIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Principal IDs granted Cosmos DB Built-in Data Reader. Used by the App Service backend (optionsapi) MI for read-only access to ticker_timeline."
       }
     },
     "ingestionImage": {
@@ -743,7 +750,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.43.8.12551",
-              "templateHash": "5268922967204466742"
+              "templateHash": "140278623388934755"
             }
           },
           "parameters": {
@@ -1204,7 +1211,7 @@
                   "triggerType": "Schedule",
                   "replicaTimeout": 840,
                   "scheduleTriggerConfig": {
-                    "cronExpression": "*/15 * * * *",
+                    "cronExpression": "*/20 * * * *",
                     "parallelism": 1,
                     "replicaCompletionCount": 1
                   },
@@ -1685,6 +1692,9 @@
               "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'containerapps'), '2025-04-01').outputs.detectorJobPrincipalId.value]",
               "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'containerapps'), '2025-04-01').outputs.scorerJobPrincipalId.value]"
             ]
+          },
+          "dataReaderPrincipalIds": {
+            "value": "[parameters('cosmosDataReaderPrincipalIds')]"
           }
         },
         "template": {
@@ -1694,7 +1704,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.43.8.12551",
-              "templateHash": "3648267273099319274"
+              "templateHash": "7639373461468978631"
             }
           },
           "parameters": {
@@ -1709,10 +1719,18 @@
               "metadata": {
                 "description": "Principal IDs (managed-identity object IDs) to grant Cosmos Data Contributor."
               }
+            },
+            "dataReaderPrincipalIds": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Principal IDs (managed-identity object IDs) to grant Cosmos Data Reader. Used by the read-only App Service backend (optionsapi) which only needs to query ticker_timeline."
+              }
             }
           },
           "variables": {
-            "dataContributorRoleId": "00000000-0000-0000-0000-000000000002"
+            "dataContributorRoleId": "00000000-0000-0000-0000-000000000002",
+            "dataReaderRoleId": "00000000-0000-0000-0000-000000000001"
           },
           "resources": [
             {
@@ -1727,6 +1745,21 @@
               "properties": {
                 "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/{1}', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName')), variables('dataContributorRoleId'))]",
                 "principalId": "[parameters('principalIds')[copyIndex()]]",
+                "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName'))]"
+              }
+            },
+            {
+              "copy": {
+                "name": "readerAssignments",
+                "count": "[length(parameters('dataReaderPrincipalIds'))]"
+              },
+              "condition": "[not(empty(parameters('dataReaderPrincipalIds')[copyIndex()]))]",
+              "type": "Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments",
+              "apiVersion": "2024-05-15",
+              "name": "[format('{0}/{1}', parameters('cosmosAccountName'), guid(resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName')), parameters('dataReaderPrincipalIds')[copyIndex()], variables('dataReaderRoleId')))]",
+              "properties": {
+                "roleDefinitionId": "[format('{0}/sqlRoleDefinitions/{1}', resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName')), variables('dataReaderRoleId'))]",
+                "principalId": "[parameters('dataReaderPrincipalIds')[copyIndex()]]",
                 "scope": "[resourceId('Microsoft.DocumentDB/databaseAccounts', parameters('cosmosAccountName'))]"
               }
             }

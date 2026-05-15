@@ -36,6 +36,9 @@ param cosmosLocation string = 'westus2'
 @description('Principal IDs granted Cosmos DB Built-in Data Contributor.')
 param cosmosDataContributorPrincipalIds array = []
 
+@description('Principal IDs granted Cosmos DB Built-in Data Reader. Used by the App Service backend (optionsapi) MI for read-only access to ticker_timeline.')
+param cosmosDataReaderPrincipalIds array = []
+
 @description('Container image for the ingestion worker. Infra deploy preserves the live image; only falls back to placeholder on first deploy.')
 param ingestionImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
@@ -176,6 +179,7 @@ module cosmosRoles 'modules/cosmos-roles.bicep' = {
       containerapps.outputs.detectorJobPrincipalId
       containerapps.outputs.scorerJobPrincipalId
     ]
+    dataReaderPrincipalIds: cosmosDataReaderPrincipalIds
   }
 }
 
