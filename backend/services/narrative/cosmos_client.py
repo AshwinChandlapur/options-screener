@@ -13,8 +13,15 @@ from azure.identity import DefaultAzureCredential
 
 logger = logging.getLogger(__name__)
 
-_COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT", "")
-_COSMOS_DB = os.getenv("COSMOS_DB", "narrative")
+# Accept either env-var name for the Cosmos endpoint:
+#   NARRATIVE_COSMOS_ENDPOINT — backend convention (set on the App Service,
+#     used by services/narrative_db.py for the conviction / signals path).
+#   COSMOS_ENDPOINT           — worker convention (set by Bicep on every
+#     Container Apps Job in infra/modules/containerapps.bicep).
+# Same for the database name. Whichever is set wins; NARRATIVE_* takes
+# precedence so a single-name override doesn't shadow the backend's default.
+_COSMOS_ENDPOINT = os.getenv("NARRATIVE_COSMOS_ENDPOINT") or os.getenv("COSMOS_ENDPOINT", "")
+_COSMOS_DB = os.getenv("NARRATIVE_COSMOS_DB") or os.getenv("COSMOS_DB", "narrative")
 
 # Module-level client — initialised lazily on first call, reused across requests.
 _client: CosmosClient | None = None
@@ -25,7 +32,11 @@ def _get_timeline():  # type: ignore[return]
     global _client, _timeline_container
     if _timeline_container is None:
         if not _COSMOS_ENDPOINT:
-            raise RuntimeError("COSMOS_ENDPOINT env var not set")
+            raise RuntimeError(
+                "Cosmos endpoint not set: configure NARRATIVE_COSMOS_ENDPOINT "
+                "(backend convention) or COSMOS_ENDPOINT (worker convention) "
+                "on this process."
+            )
         _client = CosmosClient(_COSMOS_ENDPOINT, credential=DefaultAzureCredential())
         _timeline_container = (
             _client.get_database_client(_COSMOS_DB)

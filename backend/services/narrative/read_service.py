@@ -5,7 +5,8 @@ Converts raw Cosmos documents into typed AcsScore domain objects.
 
 Raises:
     TickerNotTracked  — ticker has no document in ticker_timeline
-    NarrativeUnavailable — COSMOS_ENDPOINT not configured or Cosmos unreachable
+    NarrativeUnavailable — Cosmos endpoint not configured (NARRATIVE_COSMOS_ENDPOINT
+                           or COSMOS_ENDPOINT) or Cosmos unreachable
 """
 from __future__ import annotations
 
