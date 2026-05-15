@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { AcsScore, NarrativeAlert, NarrativeError } from '../types/narrative'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { AcsScore, NarrativeAlert, NarrativeError, TickerDetail } from '../types/narrative'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+const REFRESH_INTERVAL_MS = 5 * 60 * 1000  // 5 min
 
 interface UseNarrativeReturn {
   top: AcsScore[]
@@ -9,7 +10,9 @@ interface UseNarrativeReturn {
   alerts: NarrativeAlert[]
   loading: boolean
   error: NarrativeError | null
+  lastUpdatedAt: Date | null
   refresh: () => Promise<void>
+  fetchDetail: (ticker: string) => Promise<{ data: TickerDetail | null; error: NarrativeError | null }>
 }
 
 async function safeFetch<T>(url: string): Promise<{ data: T | null; error: NarrativeError | null }> {
@@ -40,6 +43,8 @@ export function useNarrative(): UseNarrativeReturn {
   const [alerts, setAlerts] = useState<NarrativeAlert[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<NarrativeError | null>(null)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
+  const intervalRef = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -55,12 +60,27 @@ export function useNarrative(): UseNarrativeReturn {
     setTop(topRes.data ?? [])
     setEmerging(emergingRes.data ?? [])
     setAlerts(alertsRes.data ?? [])
+    if (!firstError) setLastUpdatedAt(new Date())
     setLoading(false)
   }, [])
 
+  const fetchDetail = useCallback(
+    (ticker: string) =>
+      safeFetch<TickerDetail>(
+        `${API_BASE}/api/narrative/tickers/${encodeURIComponent(ticker.toUpperCase())}/detail`,
+      ),
+    [],
+  )
+
   useEffect(() => {
     void refresh()
+    intervalRef.current = window.setInterval(() => {
+      void refresh()
+    }, REFRESH_INTERVAL_MS)
+    return () => {
+      if (intervalRef.current != null) window.clearInterval(intervalRef.current)
+    }
   }, [refresh])
 
-  return { top, emerging, alerts, loading, error, refresh }
+  return { top, emerging, alerts, loading, error, lastUpdatedAt, refresh, fetchDetail }
 }

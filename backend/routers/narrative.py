@@ -37,6 +37,7 @@ from services.narrative.types import (
     AcsScore,
     NarrativeAlert,
     NarrativeCluster,
+    TickerDetail,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,33 @@ class AcsScoreOut(BaseModel):
     dominant_signal: str
     decay_acs: float
     flags: list[str]
+    lifecycle_stage: int = Field(..., ge=0, le=6)
+    stage_confidence: float = Field(..., ge=0, le=1)
+
+
+class DailyBucketOut(BaseModel):
+    day: str
+    count: int = Field(..., ge=0)
+    unique_authors: int = Field(..., ge=0)
+
+
+class TickerDetailOut(BaseModel):
+    ticker: str
+    bucket_date: str
+    score: AcsScoreOut
+    daily_buckets: list[DailyBucketOut]
+    tier1_pct: float = Field(..., ge=0, le=1)
+    tier2_pct: float = Field(..., ge=0, le=1)
+    tier3_pct: float = Field(..., ge=0, le=1)
+    mentions_14d: int = Field(..., ge=0)
+    unique_authors_14d: int = Field(..., ge=0)
+    gini_14d: float = Field(..., ge=0, le=1)
+    contributor_count_growth_7d: float
+    conviction_researched_bull_ratio: float | None = None
+    conviction_researched_bear_ratio: float | None = None
+    conviction_emotional_bull_ratio: float | None = None
+    conviction_dd_norm: float | None = None
+    conviction_classified_14d: int | None = None
 
 
 class NarrativeClusterOut(BaseModel):
@@ -107,6 +135,32 @@ def _acs_to_out(score: AcsScore) -> AcsScoreOut:
         dominant_signal=score.dominant_signal,
         decay_acs=score.decay_acs,
         flags=list(score.flags),
+        lifecycle_stage=score.lifecycle_stage,
+        stage_confidence=score.stage_confidence,
+    )
+
+
+def _detail_to_out(detail: TickerDetail) -> TickerDetailOut:
+    return TickerDetailOut(
+        ticker=detail.ticker,
+        bucket_date=detail.bucket_date,
+        score=_acs_to_out(detail.score),
+        daily_buckets=[
+            DailyBucketOut(day=b.day, count=b.count, unique_authors=b.unique_authors)
+            for b in detail.daily_buckets
+        ],
+        tier1_pct=detail.tier1_pct,
+        tier2_pct=detail.tier2_pct,
+        tier3_pct=detail.tier3_pct,
+        mentions_14d=detail.mentions_14d,
+        unique_authors_14d=detail.unique_authors_14d,
+        gini_14d=detail.gini_14d,
+        contributor_count_growth_7d=detail.contributor_count_growth_7d,
+        conviction_researched_bull_ratio=detail.conviction_researched_bull_ratio,
+        conviction_researched_bear_ratio=detail.conviction_researched_bear_ratio,
+        conviction_emotional_bull_ratio=detail.conviction_emotional_bull_ratio,
+        conviction_dd_norm=detail.conviction_dd_norm,
+        conviction_classified_14d=detail.conviction_classified_14d,
     )
 
 
@@ -160,6 +214,19 @@ async def get_acs(
     except Exception as exc:
         raise _map_service_error(exc) from exc
     return _acs_to_out(score)
+
+
+@router.get("/tickers/{ticker}/detail", response_model=TickerDetailOut)
+@limiter.limit("30/minute")
+async def get_ticker_detail(
+    request: Request,
+    ticker: Annotated[str, Path(min_length=1, max_length=10, pattern=r"^[A-Z][A-Z0-9.\-]{0,9}$")],
+) -> TickerDetailOut:
+    try:
+        detail = await read_service.get_ticker_detail(ticker.upper())
+    except Exception as exc:
+        raise _map_service_error(exc) from exc
+    return _detail_to_out(detail)
 
 
 @router.get("/tickers/top", response_model=list[AcsScoreOut])

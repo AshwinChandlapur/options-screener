@@ -16,7 +16,14 @@ from uuid import UUID
 
 from .cosmos_client import query_emerging, query_ticker, query_top_acs
 from .errors import NarrativeUnavailable, NarrativeNotFound, TickerNotTracked
-from .types import AcsComponents, AcsScore, NarrativeAlert, NarrativeCluster
+from .types import (
+    AcsComponents,
+    AcsScore,
+    DailyBucketOut,
+    NarrativeAlert,
+    NarrativeCluster,
+    TickerDetail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,8 @@ def _doc_to_acs(doc: dict) -> AcsScore:
         dominant_signal=doc.get("dominant_signal") or _dominant_from_doc(doc),
         decay_acs=float(doc.get("decay_acs", doc.get("acs", 0.0))),
         flags=list(doc.get("acs_flags") or []),
+        lifecycle_stage=int(doc.get("lifecycle_stage") or 0),
+        stage_confidence=float(doc.get("stage_confidence") or 0.0),
     )
 
 
@@ -74,6 +83,48 @@ async def get_acs_for_ticker(ticker: str) -> AcsScore:
     if doc is None:
         raise TickerNotTracked(f"{ticker} has no narrative history")
     return _doc_to_acs(doc)
+
+
+def _doc_to_detail(doc: dict) -> TickerDetail:
+    """Convert a ticker_timeline doc to a TickerDetail (score + timeline shape)."""
+    buckets_raw = doc.get("daily_buckets") or []
+    buckets = [
+        DailyBucketOut(
+            day=str(b.get("day", "")),
+            count=int(b.get("count", 0)),
+            unique_authors=int(b.get("unique_authors", 0)),
+        )
+        for b in buckets_raw
+    ]
+    return TickerDetail(
+        ticker=doc.get("ticker", ""),
+        bucket_date=str(doc.get("bucket_date", "")),
+        score=_doc_to_acs(doc),
+        daily_buckets=buckets,
+        tier1_pct=float(doc.get("tier1_pct") or 0.0),
+        tier2_pct=float(doc.get("tier2_pct") or 0.0),
+        tier3_pct=float(doc.get("tier3_pct") or 0.0),
+        mentions_14d=int(doc.get("mentions_14d") or 0),
+        unique_authors_14d=int(doc.get("unique_authors_14d") or 0),
+        gini_14d=float(doc.get("gini_14d") or 0.0),
+        contributor_count_growth_7d=float(doc.get("contributor_count_growth_7d") or 0.0),
+        conviction_researched_bull_ratio=doc.get("conviction_researched_bull_ratio"),
+        conviction_researched_bear_ratio=doc.get("conviction_researched_bear_ratio"),
+        conviction_emotional_bull_ratio=doc.get("conviction_emotional_bull_ratio"),
+        conviction_dd_norm=doc.get("conviction_dd_norm"),
+        conviction_classified_14d=doc.get("conviction_classified_14d"),
+    )
+
+
+async def get_ticker_detail(ticker: str) -> TickerDetail:
+    """Full ticker_timeline projection for the drilldown panel."""
+    try:
+        doc = query_ticker(ticker)
+    except Exception as exc:
+        raise NarrativeUnavailable(f"Cosmos unavailable: {exc}") from exc
+    if doc is None:
+        raise TickerNotTracked(f"{ticker} has no narrative history")
+    return _doc_to_detail(doc)
 
 
 async def get_top_tickers(limit: int = 100) -> list[AcsScore]:

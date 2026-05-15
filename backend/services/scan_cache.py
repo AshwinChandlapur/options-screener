@@ -49,3 +49,6 @@ class ScanCache:
 csp_scan_cache: ScanCache = ScanCache()
 cc_scan_cache: ScanCache = ScanCache()
 ditm_scan_cache: ScanCache = ScanCache()
+swing_scan_cache: ScanCache = ScanCache()
+# Shared regime cache for the swing screener (small TTL — regime moves slowly).
+regime_cache: ScanCache = ScanCache()

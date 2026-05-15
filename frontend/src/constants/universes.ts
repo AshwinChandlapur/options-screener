@@ -9,6 +9,7 @@ export type UniverseKey =
   | 'ai_models'
   | 'ai_applications'
   | 'stable_csp'
+  | 'swing_eligible'
 
 export interface UniverseOption {
   key: UniverseKey
@@ -27,6 +28,7 @@ export const UNIVERSE_OPTIONS: UniverseOption[] = [
   { key: 'ai_infrastructure',  label: '↳ Infrastructure (16)',        size: 16,  hint: 'Servers, networking, storage, DC REITs, GPU clouds' },
   { key: 'ai_models',          label: '↳ Models (8)',                 size: 8,   hint: 'Foundation-model exposure (US + China)' },
   { key: 'ai_applications',    label: '↳ Applications (28)',          size: 28,  hint: 'AI inside product (data, security, dev, vertical)' },
+  { key: 'swing_eligible',     label: 'Swing-eligible (~200)',        size: 199, hint: 'Pre-vetted ≥$500M mcap, ≥500K ADV — incl. high-beta movers (ASTS, RKLB, MU, IONQ, MSTR…)' },
 ]
 
 export const DEFAULT_UNIVERSE: UniverseKey = 'all'

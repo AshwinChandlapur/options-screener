@@ -82,8 +82,32 @@ def main() -> None:
             logger.exception("Failed to parse EH event")
 
     try:
-        # receive() blocks forever — run it in a daemon thread and close after
-        # the budget window so the job exits cleanly.
+        # EH receive() blocks indefinitely — run it in a daemon thread so we
+        # can enforce a fixed wall-clock budget and exit cleanly.
+        #
+        # starting_position:
+        #   "@latest"  (default) — only events that arrive *after* this job
+        #               connects. Correct for steady-state: the cron runs every
+        #               5 min; any backlog from before this run was already
+        #               consumed by the previous run (EH checkpoints the offset).
+        #               Prevents replaying the full 1-day Basic-SKU retention
+        #               window on every pod restart or redeploy.
+        #   "-1"       — earliest retained offset (full replay). Activated by
+        #               EXTRACTOR_REPLAY_FROM_START=true. Use once on initial
+        #               deploy to catch up, then revert.
+        #
+        # receive_window_seconds (default 25s):
+        #   Cold-start budget breakdown for a fresh Container Apps Job pod:
+        #     container start          ~3-5s
+        #     DefaultAzureCredential   ~2-4s   (managed identity token fetch)
+        #     Key Vault secret fetch   ~3-6s   (3 secrets, sequential)
+        #     AMQP handshake to EH     ~2-4s
+        #     ─────────────────────────────
+        #     total cold-start         ~10-19s
+        #   With a 25s window the effective receive time is ~6-15s on cold
+        #   starts and ~20s on warm restarts. The cron period is 5 min so
+        #   total job wall-clock is ~35s — well within the 5-min slot.
+        #   Override via RECEIVE_WINDOW_SECONDS env var. See ADR-0016.
         starting_position = "-1" if config.replay_from_start else "@latest"
         receive_thread = threading.Thread(
             target=eh_client.receive,

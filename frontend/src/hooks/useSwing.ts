@@ -1,0 +1,99 @@
+import { useEffect, useState } from 'react'
+import type { RegimeState, SwingResponse, SwingResult } from '../types/swing'
+import { loadResultCache, saveResultCache, clearResultCache } from '../utils/resultCache'
+
+const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+
+interface UseSwingReturn {
+  results: SwingResult[]
+  regime: RegimeState | null
+  loading: boolean
+  isScanMode: boolean
+  errorMessage: string | null
+  cachedAt: number | null
+  scoringVersion: string | null
+  scan: (topN?: number, universe?: string) => Promise<void>
+  run: (symbols: string[]) => Promise<void>
+}
+
+export function useSwing(): UseSwingReturn {
+  const [results, setResults] = useState<SwingResult[]>([])
+  const [regime, setRegime] = useState<RegimeState | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [isScanMode, setIsScanMode] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [cachedAt, setCachedAt] = useState<number | null>(null)
+  const [scoringVersion, setScoringVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    const entry = loadResultCache<{ results: SwingResult[]; scoringVersion: string | null; regime: RegimeState | null }>('swing')
+    if (entry) {
+      setResults(entry.data.results)
+      setScoringVersion(entry.data.scoringVersion)
+      setRegime(entry.data.regime ?? null)
+      setCachedAt(entry.savedAt)
+    }
+  }, [])
+
+  async function handleResponse(response: Response) {
+    if (!response.ok) {
+      let detail = `Server error ${response.status}`
+      try {
+        const body = await response.json()
+        if (body?.detail) {
+          detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+        }
+      } catch { /* ignore */ }
+      setErrorMessage(detail)
+      return
+    }
+    const data: SwingResponse = await response.json()
+    setResults(data.results)
+    setScoringVersion(data.scoring_version)
+    setRegime(data.regime ?? null)
+    saveResultCache('swing', { results: data.results, scoringVersion: data.scoring_version, regime: data.regime ?? null })
+    setCachedAt(Date.now())
+  }
+
+  async function scan(topN: number = 20, universe: string = 'swing_eligible') {
+    setLoading(true)
+    setIsScanMode(true)
+    setErrorMessage(null)
+    setCachedAt(null)
+    setResults([])
+    clearResultCache('swing')
+    try {
+      const url = `${API_BASE}/api/screener/swing/scan?top_n=${topN}&universe=${encodeURIComponent(universe)}`
+      await handleResponse(await fetch(url, { method: 'GET' }))
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error — is the backend running?'
+      setErrorMessage(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function run(symbols: string[]) {
+    setLoading(true)
+    setIsScanMode(false)
+    setErrorMessage(null)
+    setCachedAt(null)
+    setResults([])
+    clearResultCache('swing')
+    try {
+      const response = await fetch(`${API_BASE}/api/screener/swing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols }),
+      })
+      await handleResponse(response)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Network error — is the backend running?'
+      setErrorMessage(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return { results, regime, loading, isScanMode, errorMessage, cachedAt, scoringVersion, scan, run }
+}

@@ -1,9 +1,71 @@
+import { useCallback, useEffect, useState } from 'react'
 import { useNarrative } from '../hooks/useNarrative'
-import { NarrativeTickerTable } from './NarrativeTickerTable'
+import type { NarrativeError, TickerDetail } from '../types/narrative'
 import { NarrativeAlertList } from './NarrativeAlertList'
+import { NarrativeTickerTable } from './NarrativeTickerTable'
+import { ScoreLegend } from './ScoreLegend'
+import { TickerDetailPanel } from './TickerDetailPanel'
+import { TickerSearch } from './TickerSearch'
+
+function formatRelative(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000)
+  if (seconds < 30) return 'just now'
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
+const STALE_THRESHOLD_MS = 10 * 60 * 1000  // 10 min
 
 export function NarrativeView() {
-  const { top, emerging, alerts, loading, error, refresh } = useNarrative()
+  const {
+    top,
+    emerging,
+    alerts,
+    loading,
+    error,
+    lastUpdatedAt,
+    refresh,
+    fetchDetail,
+  } = useNarrative()
+
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
+  const [detail, setDetail] = useState<TickerDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const [, setTick] = useState(0)  // re-render so "X min ago" updates
+
+  // Re-render every 30s so the "updated X min ago" text stays fresh.
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((n) => n + 1), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const loadDetail = useCallback(
+    async (ticker: string) => {
+      setSelectedTicker(ticker)
+      setDetail(null)
+      setDetailError(null)
+      setDetailLoading(true)
+      const { data, error: err } = await fetchDetail(ticker)
+      if (err) setDetailError(formatDetailError(err, ticker))
+      else setDetail(data)
+      setDetailLoading(false)
+    },
+    [fetchDetail],
+  )
+
+  const closeDetail = () => {
+    setSelectedTicker(null)
+    setDetail(null)
+    setDetailError(null)
+  }
+
+  const isStale =
+    lastUpdatedAt != null && Date.now() - lastUpdatedAt.getTime() > STALE_THRESHOLD_MS
 
   return (
     <section className="narrative-view">
@@ -15,18 +77,32 @@ export function NarrativeView() {
             of the narrative lifecycle, before institutional consensus.
           </p>
         </div>
-        <button className="btn-secondary" onClick={() => void refresh()} disabled={loading}>
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <div className="narrative-header-controls">
+          <TickerSearch onSearch={(t) => void loadDetail(t)} disabled={loading} />
+          <div className="narrative-refresh-block">
+            {lastUpdatedAt && (
+              <span
+                className={isStale ? 'muted stale' : 'muted'}
+                title={lastUpdatedAt.toISOString()}
+              >
+                Updated {formatRelative(lastUpdatedAt)}
+                {isStale ? ' · stale' : ''}
+              </span>
+            )}
+            <button className="btn-secondary" onClick={() => void refresh()} disabled={loading}>
+              {loading ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+        </div>
       </header>
 
       {error?.unavailable && (
         <div className="info-banner">
-          <strong>Platform not yet provisioned.</strong> {error.detail}
+          <strong>Narrative data unavailable.</strong> {error.detail}
           <br />
           <small>
-            See <code>docs/NARRATIVE_METHODOLOGY.md §8</code> for the phased rollout.
-            UI integrates against Phase 0 stubs; data appears once Phase 6 ships.
+            Phase 6 scorer is live; if you see this banner the API can't reach Cosmos.
+            See <code>docs/NARRATIVE_METHODOLOGY.md §8</code> for operational rollout.
           </small>
         </div>
       )}
@@ -35,20 +111,45 @@ export function NarrativeView() {
         <div className="error-banner">{error.detail}</div>
       )}
 
+      <ScoreLegend />
+
       <div className="narrative-grid">
         <section>
           <h3>Top by ACS</h3>
-          <NarrativeTickerTable rows={top} emptyMessage="No ACS scores yet." />
+          <NarrativeTickerTable
+            rows={top}
+            emptyMessage="No ACS scores yet."
+            onSelect={(t) => void loadDetail(t)}
+          />
         </section>
         <section>
           <h3>Emerging (stages 1–3)</h3>
-          <NarrativeTickerTable rows={emerging} emptyMessage="No emerging tickers yet." />
+          <NarrativeTickerTable
+            rows={emerging}
+            emptyMessage="No emerging tickers yet."
+            onSelect={(t) => void loadDetail(t)}
+          />
         </section>
         <section>
           <h3>Alerts</h3>
           <NarrativeAlertList alerts={alerts} />
         </section>
       </div>
+
+      {selectedTicker && (
+        <TickerDetailPanel
+          detail={detail}
+          loading={detailLoading}
+          error={detailError}
+          onClose={closeDetail}
+        />
+      )}
     </section>
   )
+}
+
+function formatDetailError(err: NarrativeError, ticker: string): string {
+  if (err.unavailable) return `Narrative platform unavailable: ${err.detail}`
+  if (/404/.test(err.detail)) return `${ticker} is not currently tracked.`
+  return err.detail
 }

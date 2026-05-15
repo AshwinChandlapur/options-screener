@@ -23,6 +23,34 @@ export interface AcsScore {
   dominant_signal: string
   decay_acs: number
   flags: string[]
+  /** 0 = unknown (detector hasn't run), 1..6 per methodology §4. */
+  lifecycle_stage: number
+  stage_confidence: number  // 0..1
+}
+
+export interface DailyBucket {
+  day: string  // ISO date
+  count: number
+  unique_authors: number
+}
+
+export interface TickerDetail {
+  ticker: string
+  bucket_date: string
+  score: AcsScore
+  daily_buckets: DailyBucket[]
+  tier1_pct: number  // 0..1
+  tier2_pct: number
+  tier3_pct: number
+  mentions_14d: number
+  unique_authors_14d: number
+  gini_14d: number
+  contributor_count_growth_7d: number
+  conviction_researched_bull_ratio: number | null
+  conviction_researched_bear_ratio: number | null
+  conviction_emotional_bull_ratio: number | null
+  conviction_dd_norm: number | null
+  conviction_classified_14d: number | null
 }
 
 export type LifecycleStage = 1 | 2 | 3 | 4 | 5 | 6

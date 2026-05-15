@@ -111,6 +111,55 @@ def _ai_full() -> list[str]:
     return out
 
 
+# Swing screener universe — pre-vetted liquid mid/large caps suitable for
+# directional 3–21 day equity setups. All names: ≥ $500M market cap, ≥ 500K ADV.
+# Statically curated; no algorithmic filtering. See ADR-0009.
+_SWING_ELIGIBLE: list[str] = [
+    # Mega-cap tech (always liquid, deep options chains for sentiment)
+    "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "TSLA", "NVDA", "AVGO",
+    # Semis
+    "AMD", "QCOM", "MRVL", "ARM", "MU", "INTC", "TSM", "ASML", "AMAT", "LRCX",
+    "KLAC", "TXN", "ON", "MPWR", "NXPI", "ADI", "MCHP", "ALAB", "CRDO",
+    # Cloud / SaaS / AI apps
+    "ORCL", "CRM", "NOW", "WDAY", "ADBE", "INTU", "PANW", "CRWD", "NET", "DDOG",
+    "SNOW", "ZS", "MDB", "TEAM", "HUBS", "APP", "PLTR", "GTLB", "CFLT", "S",
+    "BILL", "DUOL", "AI",
+    # Hardware / infra
+    "SMCI", "DELL", "HPE", "IBM", "CSCO", "ANET", "JNPR", "CIEN", "NTAP", "PSTG",
+    "VRT", "ETN", "GEV",
+    # Financials (Large + reasonable beta for swings)
+    "JPM", "BAC", "GS", "MS", "WFC", "C", "SCHW", "BLK", "AXP", "V", "MA",
+    "PYPL", "COIN", "HOOD", "SQ", "AFRM", "SOFI", "MSTR",
+    # Industrials
+    "CAT", "DE", "GE", "HON", "RTX", "LMT", "NOC", "BA", "PWR", "URI",
+    # Energy / AI buildout power
+    "VST", "CEG", "NRG", "TLN", "NEE", "ETR", "DUK", "SO", "EXC", "OKLO",
+    "SMR", "BWXT", "CCJ", "XOM", "CVX", "OXY", "EOG", "MPC", "SLB", "FSLR",
+    # Consumer / retail
+    "WMT", "COST", "TGT", "HD", "LOW", "NKE", "LULU", "MCD", "SBUX", "CMG",
+    "DIS", "NFLX", "ROKU", "SPOT",
+    # Travel / mobility
+    "UBER", "ABNB", "DASH", "BKNG", "DAL", "UAL", "LUV", "CCL", "RCL",
+    # Healthcare / biotech (liquid only)
+    "JNJ", "UNH", "ABT", "LLY", "MRK", "PFE", "BMY", "TMO", "ISRG", "MRNA",
+    "HIMS", "DXCM", "VRTX", "REGN",
+    # Materials / mining
+    "FCX", "NEM", "AA", "X", "CLF",
+    # China ADRs
+    "BABA", "BIDU", "PDD", "JD", "NIO", "LI", "XPEV",
+    # Speculative momentum
+    "RBLX", "RDDT", "SHOP", "BROS", "CRWV", "NBIS", "IREN", "RIOT", "MARA",
+    "IONQ", "RGTI", "ACHR", "RKLB", "JOBY", "LCID", "RIVN",
+    # High-beta / high-alpha movers (liquid options, strong swing range)
+    "ASTS", "QBTS", "BBAI", "TEM", "SERV", "PATH", "AUR", "HIVE",
+    "WULF", "CLSK", "BTDR", "APLD", "GLXY",
+    # ETFs for sector pair-trade context
+    "QQQ", "SPY", "IWM", "SOXX", "SMH", "XLE", "XLF", "XLK", "XLV",
+]
+# Dedup, order-preserving.
+SWING_UNIVERSE: list[str] = list(dict.fromkeys(_SWING_ELIGIBLE))
+
+
 # Selectable scan universes exposed via the API. Keys are stable identifiers
 # the frontend sends as ?universe=...; values are the resolved ticker lists.
 UNIVERSES: dict[str, list[str]] = {
@@ -122,6 +171,7 @@ UNIVERSES: dict[str, list[str]] = {
     "ai_models": list(AI_BUILDOUT["models"]),
     "ai_applications": list(AI_BUILDOUT["applications"]),
     "stable_csp": _STABLE_CSP,
+    "swing_eligible": SWING_UNIVERSE,
 }
 
 

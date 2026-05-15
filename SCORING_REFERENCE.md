@@ -768,3 +768,150 @@ ADR-0007 captures the full rationale; this is the changelog summary.
   EM + %OTM all measured the same delta-position signal at the configured ideal_delta.
 
 **Weight integrity:** ENV totals 100 (35+25+20+20). Strike totals 100 (20+30+15+35).
+
+---
+
+## Swing Trading Screener (SWING) — v2.0.0
+
+See [ADR-0009](docs/adr/0009-swing-screener.md) for the original v1 design and
+[ADR-0010](docs/adr/0010-swing-regime-engine.md) /
+[ADR-0011](docs/adr/0011-swing-event-risk-scoring.md) /
+[ADR-0012](docs/adr/0012-swing-hybrid-scoring.md) for the v2 hardening (regime engine,
+event-risk scoring, hybrid additive + multiplicative composite).
+
+### Composite score (max 100) — hybrid
+
+```
+raw   = R:R(40) + setup(30) + context(20) + institutional(10)
+final = raw × regime_factor × earnings_factor × extended_factor
+final = clamp(final, 0, 100)
+```
+
+- **Within a bucket**: addition (existing v1 maps, unchanged).
+- **Across buckets**: multiplication (new in v2). Each multiplier floors strictly
+  above zero so a punished score is still debuggable.
+
+### Hard gates (applied BEFORE scoring)
+
+| Gate | Threshold |
+|------|----------:|
+| Min price | $5.00 |
+| Min average daily dollar volume | $20,000,000 |
+| Min OHLC history | 60 bars |
+| Min setup_score | 40 / 100 |
+| Min R:R | **dynamic per regime** — see Regime Engine below |
+| Stop distance | ≤ 50% of entry |
+| Setup ∈ regime.disable_setups | excluded (e.g. reversion in `risk_off`) |
+| Days-to-earnings ≤ 1 (any setup) | excluded |
+| Days-to-earnings ≤ 7 AND setup = reversion | excluded |
+
+### Regime engine (computed once per scan)
+
+`backend/services/swing/regime.py`. See [ADR-0010](docs/adr/0010-swing-regime-engine.md).
+
+`risk_on_score` (0–100) is a weighted composite of:
+
+| Input | Weight | Source |
+|-------|------:|--------|
+| SPY trend (close vs EMA21 vs EMA50) | 35 | bull/neutral/bear → 100/65 or 35/0 |
+| VIX 1y rolling percentile | 25 | <25p calm 100; <60p normal 70; <85p elevated 30; ≥85p shock 0 |
+| Universe breadth (% > EMA50) | 25 | linear 0–100 |
+| IWM/SPY 20d RS | 15 | ≤0.95 → 0; ≥1.05 → 100; linear |
+
+Label and downstream effects:
+
+| risk_on_score | regime_label | rr_gate | multiplier band | disable_setups |
+|--------------:|--------------|--------:|----------------:|----------------|
+| ≥ 65 | `risk_on` | 2.5 | linear → ~1.0 | (none) |
+| 40 – 64.99 | `neutral` | 2.75 | ~0.76 – ~0.86 | (none) |
+| < 40 | `risk_off` | 3.0 | 0.6 – 0.76 | `["reversion"]` |
+
+`multiplier = 0.6 + 0.4 × risk_on_score / 100`, clamped to `[0.6, 1.0]`.
+
+If any input fetch fails, the missing input falls back to neutral (50) and the
+regime is returned with `degraded=True` instead of raising.
+
+### Earnings multiplier (graduated)
+
+`services.scoring.swing.earnings_factor(days_to_earnings)`. See [ADR-0011](docs/adr/0011-swing-event-risk-scoring.md).
+
+| Days to earnings | Multiplier |
+|------------------|-----------:|
+| ≤ 3 | 0.50 |
+| 4 – 7 | 0.75 |
+| 8 – 14 | 0.90 |
+| > 14, unknown, past | 1.00 |
+
+If `days_to_earnings < hold_max_days`, the hold window is trimmed to `dte − 1` and
+the result tags `forced_short_hold=True` (advisory; not an exclusion).
+
+### Extended (chasing) multiplier
+
+`extended_factor = 0.7` if current price is > 3% past the structural trigger
+(`risk.SetupTrigger.extended`), else `1.0`. Per-setup triggers:
+
+| Setup | Trigger |
+|-------|---------|
+| Breakout | base_high (consolidation top) |
+| Momentum | EMA8 |
+| Retest | reclaim_level |
+| Reversion | current price (not chase-able by definition) |
+
+### Setup detection (4 setups, 0–100 each, with within-setup multipliers)
+
+The winning setup (highest score) becomes `setup_type`. Within-bucket multipliers
+applied at the end of each detector:
+
+| Setup | Hold | Strongest signals | Within-setup multiplier |
+|-------|------|-------------------|-------------------------|
+| Breakout | 5–10d | tight base (≥7d, range ≤8%), 1.5× volume surge, structure-high reclaim, BB squeeze <25p | `vol_factor = max(0.5, min(1.0, surge_ratio/1.5))` (no volume → 0.5×) |
+| Momentum | 7–14d | EMA stack ≥7/9, ADX ≥22 with +DI dominant, RS vs SPY >1.1, MACD histogram zero-cross | `align_factor = max(0.6, min(1.0, ema_score/7))` (broken stack → 0.6×) |
+| Reversion | 3–7d | RSI <30, Stochastic %K <20, bullish RSI divergence, Fib 0.618 hold | **hard floor**: `if price < EMA200 → score = 0` |
+| Retest | 10–21d | structure_reclaim 5–20d ago, new consolidation base, RS holding ≥1.0 | `× 0.5` outside [5, 20] bars-since-reclaim window |
+
+### R:R points (max 40, piecewise-linear)
+
+| R:R | Points |
+|----:|-------:|
+| ≤ 2.5 | 0 |
+| 3.0 | 25 |
+| 4.0 | 35 |
+| ≥ 5.0 | 40 |
+
+### Setup points (max 30)
+
+`setup_score × 0.30` (after within-setup multipliers above).
+
+### Context points (max 20)
+
+- **RS vs SPY (10)**: ≥1.2 → 10; 1.0–1.2 linear 5→10; 0.9–1.0 linear 0→5; <0.9 → 0.
+- **EMA alignment (10)**: `ema_alignment.score / 9 × 10` (count of EMAs 8/21/50/200 below price + bonus when all four).
+
+### Institutional points (max 10)
+
+- **A/D line slope (5)**: ≥5% → 5; 0–5% linear; <0 → 0.
+- **Held % institutions (5)**: ≥70% → 5; 40–70% linear; <40% → 0.
+
+### Risk plan
+
+- **entry** = per-setup structural trigger (see Extended multiplier table above).
+- **stop** = `max(entry − 1.5 × ATR14, recent_10d_swing_low)` (tighter of the two wins;
+  rejected if stop ≥ entry or risk > 50% of entry).
+- **target** = `entry + R_mult[setup] × (entry − stop)` where `R_mult`: breakout 3.0,
+  momentum 2.75, reversion 2.5, retest 3.25.
+- **R:R** = `(target − entry) / (entry − stop)`; must be ≥ `regime.rr_gate`.
+
+### Confidence tiers (post-multiplier)
+
+| Tier | Conditions |
+|------|------------|
+| High | final ≥ 75 AND R:R ≥ 3.5 AND setup_score ≥ 70 |
+| Medium | final ≥ 55 |
+| Speculative | otherwise |
+
+A regime/earnings haircut can demote a setup from `high` → `medium` → `speculative`.
+
+### Universe
+
+`swing_eligible` (~160 names) — statically curated for ≥$500M market cap and ≥500K
+average daily share volume. Default universe for the Swing tab.

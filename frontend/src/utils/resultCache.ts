@@ -12,7 +12,7 @@ interface CacheEntry<T> {
   savedAt: number
 }
 
-export type CacheKey = 'csp' | 'cc' | 'ditm' | 'em-rank'
+export type CacheKey = 'csp' | 'cc' | 'ditm' | 'em-rank' | 'swing'
 
 export function saveResultCache<T>(key: CacheKey, data: T): void {
   try {

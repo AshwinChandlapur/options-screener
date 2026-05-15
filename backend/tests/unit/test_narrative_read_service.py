@@ -39,6 +39,8 @@ def _doc(**overrides: object) -> dict:
         "acs_flags": ["gini_high"],
         "acs_scored_at": "2026-05-14T12:00:00+00:00",
         "dominant_signal": "researched_bull",
+        "lifecycle_stage": 3,
+        "stage_confidence": 0.82,
     }
     base.update(overrides)
     return base
@@ -60,6 +62,16 @@ class TestDocToAcs:
         assert score.components.a_attention_persistence == 20.0
         assert score.components.e_market_confirmation == 0.0
         assert score.scored_at == datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
+        assert score.lifecycle_stage == 3
+        assert score.stage_confidence == 0.82
+
+    def test_lifecycle_fields_default_to_zero_when_missing(self) -> None:
+        doc = _doc()
+        del doc["lifecycle_stage"]
+        del doc["stage_confidence"]
+        score = read_service._doc_to_acs(doc)
+        assert score.lifecycle_stage == 0
+        assert score.stage_confidence == 0.0
 
     def test_missing_components_default_to_zero(self) -> None:
         score = read_service._doc_to_acs(_doc(acs_components={}))
@@ -169,6 +181,60 @@ class TestGetEmergingTickers:
         with patch.object(read_service, "query_emerging", side_effect=RuntimeError("boom")):
             with pytest.raises(NarrativeUnavailable):
                 _run(read_service.get_emerging_tickers())
+
+
+# ---------- get_ticker_detail ----------
+
+
+class TestGetTickerDetail:
+    def _detail_doc(self) -> dict:
+        return _doc(
+            bucket_date="2026-05-14",
+            daily_buckets=[
+                {"day": "2026-05-13", "count": 4, "unique_authors": 3},
+                {"day": "2026-05-14", "count": 7, "unique_authors": 5},
+            ],
+            tier1_pct=0.3,
+            tier2_pct=0.5,
+            tier3_pct=0.2,
+            mentions_14d=42,
+            unique_authors_14d=18,
+            gini_14d=0.41,
+            contributor_count_growth_7d=0.35,
+            conviction_researched_bull_ratio=0.6,
+            conviction_classified_14d=12,
+        )
+
+    def test_returns_full_detail(self) -> None:
+        with patch.object(read_service, "query_ticker", return_value=self._detail_doc()):
+            detail = _run(read_service.get_ticker_detail("NVDA"))
+        assert detail.ticker == "NVDA"
+        assert detail.bucket_date == "2026-05-14"
+        assert detail.score.acs == 62.5
+        assert detail.score.lifecycle_stage == 3
+        assert len(detail.daily_buckets) == 2
+        assert detail.daily_buckets[0].count == 4
+        assert detail.tier2_pct == 0.5
+        assert detail.mentions_14d == 42
+        assert detail.conviction_researched_bull_ratio == 0.6
+
+    def test_ticker_not_tracked(self) -> None:
+        with patch.object(read_service, "query_ticker", return_value=None):
+            with pytest.raises(TickerNotTracked):
+                _run(read_service.get_ticker_detail("ZZZ"))
+
+    def test_wraps_errors(self) -> None:
+        with patch.object(read_service, "query_ticker", side_effect=RuntimeError("boom")):
+            with pytest.raises(NarrativeUnavailable):
+                _run(read_service.get_ticker_detail("NVDA"))
+
+    def test_missing_optional_fields_default(self) -> None:
+        with patch.object(read_service, "query_ticker", return_value=_doc()):
+            detail = _run(read_service.get_ticker_detail("NVDA"))
+        assert detail.daily_buckets == []
+        assert detail.tier1_pct == 0.0
+        assert detail.mentions_14d == 0
+        assert detail.conviction_dd_norm is None
 
 
 # ---------- get_narrative / get_alerts (still 503 in Phase 6) ----------

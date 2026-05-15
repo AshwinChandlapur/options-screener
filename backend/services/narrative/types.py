@@ -134,6 +134,44 @@ class AcsScore:
     dominant_signal: str
     decay_acs: float
     flags: list[str] = field(default_factory=list)
+    # Phase 5 lifecycle fields surfaced for the frontend stage badge.
+    # Default to 0 / 0.0 when the detector hasn't run yet for this ticker.
+    lifecycle_stage: int = 0           # 0 = unknown, 1..6 = methodology §4
+    stage_confidence: float = 0.0
+
+
+@dataclass(frozen=True)
+class DailyBucketOut:
+    """Single (day, mention_count, unique_authors) tuple for sparkline."""
+    day: str           # ISO date
+    count: int
+    unique_authors: int
+
+
+@dataclass(frozen=True)
+class TickerDetail:
+    """Full ticker_timeline projection for the drilldown panel.
+
+    Built from the same Cosmos doc as AcsScore but carries the timeline-shaped
+    fields (daily_buckets, tier pcts, conviction ratios) the score itself
+    doesn't include.
+    """
+    ticker: str
+    bucket_date: str
+    score: AcsScore
+    daily_buckets: list[DailyBucketOut] = field(default_factory=list)
+    tier1_pct: float = 0.0
+    tier2_pct: float = 0.0
+    tier3_pct: float = 0.0
+    mentions_14d: int = 0
+    unique_authors_14d: int = 0
+    gini_14d: float = 0.0
+    contributor_count_growth_7d: float = 0.0
+    conviction_researched_bull_ratio: float | None = None
+    conviction_researched_bear_ratio: float | None = None
+    conviction_emotional_bull_ratio: float | None = None
+    conviction_dd_norm: float | None = None
+    conviction_classified_14d: int | None = None
 
 
 @dataclass(frozen=True)
