@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 
+import openai
 from openai import AzureOpenAI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -59,6 +61,12 @@ class ExtractedSignal:
     flair: str | None = None
 
 
+# Minimum seconds between OpenAI calls. 1.25s ≈ 48 RPM, safely under the
+# 50 RPM Azure OpenAI quota for gpt-4o-mini. Configurable via constructor
+# so tests can pass 0 to disable throttling.
+_DEFAULT_MIN_CALL_INTERVAL: float = 1.25
+
+
 class Extractor:
     def __init__(
         self,
@@ -66,6 +74,7 @@ class Extractor:
         endpoint: str,
         deployment: str,
         max_tokens: int = 512,
+        min_call_interval: float = _DEFAULT_MIN_CALL_INTERVAL,
     ) -> None:
         self._client = AzureOpenAI(
             api_key=api_key,
@@ -74,6 +83,10 @@ class Extractor:
         )
         self._deployment = deployment
         self._max_tokens = max_tokens
+        self._min_call_interval = min_call_interval
+        # Monotonic timestamp of the last completed OpenAI call. Initialized
+        # to -inf so the first call is never throttled.
+        self._last_call_at: float = -1e9
 
     def extract(self, event: dict) -> list[ExtractedSignal]:
         """Run Layer 1 gate then call OpenAI. Returns [] if gated or no signals."""
@@ -105,12 +118,29 @@ class Extractor:
         return signals
 
     @retry(
-        retry=retry_if_exception_type(Exception),
-        wait=wait_exponential(multiplier=1, min=2, max=30),
+        # Only retry transient OpenAI errors. Catching bare Exception here
+        # would mask programming bugs and make the job appear to succeed when
+        # it silently swallowed a TypeError or KeyError.
+        retry=retry_if_exception_type((
+            openai.RateLimitError,
+            openai.APIConnectionError,
+            openai.APITimeoutError,
+        )),
+        # 429 Retry-After is typically 30-60s on Azure OpenAI; start at 15s.
+        wait=wait_exponential(multiplier=2, min=15, max=60),
         stop=stop_after_attempt(3),
         reraise=True,
     )
     def _call_openai(self, body: str) -> list[dict]:
+        # Throttle: enforce minimum interval between successive API calls to
+        # stay under the 50 RPM Azure OpenAI quota. Applied before every
+        # attempt (including retries) so backpressure accumulates correctly.
+        now = time.monotonic()
+        wait = self._min_call_interval - (now - self._last_call_at)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call_at = time.monotonic()
+
         response = self._client.chat.completions.create(
             model=self._deployment,
             messages=[

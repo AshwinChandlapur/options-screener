@@ -5,6 +5,7 @@ Env contract (set by Container Apps Job):
 - EVENT_HUB_NAMESPACE             e.g. evhns-narrative-tinkerhub.servicebus.windows.net
 - COSMOS_ENDPOINT                 e.g. https://cosmos-nr-tinkerhub.documents.azure.com:443/
 - LOG_LEVEL                       INFO / DEBUG (default INFO)
+- MAX_EVENTS_PER_RUN              max EH events per job run (default 40)
 - RECEIVE_WINDOW_SECONDS          seconds to hold the EH connection open (default 25)
 - EXTRACTOR_REPLAY_FROM_START     if "true", replay from earliest EH offset; default false
 
@@ -45,6 +46,7 @@ def load_from_env() -> ExtractorConfig:
         event_hub_namespace=_required("EVENT_HUB_NAMESPACE"),
         cosmos_endpoint=_required("COSMOS_ENDPOINT"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
+        max_events_per_run=int(os.getenv("MAX_EVENTS_PER_RUN", "40")),
         receive_window_seconds=int(os.getenv("RECEIVE_WINDOW_SECONDS", "25")),
         replay_from_start=os.getenv("EXTRACTOR_REPLAY_FROM_START", "false").lower() == "true",
     )
