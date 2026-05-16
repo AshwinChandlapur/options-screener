@@ -22,6 +22,21 @@ class CosmosTimelineWriter:
             .get_container_client("ticker_timeline")
         )
 
+    # Fields written by downstream workers (scorer, detector) that must be
+    # preserved when the aggregator re-upserts a doc it already created.
+    # If the aggregator blindly replaces the document, these fields are lost
+    # and Component C stays 0 until the scorer/detector re-run.
+    _PRESERVE_FIELDS: frozenset[str] = frozenset({
+        "acs", "acs_ci_lower", "acs_ci_upper", "decay_acs",
+        "acs_components", "acs_flags", "acs_scored_at",
+        "lifecycle_stage", "stage_confidence",
+        "dominant_signal",
+        "tier1_pct", "tier2_pct", "tier3_pct",
+        "conviction_researched_bull_ratio", "conviction_researched_bear_ratio",
+        "conviction_emotional_bull_ratio", "conviction_dd_norm",
+        "conviction_classified_14d",
+    })
+
     @retry(
         retry=retry_if_exception_type(Exception),
         wait=wait_exponential(multiplier=1, min=1, max=15),
@@ -29,8 +44,27 @@ class CosmosTimelineWriter:
         reraise=True,
     )
     def upsert(self, snapshot: TickerTimelineSnapshot) -> None:
-        """Upsert a snapshot document. Idempotent: same id overwrites previous run."""
-        doc = dataclasses.asdict(snapshot)
-        # Cosmos partition key is `ticker`; id is f"{ticker}_{bucket_date}".
-        self._container.upsert_item(doc)
-        logger.debug("Upserted ticker_timeline/%s", snapshot.id)
+        """Upsert a snapshot document, preserving fields written by downstream workers.
+
+        The aggregator owns the attention/diversity metrics but must not
+        overwrite ACS scores, lifecycle stage, or conviction fields written
+        by job-acs-scorer, job-narrative-detector, and job-classifier.
+        Strategy: read the existing doc first; merge aggregator fields on top
+        while keeping any preserved fields intact.
+        """
+        new_doc = dataclasses.asdict(snapshot)
+        doc_id = new_doc["id"]
+        partition_key = new_doc["ticker"]
+
+        # Try to load the existing doc so we can preserve scorer/detector fields.
+        try:
+            existing = self._container.read_item(item=doc_id, partition_key=partition_key)
+            for field in self._PRESERVE_FIELDS:
+                if field in existing and existing[field] is not None:
+                    new_doc[field] = existing[field]
+        except Exception:
+            # Doc doesn't exist yet, or read failed — proceed with fresh upsert.
+            pass
+
+        self._container.upsert_item(new_doc)
+        logger.debug("Upserted ticker_timeline/%s", doc_id)
