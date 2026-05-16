@@ -14,13 +14,7 @@ interface TierMixBarProps {
 export function TierMixBar({ tier1, tier2, tier3, width = 160, height = 10 }: TierMixBarProps) {
   const total = tier1 + tier2 + tier3
   if (total <= 0) {
-    return (
-      <div
-        className="tier-mix-bar empty"
-        style={{ width, height, background: '#222', borderRadius: 2 }}
-        title="No tier data"
-      />
-    )
+    return <span style={{ opacity: 0.4, fontSize: '0.9em' }} title="Tier data not yet available">—</span>
   }
   const w1 = (tier1 / total) * width
   const w2 = (tier2 / total) * width

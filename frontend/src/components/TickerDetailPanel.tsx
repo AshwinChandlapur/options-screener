@@ -69,7 +69,7 @@ export function TickerDetailPanel({ detail, loading, error, onClose }: TickerDet
         <span className="value">
           {s.acs.toFixed(1)}{' '}
           <span style={{ opacity: 0.7, fontSize: '0.85em' }}>
-            (range {s.acs_ci_lower.toFixed(0)}\u2013{s.acs_ci_upper.toFixed(0)})
+            (range {s.acs_ci_lower.toFixed(0)}–{s.acs_ci_upper.toFixed(0)})
           </span>
         </span>
       </div>
