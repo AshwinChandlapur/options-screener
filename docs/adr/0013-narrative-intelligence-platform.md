@@ -63,7 +63,7 @@ backend and Static Web Apps frontend.
 
 ```
 Reddit (PRAW)
-  → ca-ingestion       (always-on Container App, MinReplicas=1)
+  → job-ingestor       (always-on Container App, MinReplicas=1)
   → Blob (durability)
   → Event Hubs Basic (reddit-raw-events)
   → job-extractor      (Container Apps Job, cron)
@@ -132,7 +132,7 @@ until Phase 1 lands the Bicep stack and CI/CD.
 
 - [ ] Phase 1: provision Bicep stack (Event Hubs Basic, Blob, Key Vault, Container
       Apps env, Postgres B1ms, App Insights).
-- [ ] Phase 1: ship `ca-ingestion` worker with PRAW + Blob-first + Event Hubs
+- [ ] Phase 1: ship `job-ingestor` worker with PRAW + Blob-first + Event Hubs
       publish.
 - [ ] Phase 2: ship `job-extractor` with Layer 1–5 extraction.
 - [ ] Phase 2: hand-label 500 mentions for precision evaluation.

@@ -15,7 +15,7 @@ infra/
     storage.bicep         # Standard_LRS, lifecycle Hot→Cool@30d→Delete@365d
     eventhubs.bicep       # Basic, 1 TU, two topics, 1d retention
     keyvault.bicep        # Standard, RBAC, soft-delete + purge protection
-    containerapps.bicep   # Consumption env + ca-ingestion always-on app
+    containerapps.bicep   # Consumption env + job-ingestor always-on app
     monitoring.bicep      # Log Analytics 5GB cap + workspace-based App Insights
     # Phase 2: postgres.bicep (B1ms with pgvector + timescaledb + pg_cron)
 ```
