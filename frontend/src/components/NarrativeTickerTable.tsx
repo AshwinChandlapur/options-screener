@@ -3,6 +3,14 @@ import type { AcsScore } from '../types/narrative'
 import { labelSignal } from '../constants/narrative'
 import { StageBadge } from './StageBadge'
 
+function acsScoreClass(acs: number): string {
+  if (acs >= 75) return 'score-strong'
+  if (acs >= 65) return 'score-good'
+  if (acs >= 55) return 'score-caution'
+  if (acs >= 45) return 'score-warn'
+  return 'score-bad'
+}
+
 interface NarrativeTickerTableProps {
   rows: AcsScore[]
   emptyMessage: string
@@ -30,7 +38,7 @@ const COLUMNS: ColumnDef[] = [
     title: 'A: daily activity \u00b7 B: post diversity \u00b7 C: narrative coherence \u00b7 D: analytical depth \u00b7 E: market confirmation (not yet live)',
     align: 'left',
   },
-  { key: null, label: 'Community tone', title: 'What kind of posts dominate \u2014 analytical research or emotional hype?' },
+  { key: null, label: 'Dominant signal', title: 'Most common discussion type: direction (Bullish/Bearish) \u00d7 style (Analytical = data-backed; Hype-driven = momentum/FOMO)' },
   { key: 'flags', label: 'Warnings' },
 ]
 
@@ -104,30 +112,30 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect }: 
   }
 
   return (
-    <div className="narrative-table-wrap">
-      <table className="narrative-table">
+    <div className="table-wrapper">
+      <table className="screener-table">
       <thead>
         <tr>
           {COLUMNS.map((col) => {
             const sortable = col.key != null
             const active = col.key === sortKey
-            const arrow = active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+            const classes = [sortable ? 'sortable' : ''].filter(Boolean).join(' ') || undefined
             const style: React.CSSProperties = {}
-            if (sortable) {
-              style.cursor = 'pointer'
-              style.userSelect = 'none'
-            }
             if (col.align) style.textAlign = col.align
             return (
               <th
                 key={col.label}
-                title={col.title}
+                className={classes}
                 onClick={sortable ? () => onHeaderClick(col.key) : undefined}
-                style={style}
+                style={Object.keys(style).length ? style : undefined}
                 aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
               >
-                {col.label}
-                {arrow}
+                {col.title ? (
+                  <span className="col-tip" title={col.title}>{col.label} ⓘ</span>
+                ) : (
+                  col.label
+                )}
+                {active && (sortDir === 'asc' ? ' ↑' : ' ↓')}
               </th>
             )
           })}
@@ -141,12 +149,12 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect }: 
               onClick={onSelect ? () => onSelect(row.ticker) : undefined}
               style={onSelect ? { cursor: 'pointer' } : undefined}
             >
-              <td>
+              <td className="ticker-cell sticky-col sticky-col-1">
                 <strong>{row.ticker}</strong>
               </td>
               <td style={{ textAlign: 'center' }}>
                 <div className="acs-cell">
-                  <span className="acs-cell-primary">{row.acs.toFixed(1)}</span>
+                  <span className={`acs-cell-primary ${acsScoreClass(row.acs)}`}>{row.acs.toFixed(1)}</span>
                   <span className="acs-cell-ci">
                     {row.acs_ci_lower.toFixed(0)}–{row.acs_ci_upper.toFixed(0)}
                   </span>

@@ -75,7 +75,7 @@ export function TickerDetailPanel({ detail, loading, error, onClose }: TickerDet
       </div>
 
       <div className="panel-row">
-        <span className="label">Community tone</span>
+        <span className="label" title="The most common type of discussion in the last 14 days. Direction (Bullish/Bearish) × style (Analytical = data-backed research; Hype-driven = price momentum, FOMO, excitement)">Dominant signal</span>
         <span className="value">{labelSignal(s.dominant_signal)}</span>
       </div>
 
@@ -108,15 +108,15 @@ export function TickerDetailPanel({ detail, loading, error, onClose }: TickerDet
 
       <h4>What are people saying?</h4>
       <div className="panel-row">
-        <span className="label" title="Posts with real analysis: DCF, earnings data, competitive moats">Analytical bullish</span>
+        <span className="label" title="Posts with real analysis: DCF, earnings data, competitive moats">Bullish — analytical</span>
         <span className="value">{fmtPct(detail.conviction_researched_bull_ratio)}</span>
       </div>
       <div className="panel-row">
-        <span className="label" title="Critical analysis: short thesis, valuation concern, risk factors">Analytical bearish</span>
+        <span className="label" title="Critical analysis: short thesis, valuation concern, risk factors">Bearish — analytical</span>
         <span className="value">{fmtPct(detail.conviction_researched_bear_ratio)}</span>
       </div>
       <div className="panel-row">
-        <span className="label" title="Enthusiasm without analysis: price momentum, FOMO, hype">Hype / emotional</span>
+        <span className="label" title="Bullish posts driven by price momentum, FOMO, or excitement rather than research">Bullish — hype-driven</span>
         <span className="value">{fmtPct(detail.conviction_emotional_bull_ratio)}</span>
       </div>
       <div className="panel-row">

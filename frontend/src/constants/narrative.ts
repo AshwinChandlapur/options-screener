@@ -4,10 +4,10 @@
  * Matches the 10 states defined in NARRATIVE_METHODOLOGY.md §3.
  */
 export const SIGNAL_LABELS: Record<string, string> = {
-  researched_bull:     'Analytical · Bullish',
-  researched_bear:     'Analytical · Bearish',
-  emotional_bull:      'Hype · Bullish',
-  emotional_bear:      'Hype · Bearish',
+  researched_bull:     'Bullish — analytical',
+  researched_bear:     'Bearish — analytical',
+  emotional_bull:      'Bullish — hype-driven',
+  emotional_bear:      'Bearish — hype-driven',
   uncertainty:         'Undecided',
   earnings_focused:    'Earnings thesis',
   product_thesis:      'Product thesis',
