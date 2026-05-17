@@ -1,24 +1,25 @@
-"""Conviction-state classifier entry point (Phase 4 / Phase 5).
+"""Conviction-axis classifier entry point (Phase 4 / Phase 5).
 
 Container Apps Job — runs on a 30-minute cron schedule.
 
 What it does:
 1. Fetches up to MAX_SIGNALS_PER_RUN unclassified signals from Cosmos `signals`.
-2. For each signal, calls GPT-4o-mini (structured output) to classify into one
-   of the 10 conviction states defined in docs/NARRATIVE_METHODOLOGY.md §3.
+2. For each signal, calls GPT-4o-mini (structured output) to classify along
+   the four conviction axes defined in docs/NARRATIVE_METHODOLOGY.md §3
+   (direction × substance × driver × position) plus a confidence scalar.
 3. Calls the configured embedding deployment (default text-embedding-ada-002,
    overridable via the `embed-deployment` KV secret) on the same rationale
    text (Phase 5).
-4. Writes conviction_state, conviction_confidence, embedding, and embedding_model
-   back to the signal document in a single upsert.
+4. Writes the four axis fields, conviction_confidence, embedding, and
+   embedding_model back to the signal document in a single upsert.
 
-The Phase 3 aggregator (job-aggregator, 15-min cron) reads conviction_state
-on its next run and computes conviction ratios for ticker_timeline.
+The Phase 3 aggregator (job-aggregator, 15-min cron) reads the axis fields
+on its next run and computes marginal + joint shares for ticker_timeline.
 The Phase 5 detector (job-narrative-detector, hourly cron) reads embedding
 to run HDBSCAN clustering and assign lifecycle stages.
 
 Idempotent: already-classified signals are skipped by the Cosmos query.
-Embedding errors are soft-failed: conviction state is always written even if
+Embedding errors are soft-failed: conviction axes are always written even if
 the embedding API call fails — the detector skips null-embedding signals.
 
 Env contract:
@@ -34,7 +35,10 @@ from __future__ import annotations
 import logging
 import sys
 
-from classifier import ConvictionClassifier, EmbeddingGenerator
+from classifier import (
+    ConvictionClassifier,
+    EmbeddingGenerator,
+)
 from config import load_from_env
 from cosmos_client import CosmosClassifierClient
 from kv_secrets import fetch_secrets
@@ -104,18 +108,25 @@ def main() -> None:
             rationale = doc.get("rationale", "")
 
             try:
-                state, confidence = clf.classify(ticker, sentiment, rationale)
+                axes = clf.classify(ticker, sentiment, rationale)
                 client.write_conviction(
                     doc,
-                    state,
-                    confidence,
+                    axes={
+                        "direction": axes.direction,
+                        "substance": axes.substance,
+                        "driver":    axes.driver,
+                        "position":  axes.position,
+                    },
+                    conviction_confidence=axes.confidence,
                     embedding=embeddings[idx],
                     embedding_model=secrets.embed_deployment,
                 )
                 classified += 1
                 logger.debug(
-                    "  %s [%s] → %s (%.2f) embedded=%s",
-                    ticker, doc.get("id", "")[:8], state, confidence,
+                    "  %s [%s] → %s/%s/%s/%s (%.2f) embedded=%s",
+                    ticker, doc.get("id", "")[:8],
+                    axes.direction, axes.substance, axes.driver, axes.position,
+                    axes.confidence,
                     embeddings[idx] is not None,
                 )
             except Exception:

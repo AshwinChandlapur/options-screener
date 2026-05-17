@@ -46,10 +46,15 @@ export interface TickerDetail {
   unique_authors_14d: number
   gini_14d: number
   contributor_count_growth_7d: number
-  conviction_researched_bull_ratio: number | null
-  conviction_researched_bear_ratio: number | null
-  conviction_emotional_bull_ratio: number | null
-  conviction_dd_norm: number | null
+  // Conviction axes (ADR-0020 / ADR-0021). All null until the axis-aware
+  // classifier has labelled at least one signal in the 14d window.
+  conviction_bull_share: number | null
+  conviction_researched_share: number | null
+  conviction_entering_share: number | null
+  conviction_exiting_share: number | null
+  conviction_driver_top: string | null
+  conviction_bull_researched_share: number | null
+  conviction_bear_researched_share: number | null
   conviction_classified_14d: number | null
 }
 

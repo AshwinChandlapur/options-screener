@@ -1,22 +1,22 @@
 /**
- * Plain-English labels for classifier conviction states.
- * Used in the table Signal column and the detail panel Conviction section.
- * Matches the 10 states defined in NARRATIVE_METHODOLOGY.md §3.
+ * Plain-English labels for the compound conviction signal
+ * (direction × substance) emitted by the scorer.
+ *
+ * ADR-0021 retired the legacy 10-state taxonomy in favour of the four
+ * axis combinations below.
  */
 export const SIGNAL_LABELS: Record<string, string> = {
-  researched_bull:     'Bullish — analytical',
-  researched_bear:     'Bearish — analytical',
-  emotional_bull:      'Bullish — hype-driven',
-  emotional_bear:      'Bearish — hype-driven',
-  uncertainty:         'Undecided',
-  earnings_focused:    'Earnings thesis',
-  product_thesis:      'Product thesis',
-  ecosystem_thesis:    'Sector thesis',
-  institutional_watch: 'Institutional interest',
-  exit_signal:         'Selling / exit',
+  bull_researched: 'Bullish — analytical',
+  bear_researched: 'Bearish — analytical',
+  bull_emotional:  'Bullish — hype-driven',
+  bear_emotional:  'Bearish — hype-driven',
+  // Sentiment-only fallback when the classifier has not run yet.
+  bullish:         'Bullish (sentiment only)',
+  bearish:         'Bearish (sentiment only)',
+  unknown:         '—',
 }
 
-/** Translate a raw conviction_state to a human-readable label. */
+/** Translate a dominant_signal label to display text. */
 export function labelSignal(state: string | null | undefined): string {
   if (!state) return '—'
   return SIGNAL_LABELS[state] ?? state

@@ -118,24 +118,45 @@ class TestAssignStage:
         assert stage == 3
 
     def test_stage_5_consensus(self) -> None:
-        """emotional_bull_ratio >= 0.50 AND gini_14d < 0.30 → stage 5 (overrides 1/2/3)."""
+        """ADR-0021: bull_share ≥ 0.65 AND researched_share < 0.40 AND gini < 0.30 → stage 5."""
         timeline = {
             "tier1_pct": 0.30, "dd_post_ratio": 0.15, "gini_14d": 0.20,
-            "conviction_emotional_bull_ratio": 0.55,
+            "conviction_bull_share": 0.70,
+            "conviction_researched_share": 0.30,
         }
         stage, conf = assign_stage(timeline, _cluster(dominant_fraction=1.0))
         assert stage == 5
         assert conf == pytest.approx(0.85)
 
     def test_stage_6_saturation_overrides_consensus(self) -> None:
-        """emotional_bull >= 0.65 AND gini >= 0.55 → stage 6 (highest priority)."""
+        """ADR-0021: bull_share ≥ 0.75 AND researched_share < 0.30 AND gini ≥ 0.55 → stage 6."""
         timeline = {
-            "conviction_emotional_bull_ratio": 0.70,
+            "conviction_bull_share": 0.80,
+            "conviction_researched_share": 0.20,
             "gini_14d": 0.60,
         }
         stage, conf = assign_stage(timeline, _cluster(dominant_fraction=1.0))
         assert stage == 6
         assert conf == pytest.approx(0.90)
+
+    def test_stage_5_and_6_skip_when_axis_data_absent(self) -> None:
+        """No axis data → stages 5/6 never fire (ADR-0021 removed legacy fallback)."""
+        timeline = {
+            "gini_14d": 0.20,
+            # No conviction_bull_share / conviction_researched_share at all.
+        }
+        stage, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0))
+        assert stage not in (5, 6)
+
+    def test_stage_5_axis_path_blocks_when_substance_high(self) -> None:
+        """High researched_share (>=0.40) prevents axis-path stage 5 firing."""
+        timeline = {
+            "gini_14d": 0.20,
+            "conviction_bull_share": 0.70,
+            "conviction_researched_share": 0.50,  # researched majority blocks Consensus
+        }
+        stage, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0))
+        assert stage != 5  # should fall through to catch-all stage 1
 
     def test_catch_all_assigns_stage_1_low_confidence(self) -> None:
         """If no rule matches, stage defaults to 1 at 0.4 × dominant_fraction."""

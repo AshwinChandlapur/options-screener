@@ -50,6 +50,11 @@ def query_top_acs(limit: int) -> list[dict]:
     ORDER BY on a non-partition-key field (acs) is unreliable on Cosmos
     Serverless without a composite index and returns empty intermittently.
     Sorting is done client-side after fetching all scored docs.
+
+    The aggregator writes one snapshot per ticker per bucket_date, so the
+    raw result set contains multiple rows per ticker (one per day in the
+    retention window). We keep only the newest snapshot per ticker before
+    sorting, otherwise the same ticker can appear N times in the Top-N.
     """
     container = _get_timeline()
     results = list(
@@ -58,14 +63,16 @@ def query_top_acs(limit: int) -> list[dict]:
             enable_cross_partition_query=True,
         )
     )
-    results.sort(key=lambda d: d.get("acs", 0.0), reverse=True)
-    return results[:limit]
+    latest = _latest_per_ticker(results)
+    latest.sort(key=lambda d: d.get("acs", 0.0), reverse=True)
+    return latest[:limit]
 
 
 def query_emerging(limit: int) -> list[dict]:
     """Return stage 1–3 tickers with acs > 0, ordered by acs descending.
 
     ORDER BY omitted for the same reason as query_top_acs; sorted client-side.
+    De-duplicated to the newest snapshot per ticker (see query_top_acs).
     """
     container = _get_timeline()
     results = list(
@@ -79,8 +86,31 @@ def query_emerging(limit: int) -> list[dict]:
             enable_cross_partition_query=True,
         )
     )
-    results.sort(key=lambda d: d.get("acs", 0.0), reverse=True)
-    return results[:limit]
+    latest = _latest_per_ticker(results)
+    latest.sort(key=lambda d: d.get("acs", 0.0), reverse=True)
+    return latest[:limit]
+
+
+def _latest_per_ticker(docs: list[dict]) -> list[dict]:
+    """Collapse multi-day timeline snapshots to the newest per ticker.
+
+    Preference order for "newest": bucket_date (ISO string sorts correctly),
+    then computed_at as a tiebreaker for same-day reruns.
+    """
+    best: dict[str, dict] = {}
+    for d in docs:
+        t = (d.get("ticker") or "").upper()
+        if not t:
+            continue
+        cur = best.get(t)
+        if cur is None:
+            best[t] = d
+            continue
+        key_new = (d.get("bucket_date") or "", d.get("computed_at") or "")
+        key_cur = (cur.get("bucket_date") or "", cur.get("computed_at") or "")
+        if key_new > key_cur:
+            best[t] = d
+    return list(best.values())
 
 
 def query_ticker(ticker: str) -> dict | None:

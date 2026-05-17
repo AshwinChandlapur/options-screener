@@ -47,7 +47,7 @@ class DetectorCosmosClient:
             "SELECT DISTINCT VALUE c.ticker FROM c "
             "WHERE c._ts >= @cutoff "
             "AND IS_DEFINED(c.embedding) AND c.embedding != null "
-            "AND IS_DEFINED(c.conviction_state)"
+            "AND IS_DEFINED(c.conviction_direction)"
         )
         params = [{"name": "@cutoff", "value": cutoff_ts}]
         return list(
@@ -75,7 +75,7 @@ class DetectorCosmosClient:
     ) -> list[dict]:
         """Return signal documents for ticker with non-null embedding in window.
 
-        Returned fields: id, ticker, embedding, conviction_state, _ts.
+        Returned fields: id, ticker, embedding, conviction_direction, _ts.
         Full doc returned for simplicity — detector only reads listed fields.
         """
         cutoff_ts = int(
@@ -86,7 +86,7 @@ class DetectorCosmosClient:
             "WHERE c.ticker = @ticker "
             "AND c._ts >= @cutoff "
             "AND IS_DEFINED(c.embedding) AND c.embedding != null "
-            "AND IS_DEFINED(c.conviction_state)"
+            "AND IS_DEFINED(c.conviction_direction)"
         )
         params = [
             {"name": "@ticker", "value": ticker},

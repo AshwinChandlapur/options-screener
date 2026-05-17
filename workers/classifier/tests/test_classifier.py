@@ -22,8 +22,12 @@ for _name in ("main", "config", "classifier", "cosmos_client", "kv_secrets"):
     sys.modules.pop(_name, None)
 
 from classifier import (  # noqa: E402
-    CONVICTION_STATES,
     DEFAULT_SYSTEM_PROMPT,
+    DIRECTIONS,
+    SUBSTANCES,
+    DRIVERS,
+    POSITIONS,
+    ConvictionAxes,
     ConvictionClassifier,
     EmbeddingGenerator,
 )
@@ -34,9 +38,21 @@ from classifier import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def _chat_response(state: str, confidence: float) -> SimpleNamespace:
+def _chat_response(
+    direction: str = "bull",
+    substance: str = "researched",
+    driver: str = "earnings",
+    position: str = "entering",
+    confidence: float = 0.82,
+) -> SimpleNamespace:
     """Build an object shaped like openai's ChatCompletion response."""
-    content = json.dumps({"conviction_state": state, "conviction_confidence": confidence})
+    content = json.dumps({
+        "direction": direction,
+        "substance": substance,
+        "driver": driver,
+        "position": position,
+        "confidence": confidence,
+    })
     message = SimpleNamespace(content=content)
     choice = SimpleNamespace(message=message)
     return SimpleNamespace(choices=[choice])
@@ -46,7 +62,7 @@ def _chat_response(state: str, confidence: float) -> SimpleNamespace:
 def fake_chat_client() -> MagicMock:
     """An AzureOpenAI client mock with a configurable chat.completions.create."""
     client = MagicMock()
-    client.chat.completions.create.return_value = _chat_response("researched_bull", 0.82)
+    client.chat.completions.create.return_value = _chat_response()
     return client
 
 
@@ -60,40 +76,54 @@ def _make_classifier(fake_chat_client: MagicMock) -> ConvictionClassifier:
         )
 
 
-def test_classify_happy_path_returns_state_and_confidence(fake_chat_client: MagicMock) -> None:
+def test_classify_happy_path_returns_axes(fake_chat_client: MagicMock) -> None:
     clf = _make_classifier(fake_chat_client)
 
-    state, confidence = clf.classify("NVDA", "positive", "Strong earnings cited")
+    axes = clf.classify("NVDA", "positive", "Strong earnings cited")
 
-    assert state == "researched_bull"
-    assert confidence == pytest.approx(0.82)
+    assert isinstance(axes, ConvictionAxes)
+    assert axes.direction == "bull"
+    assert axes.substance == "researched"
+    assert axes.driver == "earnings"
+    assert axes.position == "entering"
+    assert axes.confidence == pytest.approx(0.82)
 
 
 def test_classify_clamps_confidence_above_one(fake_chat_client: MagicMock) -> None:
-    fake_chat_client.chat.completions.create.return_value = _chat_response("researched_bull", 1.7)
+    fake_chat_client.chat.completions.create.return_value = _chat_response(confidence=1.7)
     clf = _make_classifier(fake_chat_client)
 
-    _, confidence = clf.classify("NVDA", "positive", "x")
+    axes = clf.classify("NVDA", "positive", "x")
 
-    assert confidence == 1.0
+    assert axes.confidence == 1.0
 
 
 def test_classify_clamps_confidence_below_zero(fake_chat_client: MagicMock) -> None:
-    fake_chat_client.chat.completions.create.return_value = _chat_response("uncertainty", -0.4)
+    fake_chat_client.chat.completions.create.return_value = _chat_response(confidence=-0.4)
     clf = _make_classifier(fake_chat_client)
 
-    _, confidence = clf.classify("NVDA", "neutral", "x")
+    axes = clf.classify("NVDA", "neutral", "x")
 
-    assert confidence == 0.0
+    assert axes.confidence == 0.0
 
 
-def test_classify_unknown_state_falls_back_to_uncertainty(fake_chat_client: MagicMock) -> None:
-    fake_chat_client.chat.completions.create.return_value = _chat_response("totally_made_up", 0.9)
+def test_classify_unknown_axis_falls_back_to_safe_default(fake_chat_client: MagicMock) -> None:
+    """Defence-in-depth: if a future KV prompt drops strict schema, bad values default cleanly."""
+    content = json.dumps({
+        "direction": "sideways",     # invalid
+        "substance": "researched",
+        "driver": "earnings",
+        "position": "entering",
+        "confidence": 0.5,
+    })
+    fake_chat_client.chat.completions.create.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+    )
     clf = _make_classifier(fake_chat_client)
 
-    state, _ = clf.classify("NVDA", "neutral", "x")
+    axes = clf.classify("NVDA", "neutral", "x")
 
-    assert state == "uncertainty"
+    assert axes.direction == "bull"  # safe default
 
 
 def test_classify_sends_rationale_only_as_user_message(fake_chat_client: MagicMock) -> None:
@@ -119,9 +149,17 @@ def test_classify_uses_deployment_as_model(fake_chat_client: MagicMock) -> None:
     assert kwargs["model"] == "gpt-4o-mini"
 
 
-def test_conviction_states_count_is_ten() -> None:
-    """Locked-in invariant — methodology doc §3 table must stay in sync."""
-    assert len(CONVICTION_STATES) == 10
+# ---------------------------------------------------------------------------
+# Axis enum invariants (ADR-0020 / ADR-0021)
+# ---------------------------------------------------------------------------
+
+
+def test_axis_enums_match_adr() -> None:
+    """Locked-in invariant — ADR-0020 axis cardinality."""
+    assert DIRECTIONS == ["bull", "bear"]
+    assert SUBSTANCES == ["researched", "emotional"]
+    assert DRIVERS    == ["earnings", "product", "macro", "flows", "valuation", "other"]
+    assert POSITIONS  == ["entering", "holding", "exiting", "unstated"]
 
 
 # ---------------------------------------------------------------------------

@@ -111,16 +111,28 @@ class TickerTimelineSnapshot:
     tier2_pct: float = 0.0
     tier3_pct: float = 0.0
 
-    # --- Phase 4+ fields (None until conviction classifier runs) ---
-    # Ratios computed over classified signals in the 14d window only.
-    # None = no signals have been classified yet (classifier hasn't run).
-    conviction_researched_bull_ratio: float | None = None
-    conviction_researched_bear_ratio: float | None = None
-    conviction_emotional_bull_ratio: float | None = None
-    # Weighted conviction score: mean(weight[state]) over classified signals.
-    # Range: [-0.5, 1.0] per weights table in §3. None until classified.
-    conviction_dd_norm: float | None = None
-    # Count of classified signals in 14d window (denominator for ratios above).
+    # --- Conviction axes (ADR-0020 / ADR-0021) ---
+    # All None until the axis-aware classifier has tagged at least one signal
+    # in the 14d window. The detector and scorer treat None as "no signal" —
+    # the lifecycle does not advance and Component D contributes 0.
+    #
+    # Marginals — direct distributions over single axes (UI + detector):
+    #   bull_share        : fraction of axised signals with direction=="bull"
+    #   researched_share  : fraction with substance=="researched"
+    #   entering_share    : fraction with position=="entering"
+    #   exiting_share     : fraction with position=="exiting"
+    #   driver_top        : most-common non-"other" driver, "other" if tied
+    # Joint shares — direction × substance (scorer Component D, ADR-0021):
+    #   bull_researched_share : direction=="bull" AND substance=="researched"
+    #   bear_researched_share : direction=="bear" AND substance=="researched"
+    # classified_count: 14d denominator (informational / UI).
+    conviction_bull_share: float | None = None
+    conviction_researched_share: float | None = None
+    conviction_entering_share: float | None = None
+    conviction_exiting_share: float | None = None
+    conviction_driver_top: str | None = None
+    conviction_bull_researched_share: float | None = None
+    conviction_bear_researched_share: float | None = None
     conviction_classified_14d: int | None = None
 
     # --- Phase 5+ fields (None until narrative detector runs) ---

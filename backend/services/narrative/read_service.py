@@ -64,15 +64,20 @@ def _doc_to_acs(doc: dict) -> AcsScore:
 
 
 def _dominant_from_doc(doc: dict) -> str:
-    """Fallback dominant signal if scorer hasn't run yet."""
-    candidates = {
-        "researched_bull": doc.get("conviction_researched_bull_ratio") or 0.0,
-        "researched_bear": doc.get("conviction_researched_bear_ratio") or 0.0,
-        "emotional_bull":  doc.get("conviction_emotional_bull_ratio") or 0.0,
-    }
-    if all(v == 0.0 for v in candidates.values()):
+    """Fallback dominant signal derived from axis marginals (ADR-0021).
+
+    Returns one of four compound labels ("bull_researched", "bull_emotional",
+    "bear_researched", "bear_emotional") or "unknown" when no axis data
+    exists. The scorer writes a richer ``dominant_signal`` string when it
+    runs; this is only the fallback.
+    """
+    bull = doc.get("conviction_bull_share")
+    researched = doc.get("conviction_researched_share")
+    if bull is None or researched is None:
         return "unknown"
-    return max(candidates, key=lambda k: candidates[k])
+    direction = "bull" if bull >= 0.5 else "bear"
+    substance = "researched" if researched >= 0.5 else "emotional"
+    return f"{direction}_{substance}"
 
 
 async def get_acs_for_ticker(ticker: str) -> AcsScore:
@@ -109,10 +114,13 @@ def _doc_to_detail(doc: dict) -> TickerDetail:
         unique_authors_14d=int(doc.get("unique_authors_14d") or 0),
         gini_14d=float(doc.get("gini_14d") or 0.0),
         contributor_count_growth_7d=float(doc.get("contributor_count_growth_7d") or 0.0),
-        conviction_researched_bull_ratio=doc.get("conviction_researched_bull_ratio"),
-        conviction_researched_bear_ratio=doc.get("conviction_researched_bear_ratio"),
-        conviction_emotional_bull_ratio=doc.get("conviction_emotional_bull_ratio"),
-        conviction_dd_norm=doc.get("conviction_dd_norm"),
+        conviction_bull_share=doc.get("conviction_bull_share"),
+        conviction_researched_share=doc.get("conviction_researched_share"),
+        conviction_entering_share=doc.get("conviction_entering_share"),
+        conviction_exiting_share=doc.get("conviction_exiting_share"),
+        conviction_driver_top=doc.get("conviction_driver_top"),
+        conviction_bull_researched_share=doc.get("conviction_bull_researched_share"),
+        conviction_bear_researched_share=doc.get("conviction_bear_researched_share"),
         conviction_classified_14d=doc.get("conviction_classified_14d"),
     )
 

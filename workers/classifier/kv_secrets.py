@@ -7,8 +7,8 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 
-# Default prompt lives in classifier.py (which owns CONVICTION_STATES) so that
-# the prompt stays in sync with the state list by proximity.
+# Default prompt lives in classifier.py (which owns the axis enums) so the
+# prompt and axis vocabularies stay in sync by proximity.
 from classifier import DEFAULT_SYSTEM_PROMPT
 
 

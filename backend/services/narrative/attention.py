@@ -54,20 +54,6 @@ _DD_TERMS: frozenset[str] = frozenset({
     "writeup", "write-up", "bull case", "bear case",
 })
 
-# Conviction state weights per §3 of NARRATIVE_METHODOLOGY.md.
-_CONVICTION_WEIGHTS: dict[str, float] = {
-    "researched_bull":    1.0,
-    "researched_bear":    1.0,
-    "emotional_bull":     0.4,
-    "emotional_bear":     0.4,
-    "uncertainty":        0.0,
-    "earnings_focused":   0.8,
-    "product_thesis":     0.8,
-    "ecosystem_thesis":   0.8,
-    "institutional_watch": 0.9,
-    "exit_signal":       -0.5,
-}
-
 
 # ---------------------------------------------------------------------------
 # §2.1 — Persistence: decay-weighted density
@@ -298,35 +284,59 @@ def compute_attention_quality(
 
 
 # ---------------------------------------------------------------------------
-# §3 — Conviction ratios (populated when Phase 4 classifier has run)
+# §3 — Conviction axis distributions (ADR-0020 / ADR-0021)
 # ---------------------------------------------------------------------------
 
-def compute_conviction_ratios(
+def compute_axis_distributions(
     signals_14d: list[dict],
-) -> tuple[float | None, float | None, float | None, float | None, int | None]:
-    """Return (researched_bull_ratio, researched_bear_ratio, emotional_bull_ratio,
-    conviction_dd_norm, classified_count) computed over signals in the 14d window
-    that have a conviction_state set.
+) -> tuple[
+    float | None,  # bull_share
+    float | None,  # researched_share
+    float | None,  # entering_share
+    float | None,  # exiting_share
+    str | None,    # driver_top
+    float | None,  # bull_researched_share (joint; for scorer Component D)
+    float | None,  # bear_researched_share (joint; for scorer Component D)
+    int | None,    # classified_count
+]:
+    """Roll up axis-classified signals from the 14d window.
 
-    Returns (None, None, None, None, None) when no signals have been classified.
-    conviction_dd_norm is the weighted conviction score (mean of per-state weights
-    over classified signals), range [-0.5, 1.0] per §3 weights table.
+    See workers/aggregator/attention.compute_axis_distributions for full docs.
+    This is the backend mirror; the two files MUST stay in sync.
     """
-    classified = [s for s in signals_14d if s.get("conviction_state")]
-    n = len(classified)
+    axised = [s for s in signals_14d if s.get("conviction_direction")]
+    n = len(axised)
     if n == 0:
-        return None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
-    def _ratio(state: str) -> float:
-        return sum(1 for s in classified if s["conviction_state"] == state) / n
+    bull = sum(1 for s in axised if s.get("conviction_direction") == "bull") / n
+    researched = sum(1 for s in axised if s.get("conviction_substance") == "researched") / n
+    entering = sum(1 for s in axised if s.get("conviction_position") == "entering") / n
+    exiting = sum(1 for s in axised if s.get("conviction_position") == "exiting") / n
 
-    rb = _ratio("researched_bull")
-    rbr = _ratio("researched_bear")
-    eb = _ratio("emotional_bull")
-    weighted = sum(
-        _CONVICTION_WEIGHTS.get(s["conviction_state"], 0.0) for s in classified
+    bull_researched = sum(
+        1 for s in axised
+        if s.get("conviction_direction") == "bull"
+        and s.get("conviction_substance") == "researched"
     ) / n
-    return rb, rbr, eb, weighted, n
+    bear_researched = sum(
+        1 for s in axised
+        if s.get("conviction_direction") == "bear"
+        and s.get("conviction_substance") == "researched"
+    ) / n
+
+    drv_counts: dict[str, int] = defaultdict(int)
+    for s in axised:
+        drv_counts[s.get("conviction_driver") or "other"] += 1
+    non_other = {k: v for k, v in drv_counts.items() if k != "other"}
+    if not non_other:
+        driver_top = "other"
+    else:
+        top_count = max(non_other.values())
+        winners = [k for k, v in non_other.items() if v == top_count]
+        driver_top = winners[0] if len(winners) == 1 else "other"
+
+    return bull, researched, entering, exiting, driver_top, bull_researched, bear_researched, n
 
 
 # ---------------------------------------------------------------------------
@@ -445,10 +455,11 @@ def build_snapshot(
         sum(len(b) for b in bodies_14d) / len(bodies_14d) if bodies_14d else 0.0
     )
 
-    # --- §3 Conviction ratios (Phase 4 — None until classifier runs) ---
-    rb_ratio, rbr_ratio, eb_ratio, conviction_dd_norm, conviction_classified_14d = (
-        compute_conviction_ratios(sigs_14d)
-    )
+    # --- §3 Conviction axes (ADR-0020 / ADR-0021) ---
+    (
+        bull_share, researched_share, entering_share, exiting_share, driver_top,
+        bull_researched_share, bear_researched_share, conviction_classified_14d,
+    ) = compute_axis_distributions(sigs_14d)
 
     # --- §2.5 Composite attention quality ---
     persistence_n, diversity_n, depth_n, accel_n = _normalize_for_quality(
@@ -488,9 +499,12 @@ def build_snapshot(
         bullish_ratio=bullish_ratio,
         bearish_ratio=bearish_ratio,
         avg_confidence=avg_confidence,
-        conviction_researched_bull_ratio=rb_ratio,
-        conviction_researched_bear_ratio=rbr_ratio,
-        conviction_emotional_bull_ratio=eb_ratio,
-        conviction_dd_norm=conviction_dd_norm,
         conviction_classified_14d=conviction_classified_14d,
+        conviction_bull_share=bull_share,
+        conviction_researched_share=researched_share,
+        conviction_entering_share=entering_share,
+        conviction_exiting_share=exiting_share,
+        conviction_driver_top=driver_top,
+        conviction_bull_researched_share=bull_researched_share,
+        conviction_bear_researched_share=bear_researched_share,
     )

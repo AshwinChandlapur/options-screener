@@ -1,7 +1,14 @@
-"""GPT-4o-mini conviction-state classifier (§3 of NARRATIVE_METHODOLOGY.md).
+"""GPT-4o-mini conviction classifier (§3 of NARRATIVE_METHODOLOGY.md).
 
-Pure function: takes a signal's ticker, sentiment, and rationale; returns
-one of the 10 conviction states plus a confidence score.
+Classifies each signal along four independent axes (per ADR-0020):
+  - direction:  bull | bear
+  - substance:  researched | emotional
+  - driver:     earnings | product | macro | flows | valuation | other
+  - position:   entering | holding | exiting | unstated
+Plus a single ``confidence`` scalar.
+
+ADR-0021 retired the back-compat legacy 10-state ``conviction_state``; the
+classifier now writes only the axis fields.
 
 Structured output via OpenAI JSON schema response_format — no parsing heuristics.
 
@@ -18,45 +25,68 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Sequence
 
 from openai import AzureOpenAI
 
 logger = logging.getLogger(__name__)
 
-# Exactly the 10 conviction states defined in §3.
-CONVICTION_STATES: list[str] = [
-    "researched_bull",
-    "researched_bear",
-    "emotional_bull",
-    "emotional_bear",
-    "uncertainty",
-    "earnings_focused",
-    "product_thesis",
-    "ecosystem_thesis",
-    "institutional_watch",
-    "exit_signal",
-]
+# --- Axis enums (ADR-0020; sole conviction vocabulary per ADR-0021) -------
+DIRECTIONS: list[str] = ["bull", "bear"]
+SUBSTANCES: list[str] = ["researched", "emotional"]
+DRIVERS:    list[str] = ["earnings", "product", "macro", "flows", "valuation", "other"]
+POSITIONS:  list[str] = ["entering", "holding", "exiting", "unstated"]
+
+
+@dataclass(frozen=True)
+class ConvictionAxes:
+    """Structured conviction output along 4 independent axes."""
+    direction: str       # bull | bear
+    substance: str       # researched | emotional
+    driver: str          # earnings | product | macro | flows | valuation | other
+    position: str        # entering | holding | exiting | unstated
+    confidence: float    # 0.0-1.0
+
 
 # Default system prompt — overridden by Key Vault secret `conviction-prompt-v1`.
 # Template variables: {ticker}, {sentiment} only.
 # The Reddit post body is sent as a SEPARATE user message (never interpolated here)
 # to prevent prompt injection from adversarial post content.
 DEFAULT_SYSTEM_PROMPT = """\
-Classify the Reddit post (provided by the user) into exactly one conviction state.
-Ticker context: {ticker}. Extractor sentiment hint: {sentiment}.
+Classify the Reddit post (provided by the user) about ticker {ticker} along
+four independent axes. Extractor sentiment hint: {sentiment} — treat as a hint
+only; the post text is authoritative.
 
-Conviction states:
-- researched_bull: cites data, metrics, product or financial evidence for a bullish thesis
-- researched_bear: critical thesis with evidence against the stock
-- emotional_bull: enthusiasm or hype without substantive evidence
-- emotional_bear: fear, panic, or FUD without evidence
-- uncertainty: explicitly undecided or confused about the thesis
-- earnings_focused: tied to specific upcoming or recent earnings event
-- product_thesis: driven by product or technology roadmap belief
-- ecosystem_thesis: driven by industry-wide tailwind or macro trend
-- institutional_watch: mentions analyst upgrades, price targets, or institutional buying
-- exit_signal: profit-taking, covering a position, or conviction loss
+Axes (return ALL four):
+
+1. direction:
+   - "bull"  = author expects the stock to rise / is long
+   - "bear"  = author expects the stock to fall / is short
+
+2. substance:
+   - "researched" = author cites ≥1 specific number, named filing/source,
+                    product detail, or financial metric
+   - "emotional"  = hype, FUD, memes, slogans, or vague conviction without
+                    cited evidence
+
+3. driver — the primary thing the thesis is ABOUT:
+   - "earnings"   = tied to a specific past or upcoming earnings event
+   - "product"    = a specific product, launch, technology, or roadmap item
+   - "macro"      = industry-wide tailwind, sector rotation, rates/inflation
+   - "flows"      = analyst PT/upgrade/downgrade, 13F flows, options flow
+   - "valuation"  = multiple, DCF, comparables, intrinsic-value arguments
+   - "other"      = none of the above clearly dominates
+
+4. position — what the AUTHOR is doing or planning:
+   - "entering"   = opening a position, adding, "loaded up", "started a position"
+   - "holding"    = maintaining an existing position, "diamond hands", reiterating
+   - "exiting"    = profit-taking, covering, stopping out, "sold today"
+   - "unstated"   = author shares opinion but does not declare an action
+
+If the post is off-topic, spam, or contains no opinion on {ticker}, default to
+direction="bull", substance="emotional", driver="other", position="unstated",
+confidence ≤ 0.2.
 
 Respond with JSON only.\
 """
@@ -64,20 +94,18 @@ Respond with JSON only.\
 _RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
-        "name": "conviction_classification",
+        "name": "conviction_axes",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "conviction_state": {
-                    "type": "string",
-                    "enum": CONVICTION_STATES,
-                },
-                "conviction_confidence": {
-                    "type": "number",
-                },
+                "direction":  {"type": "string", "enum": DIRECTIONS},
+                "substance":  {"type": "string", "enum": SUBSTANCES},
+                "driver":     {"type": "string", "enum": DRIVERS},
+                "position":   {"type": "string", "enum": POSITIONS},
+                "confidence": {"type": "number"},
             },
-            "required": ["conviction_state", "conviction_confidence"],
+            "required": ["direction", "substance", "driver", "position", "confidence"],
             "additionalProperties": False,
         },
     },
@@ -105,8 +133,8 @@ class ConvictionClassifier:
         ticker: str,
         sentiment: str,
         rationale: str,
-    ) -> tuple[str, float]:
-        """Return (conviction_state, conviction_confidence).
+    ) -> ConvictionAxes:
+        """Return a ConvictionAxes for one signal.
 
         Raises on OpenAI API error — caller decides retry/skip policy.
 
@@ -124,19 +152,26 @@ class ConvictionClassifier:
                 {"role": "user",   "content": rationale or "(no content)"},
             ],
             response_format=_RESPONSE_FORMAT,  # type: ignore[arg-type]
-            max_tokens=64,
+            max_tokens=96,
             temperature=0.0,
         )
         content = response.choices[0].message.content or "{}"
         result = json.loads(content)
-        state = result.get("conviction_state", "uncertainty")
-        confidence = float(result.get("conviction_confidence", 0.5))
-        # Clamp confidence to [0, 1] — model may return out-of-range values.
-        confidence = max(0.0, min(1.0, confidence))
-        if state not in CONVICTION_STATES:
-            logger.warning("Unexpected conviction_state %r — defaulting to uncertainty", state)
-            state = "uncertainty"
-        return state, confidence
+        # Strict JSON schema guarantees enum membership; defaults below only
+        # protect against a future schema drift or a non-strict KV prompt override.
+        direction = result.get("direction")  if result.get("direction")  in DIRECTIONS else "bull"
+        substance = result.get("substance")  if result.get("substance")  in SUBSTANCES else "emotional"
+        driver    = result.get("driver")     if result.get("driver")     in DRIVERS    else "other"
+        position  = result.get("position")   if result.get("position")   in POSITIONS  else "unstated"
+        confidence = float(result.get("confidence", 0.5))
+        confidence = max(0.0, min(1.0, confidence))  # clamp to [0, 1]
+        return ConvictionAxes(
+            direction=direction,
+            substance=substance,
+            driver=driver,
+            position=position,
+            confidence=confidence,
+        )
 
 
 # ---------------------------------------------------------------------------

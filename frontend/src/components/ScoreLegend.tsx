@@ -54,11 +54,11 @@ const COMPONENTS: ComponentDef[] = [
     name: 'Thesis quality',
     max: 20,
     what: 'What fraction of posts include real research vs. pure hype?',
-    formula: 'D = max(0, min( 0.6·r_rb + 0.2·r_rB + 0.2·conv_norm,  1)) × 20',
+    formula: 'D = min( 0.6·s_br + 0.2·s_Br,  1 ) × 20',
     normalization:
-      'r_rb = researched_bull ratio · r_rB = researched_bear ratio · conv_norm = weighted conviction mean ∈ [−0.5, 1.0]. Floored at 0 — a wave of exit_signal posts cannot push D negative.',
+      's_br = share of classified posts where direction = bull AND substance = researched. s_Br = same for direction = bear AND substance = researched. Both are joint shares written by the aggregator and bounded in [0, 1]; D therefore lives in [0, 20].',
     why:
-      'Researched posts (DD, earnings analysis, competitive moat) signal that the bull thesis has been stress-tested. Pure emotional momentum posts (YOLO, rocket emojis) can move price briefly but don\'t sustain a multi-week narrative.',
+      'Researched posts (DD, earnings analysis, competitive moat) signal that the thesis has been stress-tested. A substantive bear case still counts — the bear weight is intentional. Pure emotional momentum posts (YOLO, rocket emojis) can move price briefly but don\'t sustain a multi-week narrative.',
   },
   {
     letter: 'E',

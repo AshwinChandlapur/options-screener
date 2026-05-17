@@ -168,61 +168,62 @@ composite is a dashboard / ranking signal, not an ACS input.
 
 ---
 
-## 3. Conviction states
+## 3. Conviction axes
 
 Standard polarity sentiment (positive / negative / neutral) is inadequate. A
 "positive" tweet about a stock can be either a researched thesis or naked
 enthusiasm, and the two have opposite predictive value.
 
-We replace polarity with **conviction state classification**. Each post or
-comment is classified into exactly one of:
+As of [ADR-0020](adr/0020-multi-axis-conviction-schema.md) (and
+[ADR-0021](adr/0021-retire-legacy-conviction-taxonomy.md) which removed the
+back-compat 10-state derivation) the classifier emits a structured object
+with **four independent axes** plus a confidence score:
 
-| State | Weight | Description |
+| Axis | Values | Captures |
 |---|---|---|
-| `researched_bull` | 1.0 | Cites data, metrics, product evidence. |
-| `researched_bear` | 1.0 | Critical thesis with evidence. Healthy debate signal. |
-| `emotional_bull` | 0.4 | Enthusiasm without evidence. |
-| `emotional_bear` | 0.4 | FUD without evidence. |
-| `uncertainty` | 0.0 | Explicitly undecided. |
-| `earnings_focused` | 0.8 | Tied to specific financial events. |
-| `product_thesis` | 0.8 | Driven by product/technology belief. |
-| `ecosystem_thesis` | 0.8 | Driven by industry-wide tailwind. |
-| `institutional_watch` | 0.9 | Mentions analyst coverage or institutional buying. |
-| `exit_signal` | −0.5 | Profit-taking, conviction loss. Penalty. |
+| `direction` | `bull` / `bear` | Net stance on the ticker. |
+| `substance` | `researched` / `emotional` | Whether evidence is present. |
+| `driver` | `earnings` / `product` / `macro` / `flows` / `valuation` / `other` | What the post is reacting to. |
+| `position` | `entering` / `holding` / `exiting` / `unstated` | Lifecycle of the author's trade. |
+| `confidence` | `[0.0, 1.0]` | Model self-rated certainty. |
 
-**Key insight:** *60% `researched_bull` + 20% `researched_bear`* is a higher-quality
-signal than *90% `emotional_bull`*. The former is active thesis-testing; the latter
-is euphoria.
+The four axes are orthogonal: `(bull, researched, earnings, entering)` and
+`(bull, emotional, flows, exiting)` are very different signals that a single
+categorical label collapses into the same bucket. The 14-day aggregator
+persists five **marginal** shares and two **joint** shares onto each
+`ticker_timeline`:
 
-**Persisted aggregates (per 14d window).** The aggregator computes four
-conviction summaries onto each `ticker_timeline` document:
+Marginals (drive UI + §4 lifecycle rules):
 
-- `conviction_researched_bull_ratio` — fraction of classified 14d signals.
-- `conviction_researched_bear_ratio` — same.
-- `conviction_emotional_bull_ratio` — same. Used by §4 lifecycle stages 5/6.
-- `conviction_dd_norm` — the **weighted-conviction mean**: the average of the
-  per-state weights above, taken over all classified 14d signals. Range
-  $[-0.5, 1.0]$. Fed into §5 Component D as `conv_norm`.
+- `conviction_bull_share` — fraction of classified signals with `direction=bull`.
+- `conviction_researched_share` — fraction with `substance=researched`.
+- `conviction_entering_share` — fraction with `position=entering`.
+- `conviction_exiting_share` — fraction with `position=exiting`.
+- `conviction_driver_top` — most-common non-`other` driver (or `"other"` on tie / all-other).
 
-The remaining seven states (`emotional_bear`, `uncertainty`, `earnings_focused`,
-`product_thesis`, `ecosystem_thesis`, `institutional_watch`, `exit_signal`) are
-not persisted as separate ratios; their effect on scoring flows entirely through
-`conviction_dd_norm`.
+Joint shares (drive §5 Component D):
+
+- `conviction_bull_researched_share` — `direction=bull ∧ substance=researched`.
+- `conviction_bear_researched_share` — `direction=bear ∧ substance=researched`.
+
+Joint shares are *not* derivable from the marginals (the axes are not
+independent in practice), so the aggregator computes them directly from the
+signal stream. All seven fields are `null` until the classifier has labelled
+at least one signal in the 14d window.
 
 ### 3.1 Trajectories
 
-The **direction of change** in the conviction-state mix is more predictive than
+The **direction of change** in the axis distributions is more predictive than
 the snapshot:
 
-- **Early (target):** `uncertainty` → `researched_bull` growing → `emotional_bull`
-  lagging.
-- **Late (avoid):** `emotional_bull` dominant → `uncertainty` growing →
-  `emotional_bear` rising.
+- **Early (target):** rising `conviction_researched_share` with low
+  `conviction_bull_share`, `conviction_entering_share` non-trivial.
+- **Late (avoid):** `conviction_bull_share` high while
+  `conviction_researched_share` falls; `conviction_exiting_share` creeping up.
 
 > **Status:** descriptive. Trajectory deltas are recoverable from the
-> `ticker_timeline` history (each snapshot stores a same-day point estimate)
-> but no metric, flag, or ACS adjustment currently consumes them. Phase 6.1
-> candidate — see [ADR-0019](adr/0019-narrative-phase6-scorer.md).
+> `ticker_timeline` history but no metric, flag, or ACS adjustment currently
+> consumes them. Phase 6.1 candidate — see [ADR-0019](adr/0019-narrative-phase6-scorer.md).
 ---
 
 ## 4. Narrative lifecycle
@@ -234,8 +235,8 @@ the snapshot:
 | 2 | Early conviction | `tier1_pct ∈ [0.20, 0.50]` AND `dd_post_ratio ≥ 0.10` AND `gini_14d < 0.45` | **Target** |
 | 3 | Expanding awareness | `contributor_count_growth_7d ≥ 0.30` (tier2-rising proxy) | **Target** |
 | 4 | Institutional attention | `external_media_citations > 0` OR `analyst_name_count > 0` — **not yet implemented** (deferred to Phase 6.1; required fields don't exist on `ticker_timeline` yet) | Late — partial |
-| 5 | Consensus | `conviction_emotional_bull_ratio ≥ 0.50` AND `gini_14d < 0.30` | Avoid |
-| 6 | Saturation | `conviction_emotional_bull_ratio ≥ 0.65` AND `gini_14d ≥ 0.55` | Avoid (bagholder phase) |
+| 5 | Consensus | `conviction_bull_share ≥ 0.65` AND `conviction_researched_share < 0.40` AND `gini_14d < 0.30` | Avoid |
+| 6 | Saturation | `conviction_bull_share ≥ 0.75` AND `conviction_researched_share < 0.30` AND `gini_14d ≥ 0.55` | Avoid (bagholder phase) |
 
 **Override priority.** `assign_stage` evaluates rules in the order
 `1 → 2 → 3 → 5 → 6` and the **last matching rule wins**. This is intentional:
@@ -291,20 +292,19 @@ narrative lifecycle (§4), and market confirmation (§6) for a single ticker.
 | A | Attention persistence index | 25 | $\min(\text{decay\_weighted\_density}_{14d},\ 1) \cdot A_{\max}$ |
 | B | Contributor quality | 20 | $\min\!\left(\dfrac{\text{unique\_authors}_{14d}}{\log(\text{mentions}_{14d})} \cdot (1 - G) \cdot B_{\max},\ B_{\max}\right)$; $0$ when $\text{mentions}_{14d} \le 1$ |
 | C | Narrative strength | 20 | $\dfrac{\text{stage\_map}[\text{stage}]}{\max(\text{stage\_map})} \cdot \text{stage\_confidence} \cdot C_{\max}$ |
-| D | Thesis quality | 20 | $\max(0,\ \min(0.6 \cdot r_{\text{rb}} + 0.2 \cdot r_{\text{rB}} + 0.2 \cdot \text{conv\_norm},\ 1)) \cdot D_{\max}$ |
+| D | Thesis quality | 20 | $\min(0.6 \cdot s_{\text{br}} + 0.2 \cdot s_{\text{Br}},\ 1) \cdot D_{\max}$ |
 | E | Market confirmation | 15 | $6 \cdot \tilde{\text{RS}}_{14d} + 5 \cdot \tilde{\text{opt}} + 4 \cdot \tilde{\text{13F}}$; each sub-signal normalized to $[0, 1]$ — see normalization curves below |
 
 Where:
 
 - $G$ is the Gini coefficient over contributor mentions in the 14-day window.
-- $r_{\text{rb}}$ and $r_{\text{rB}}$ are the ratios of `researched_bull` and
-  `researched_bear` posts to total classified posts.
-- `conv_norm` is the field stored as `conviction_dd_norm` on `ticker_timeline`:
-  the mean of the §3 per-state weights over classified 14d signals, range
-  $[-0.5, 1.0]$. Component D is then floored at 0 so every component stays in
-  $[0, \text{max}]$ — a wave of `exit_signal` posts cannot drive D negative.
-  (The legacy name `dd_norm` is retained in the Cosmos field for backward
-  compatibility; treat it as `conv_norm` everywhere in this doc.)
+- $s_{\text{br}}$ and $s_{\text{Br}}$ are the joint shares
+  `conviction_bull_researched_share` and `conviction_bear_researched_share`
+  on `ticker_timeline` — the fraction of classified 14d signals where the
+  direction and substance axes co-occur. Both are bounded in $[0, 1]$ so
+  Component D lives in $[0, D_{\max}]$ without further flooring. See
+  [ADR-0021](adr/0021-retire-legacy-conviction-taxonomy.md) for why the
+  earlier 0.2 weight on `conv_norm` was retired.
 - `stage_map` is `{1: 10, 2: 18, 3: 20, 4: 10, 5: 5, 6: 2}`. Stages 2 and 3 are
   the target window. Component C divides by $\max(\text{stage\_map}) = 20$ so
   that a perfectly-staged, fully-confident narrative scores exactly $C_{\max}$
@@ -501,13 +501,13 @@ Key Vault. Images via ghcr.io.
 - Bicep: Azure OpenAI deployment `gpt-4o-mini` (50K TPM / 50 RPM conservative);
   region check `centralus` first, fallback `eastus2`
 - Code: `job-classifier` (30-min cron) processes signals where
-  `NOT IS_DEFINED(c.conviction_state)`; structured-output JSON; prompt template
+  `NOT IS_DEFINED(c.conviction_direction)`; structured-output JSON; prompt template
   stored in Key Vault as `conviction-prompt-v1`. Embedding generation runs in
   the same job (see Phase 5); an embedding failure does **not** block the
-  conviction-state write — see
+  conviction-axis write — see
   [ADR-0018](adr/0018-classifier-embedding-soft-fail.md).
 - **No Azure ML.** Fine-tune escalation gated on F1 < 0.78
-- Test: F1 ≥ 0.78 on `researched_bull` against a 300-post eval set
+- Test: F1 ≥ 0.78 on direction-axis accuracy against a 300-post eval set
 
 ### Phase 5 — Narrative detection (weeks 10–12)
 

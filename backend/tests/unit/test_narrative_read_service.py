@@ -104,10 +104,10 @@ class TestDocToAcs:
     def test_dominant_signal_fallback_when_unset(self) -> None:
         doc = _doc()
         del doc["dominant_signal"]
-        doc["conviction_researched_bull_ratio"] = 0.7
-        doc["conviction_researched_bear_ratio"] = 0.2
+        doc["conviction_bull_share"] = 0.7
+        doc["conviction_researched_share"] = 0.6
         score = read_service._doc_to_acs(doc)
-        assert score.dominant_signal == "researched_bull"
+        assert score.dominant_signal == "bull_researched"
 
     def test_dominant_signal_unknown_when_no_data(self) -> None:
         doc = _doc()
@@ -201,7 +201,10 @@ class TestGetTickerDetail:
             unique_authors_14d=18,
             gini_14d=0.41,
             contributor_count_growth_7d=0.35,
-            conviction_researched_bull_ratio=0.6,
+            conviction_bull_researched_share=0.4,
+            conviction_bear_researched_share=0.1,
+            conviction_bull_share=0.6,
+            conviction_researched_share=0.5,
             conviction_classified_14d=12,
         )
 
@@ -216,7 +219,7 @@ class TestGetTickerDetail:
         assert detail.daily_buckets[0].count == 4
         assert detail.tier2_pct == 0.5
         assert detail.mentions_14d == 42
-        assert detail.conviction_researched_bull_ratio == 0.6
+        assert detail.conviction_bull_researched_share == 0.4
 
     def test_ticker_not_tracked(self) -> None:
         with patch.object(read_service, "query_ticker", return_value=None):
@@ -234,7 +237,7 @@ class TestGetTickerDetail:
         assert detail.daily_buckets == []
         assert detail.tier1_pct == 0.0
         assert detail.mentions_14d == 0
-        assert detail.conviction_dd_norm is None
+        assert detail.conviction_bull_researched_share is None
 
 
 # ---------- get_narrative / get_alerts (still 503 in Phase 6) ----------

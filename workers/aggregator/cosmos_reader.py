@@ -60,14 +60,16 @@ class CosmosReader:
     def signals_for_ticker(self, ticker: str, reference_date: date) -> list[dict]:
         """Return all signals for a ticker in the last 30 days, ordered ascending.
 
-        Includes conviction_state (Phase 4) when present so build_snapshot can
-        roll it up into conviction_*_ratio fields. Signals without a
-        conviction_state still feed mention/sentiment metrics.
+        Includes the four conviction axis fields (ADR-0020) when present so
+        ``build_snapshot`` can roll them up into marginal + joint shares.
+        Signals without axis fields still feed mention / sentiment metrics.
         """
         cutoff_utc = _date_to_utc_epoch(reference_date - timedelta(days=_WINDOW_DAYS))
         query = (
             "SELECT c.ticker, c.sentiment, c.confidence, c.rationale, "
-            "c.authorHash, c.createdUtc, c.subreddit, c.flair, c.conviction_state "
+            "c.authorHash, c.createdUtc, c.subreddit, c.flair, "
+            "c.conviction_direction, c.conviction_substance, "
+            "c.conviction_driver, c.conviction_position "
             "FROM c "
             "WHERE c.ticker = @ticker AND c.createdUtc >= @cutoff "
             "ORDER BY c.createdUtc ASC"
@@ -94,7 +96,10 @@ class CosmosReader:
                 "author_hash": doc.get("authorHash", ""),
                 "created_utc": int(doc.get("createdUtc", 0)),
                 "flair": doc.get("flair"),
-                "conviction_state": doc.get("conviction_state"),
+                "conviction_direction": doc.get("conviction_direction"),
+                "conviction_substance": doc.get("conviction_substance"),
+                "conviction_driver": doc.get("conviction_driver"),
+                "conviction_position": doc.get("conviction_position"),
             })
         return normalised
 

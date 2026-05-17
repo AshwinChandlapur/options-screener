@@ -32,9 +32,11 @@ class CosmosTimelineWriter:
         "lifecycle_stage", "stage_confidence",
         "dominant_signal",
         "tier1_pct", "tier2_pct", "tier3_pct",
-        "conviction_researched_bull_ratio", "conviction_researched_bear_ratio",
-        "conviction_emotional_bull_ratio", "conviction_dd_norm",
-        "conviction_classified_14d",
+        # Conviction shares are written by the aggregator itself on every run,
+        # so they do not need to be preserved here — they're provided in the
+        # incoming snapshot. Legacy conviction_*_ratio fields (ADR-0021
+        # retired) are intentionally NOT preserved: stale docs shed them on
+        # the next aggregator run.
     })
 
     @retry(

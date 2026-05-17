@@ -61,7 +61,7 @@ Reddit (17 subreddits, 3 tiers)
 │ (30-min cron)   │  conviction state +    │ detector            │
 │                 │  embedding             │ (hourly cron)       │
 └────────┬────────┘                        └──────────┬──────────┘
-         │  signals.conviction_state                  │  ticker_timeline
+         │  signals.conviction_direction              │  ticker_timeline
          │  signals.embedding                         │  lifecycle_stage
          │  (written back to signals)                 │  stage_confidence
          └──────────────┬─────────────────────────────┘
@@ -245,7 +245,7 @@ Output document shape (signals container):
   id, ticker, sentiment, confidence, rationale,
   postId, subreddit, flair, authorHash, createdUtc,
   source, extractedAt
-  [conviction_state, embedding added by Phase 4/5 classifier]
+  [conviction axes + embedding added by Phase 4/5 classifier]
 ```
 
 ### How
@@ -320,11 +320,11 @@ from `signals` and fully recomputes from scratch.
 │  │  §2.5 Composite                                                  │    │
 │  │    attention_quality = 0.35·P + 0.25·D + 0.25·Dp + 0.15·A     │    │
 │  │                                                                  │    │
-│  │  §3 Conviction rollup (if classifier has run)                   │    │
-│  │    conviction_researched_bull_ratio                              │    │
-│  │    conviction_researched_bear_ratio                              │    │
-│  │    conviction_emotional_bull_ratio                               │    │
-│  │    conviction_dd_norm  ← weighted mean of §3 state weights      │    │
+│  │  §3 Conviction axes (if axis-aware classifier has run)          │    │
+│  │    Marginals: bull_share, researched_share,                     │    │
+│  │               entering_share, exiting_share, driver_top         │    │
+│  │    Joints:    bull_researched_share, bear_researched_share      │    │
+│  │    Count:     conviction_classified_14d                         │    │
 │  │                                                                  │    │
 │  │  Tier pcts                                                       │    │
 │  │    tier1_pct, tier2_pct, tier3_pct  ← subreddit tier fractions  │    │
@@ -361,7 +361,7 @@ Full recompute every run — no incremental state. This is correct because:
 ### What
 
 `job-classifier` is a **30-minute cron** Container Apps Job. It processes
-unclassified signals from Cosmos — those without a `conviction_state` field —
+unclassified signals from Cosmos — those without a `conviction_direction` field —
 and makes **two OpenAI calls per signal**: one for conviction classification
 (GPT-4o-mini, structured output) and one for embedding generation
 (`text-embedding-ada-002`, 1536-dim). Both are written back to the signal
@@ -375,22 +375,24 @@ conviction state write.
 │  ┌─────────────────────────────────────────────────────────────────┐     │
 │  │  1. Fetch unclassified signals (batches of 50, up to 200/run)   │     │
 │  │     SELECT ... FROM c                                           │     │
-│  │     WHERE NOT IS_DEFINED(c.conviction_state)                    │     │
+│  │     WHERE NOT IS_DEFINED(c.conviction_direction)                │     │
 │  └───────────────────────┬─────────────────────────────────────────┘     │
 │                          │  for each signal:                            │
 │                          ▼                                               │
 │  ┌─────────────────────────────────────────────────────────────────┐     │
 │  │  2a. GPT-4o-mini conviction classification                      │     │
 │  │      Prompt (stored in KV as conviction-prompt-v1):             │     │
-│  │      "classify this text into one of 10 states..."              │     │
-│  │      → conviction_state, conviction_confidence                  │     │
+│  │      "classify this text along 4 axes (ADR-0020)..."            │     │
+│  │      → conviction_direction, conviction_substance,              │     │
+│  │        conviction_driver, conviction_position,                  │     │
+│  │        conviction_confidence                                    │     │
 │  │                                                                  │     │
-│  │      10 states (§3):                                            │     │
-│  │      researched_bull (1.0) | researched_bear (1.0)              │     │
-│  │      emotional_bull (0.4)  | emotional_bear (0.4)               │     │
-│  │      uncertainty (0.0)     | earnings_focused (0.8)             │     │
-│  │      product_thesis (0.8)  | ecosystem_thesis (0.8)             │     │
-│  │      institutional_watch (0.9) | exit_signal (-0.5)             │     │
+│  │      Axes (§3):                                                 │     │
+│  │      direction:  bull | bear                                    │     │
+│  │      substance:  researched | emotional                         │     │
+│  │      driver:     earnings | product | macro | flows |           │     │
+│  │                  valuation | other                              │     │
+│  │      position:   entering | holding | exiting | unstated        │     │
 │  └─────────────────┬───────────────────────────────────────────────┘     │
 │                    │  (soft-fail: embedding error ≠ block conviction)    │
 │                    ▼                                                      │
@@ -403,7 +405,9 @@ conviction state write.
 │                          ▼                                               │
 │  ┌─────────────────────────────────────────────────────────────────┐     │
 │  │  3. Single upsert back to signals document                      │     │
-│  │     conviction_state, conviction_confidence,                    │     │
+│  │     conviction_direction, conviction_substance,                 │     │
+│  │     conviction_driver, conviction_position,                     │     │
+│  │     conviction_confidence,                                      │     │
 │  │     embedding, embedding_model                                  │     │
 │  └─────────────────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -411,7 +415,7 @@ conviction state write.
 
 ### How
 
-- **Idempotent**: `WHERE NOT IS_DEFINED(c.conviction_state)` means already-
+- **Idempotent**: `WHERE NOT IS_DEFINED(c.conviction_direction)` means already-
   classified signals are never re-processed.
 - **Soft-fail on embedding**: conviction state is always written, even if the
   embedding API call fails. A backfill loop on the next cron picks up
@@ -467,14 +471,16 @@ rules to assign `lifecycle_stage` and `stage_confidence` to today's
 │  │  4. assign_stage() — pure function                              │     │
 │  │     inputs: tier1_pct, financial_term_density, dd_post_ratio,   │     │
 │  │             gini_14d, contributor_count_growth_7d,              │     │
-│  │             conviction_emotional_bull_ratio                      │     │
+│  │             conviction_bull_share, conviction_researched_share  │     │
 │  │     rules evaluated in order 1→2→3→5→6 (last match wins):      │     │
 │  │       stage 1: tier1_pct < 0.20 AND ftd ≥ 0.15                │     │
 │  │       stage 2: tier1_pct ∈ [0.20,0.50] AND dd ≥ 0.10          │     │
 │  │                AND gini < 0.45                                  │     │
 │  │       stage 3: contributor_count_growth_7d ≥ 0.30             │     │
-│  │       stage 5: emotional_bull ≥ 0.50 AND gini < 0.30          │     │
-│  │       stage 6: emotional_bull ≥ 0.65 AND gini ≥ 0.55          │     │
+│  │       stage 5: bull_share ≥ 0.65 AND researched_share < 0.40  │     │
+│  │                AND gini < 0.30                                  │     │
+│  │       stage 6: bull_share ≥ 0.75 AND researched_share < 0.30  │     │
+│  │                AND gini ≥ 0.55                                  │     │
 │  │     catch-all: stage 1 with confidence × 0.4                   │     │
 │  └───────────────────────┬─────────────────────────────────────────┘     │
 │                          ▼                                               │
@@ -529,7 +535,7 @@ bands via bootstrap, and writes the score back to the same document.
 │  │  B = min(authors/log(mentions) × (1-G) × B_max, B_max)         │     │
 │  │      0 when mentions ≤ 1                                        │     │
 │  │  C = stage_map[stage] / 20 × stage_confidence × C_max          │     │
-│  │  D = max(0, min(0.6·r_rb + 0.2·r_rB + 0.2·conv_norm, 1)) × D_max │  │
+│  │  D = min(0.6·s_br + 0.2·s_Br, 1) × D_max                          │  │
 │  │  E = 0  (deferred to Phase 6.1)                                 │     │
 │  │                                                                  │     │
 │  │  ACS_raw = A + B + C + D                                        │     │
@@ -672,8 +678,8 @@ container it does not own.
 |---|---|---|---|
 | `job-ingestor` | Arctic Shift API | EH `reddit-raw-events`, Blob `reddit-raw/` | `post_id`, `body`, `authorHash`, `createdUtc`, `subreddit`, `flair` |
 | `job-extractor` | EH `reddit-raw-events`, `signals` (dedup check) | `signals` | `ticker`, `sentiment`, `confidence`, `rationale`, `postId`, `extractedAt` |
-| `job-aggregator` | `signals` | `ticker_timeline` | `dwd_14d`, `gini_14d`, `acceleration_7d`, `dd_post_ratio`, `financial_term_density`, `conviction_*_ratio`, `conviction_dd_norm`, `daily_buckets`, `attention_quality` |
-| `job-classifier` | `signals` (unclassified) | `signals` | `conviction_state`, `conviction_confidence`, `embedding`, `embedding_model` |
+| `job-aggregator` | `signals` | `ticker_timeline` | `dwd_14d`, `gini_14d`, `acceleration_7d`, `dd_post_ratio`, `financial_term_density`, `conviction_*_share`, `conviction_*_researched_share`, `daily_buckets`, `attention_quality` |
+| `job-classifier` | `signals` (unclassified) | `signals` | `conviction_direction`, `conviction_substance`, `conviction_driver`, `conviction_position`, `conviction_confidence`, `embedding`, `embedding_model` |
 | `job-narrative-detector` | `signals` (embeddings), `ticker_timeline` (attention fields) | `ticker_timeline` | `lifecycle_stage`, `stage_confidence`, `dominant_cluster_fraction` |
 | `job-acs-scorer` | `ticker_timeline`, Key Vault `acs-component-weights` | `ticker_timeline` | `acs`, `acs_ci_lower`, `acs_ci_upper`, `decay_acs`, `acs_components`, `acs_flags`, `acs_scored_at` |
 | FastAPI `/api/narrative/*` | `ticker_timeline` | — | (read-only) |
@@ -734,7 +740,7 @@ classifier enriches it in-place.
 
 | Field | Type | Written by | Meaning |
 |---|---|---|---|
-| `sentiment` | str | Extractor | GPT-4o-mini's top-level read: `"bullish"`, `"bearish"`, or `"neutral"`. Coarser than `conviction_state` — used for quick ratio rollups in the aggregator before the classifier has run. |
+| `sentiment` | str | Extractor | GPT-4o-mini's top-level read: `"bullish"`, `"bearish"`, or `"neutral"`. Coarser than the conviction axes — used for quick ratio rollups in the aggregator before the classifier has run. |
 | `confidence` | float `[0,1]` | Extractor | How confident GPT-4o-mini is in its own extraction (self-reported). Values below 0.5 are treated as low-signal by the aggregator's `avg_confidence` rollup. |
 | `rationale` | str | Extractor | One-sentence justification extracted from the post body (e.g. `"Strong Q1 data-center beat; FCF guide raised"`). Used as the embedding input for the classifier, and displayed in the UI detail panel. |
 | `extractedAt` | str (ISO 8601) | Extractor | UTC timestamp when the OpenAI extraction call completed. Separate from `createdUtc` so latency between posting and extraction can be monitored. |
@@ -750,27 +756,18 @@ classifier enriches it in-place.
 
 #### Conviction and embedding (Phase 4 — added by classifier)
 
+ADR-0020 / ADR-0021 — the classifier emits four independent axes plus a
+confidence score. There is no longer a derived single-state field.
+
 | Field | Type | Written by | Meaning |
 |---|---|---|---|
-| `conviction_state` | str \| absent | Classifier | One of 10 fine-grained states (see table below). `absent` on documents not yet classified — the classifier uses `WHERE NOT IS_DEFINED(c.conviction_state)` to find unclassified documents. |
-| `conviction_confidence` | float \| absent | Classifier | Classifier's self-reported confidence in the assigned state. Values ≥ 0.80 are considered reliable; the aggregator weights them equally regardless (no threshold cut-off). |
+| `conviction_direction` | `"bull"` \| `"bear"` \| absent | Classifier | Net stance on the ticker. `absent` on documents not yet classified — the classifier uses `WHERE NOT IS_DEFINED(c.conviction_direction)` to find unclassified documents. |
+| `conviction_substance` | `"researched"` \| `"emotional"` \| absent | Classifier | Whether the post contains analytical substance or is hype / momentum. |
+| `conviction_driver` | `"earnings"` \| `"product"` \| `"macro"` \| `"flows"` \| `"valuation"` \| `"other"` \| absent | Classifier | What the post is reacting to. |
+| `conviction_position` | `"entering"` \| `"holding"` \| `"exiting"` \| `"unstated"` \| absent | Classifier | Lifecycle of the author's own trade. |
+| `conviction_confidence` | float `[0,1]` \| absent | Classifier | Classifier's self-reported confidence in the axis assignment. |
 | `embedding` | float[1536] \| null | Classifier | `text-embedding-ada-002` vector of the `rationale` text. `null` on soft-fail (embedding API error); backfilled on the next classifier run. The narrative detector skips documents where this is `null`. |
 | `embedding_model` | str \| absent | Classifier | Model name that produced the embedding (e.g. `"text-embedding-ada-002"`). Stored so future embedding model migrations can filter by generation. |
-
-**The 10 conviction states:**
-
-| State | §3 weight | What it means |
-|---|---|---|
-| `researched_bull` | 1.0 | Bullish view backed by quantitative or fundamental analysis |
-| `researched_bear` | 1.0 | Bearish view backed by quantitative or fundamental analysis |
-| `emotional_bull` | 0.4 | Bullish but driven by hype, FOMO, or crowd momentum |
-| `emotional_bear` | 0.4 | Bearish but driven by panic or reflexive negativity |
-| `uncertainty` | 0.0 | Poster is undecided or explicitly sitting out |
-| `earnings_focused` | 0.8 | Thesis anchored to a specific earnings event |
-| `product_thesis` | 0.8 | Thesis anchored to a product launch or pipeline |
-| `ecosystem_thesis` | 0.8 | Thesis about the broader sector or supply chain |
-| `institutional_watch` | 0.9 | Reports institutional activity: filings, block trades, option flow |
-| `exit_signal` | −0.5 | Poster reports closing or reducing a position |
 
 ---
 
@@ -847,20 +844,24 @@ every cron run; prior-day documents accumulate as history.
 | Field | Type | Written by | Meaning |
 |---|---|---|---|
 | `tier1_pct` | float `[0,1]` | Aggregator | Fraction of 14d signals from tier-1 subreddits (investing, stocks, SecurityAnalysis, ValueInvesting, Bogleheads). Higher = more fundamentally-oriented discussion. Used in stage-1 and stage-2 detection thresholds. |
-| `tier2_pct` | float `[0,1]` | Aggregator | Fraction from tier-2 subreddits (wallstreetbets, options, pennystocks, …). Higher = more retail/emotional crowd. Feeds `conviction_emotional_bull_ratio` stage rules. |
+| `tier2_pct` | float `[0,1]` | Aggregator | Fraction from tier-2 subreddits (wallstreetbets, options, pennystocks, …). Higher = more retail/emotional crowd. Correlates with low `conviction_researched_share`. |
 | `tier3_pct` | float `[0,1]` | Aggregator | Fraction from tier-3 sector-specific subreddits (artificial, SemiConductors, biotech, …). Higher = niche enthusiast discussion rather than broad retail. |
 
-#### Conviction ratios (aggregated from Phase 4 classifier output)
+#### Conviction axes (aggregated from Phase 4 classifier output)
 
-These are `null` until the classifier has processed at least one signal for this ticker.
+These are `null` until the axis-aware classifier has labelled at least one
+signal for this ticker in the 14d window.
 
 | Field | Type | Written by | Meaning |
 |---|---|---|---|
-| `conviction_researched_bull_ratio` | float \| null | Aggregator | Fraction of classified signals (14d) with `conviction_state = "researched_bull"`. ACS component D weights this at 0.60. |
-| `conviction_researched_bear_ratio` | float \| null | Aggregator | Same for `"researched_bear"`. ACS component D weights this at 0.20 (negative direction). |
-| `conviction_emotional_bull_ratio` | float \| null | Aggregator | Same for `"emotional_bull"`. Stage-5 and stage-6 detection use this field directly. |
-| `conviction_dd_norm` | float \| null | Aggregator | Weighted mean of conviction state weights (§3 column) across all classified signals in the 14d window. Range `[−0.5, 1.0]`. ACS component D weights this at 0.20. `null` until classified. |
-| `conviction_classified_14d` | int \| null | Aggregator | Count of signals in the 14d window that have been classified. The denominator for the ratios above. |
+| `conviction_bull_share` | float \| null | Aggregator | Fraction of classified 14d signals with `conviction_direction = "bull"`. Feeds stage-5 / stage-6 lifecycle rules. |
+| `conviction_researched_share` | float \| null | Aggregator | Fraction with `conviction_substance = "researched"`. Feeds stage-5 / stage-6 lifecycle rules. |
+| `conviction_entering_share` | float \| null | Aggregator | Fraction with `conviction_position = "entering"`. UI-only — trajectory signal for crowding. |
+| `conviction_exiting_share` | float \| null | Aggregator | Fraction with `conviction_position = "exiting"`. UI-only — early warning for thesis dissolution. |
+| `conviction_driver_top` | str \| null | Aggregator | Most-common non-`"other"` driver across classified signals (`"earnings"`, `"product"`, …). `"other"` on tie or all-other. |
+| `conviction_bull_researched_share` | float \| null | Aggregator | Joint share: fraction where `direction=bull` AND `substance=researched`. ACS component D weights this at 0.60. *Not* derivable from the marginals — see ADR-0021. |
+| `conviction_bear_researched_share` | float \| null | Aggregator | Joint share: fraction where `direction=bear` AND `substance=researched`. ACS component D weights this at 0.20. |
+| `conviction_classified_14d` | int \| null | Aggregator | Count of signals in the 14d window that have been axis-classified. The denominator for the shares above. |
 
 #### Phase 5 — Lifecycle stage (added by narrative detector)
 
@@ -915,7 +916,7 @@ you want the broadest view regardless of stage.
 
 **Emerging (stages 1–3)** — filtered to tickers in the target lifecycle window
 and sorted by `decay_acs` (recency-weighted). This is the primary signal list
-for finding early opportunities.
+for finding  early opportunities.
 
 **Alerts** — fired when ACS crosses a threshold or a stage transition is
 detected. Each alert shows the ticker, type, and time.
@@ -931,7 +932,7 @@ detected. Each alert shows the ticker, type, and time.
 | **Decay** | ACS after a time-decay penalty (λ=0.07/day, half-life ≈10 days). | If Decay is much lower than ACS, the most recent scoring run is old — treat the score as stale. |
 | **Stage** | Lifecycle stage 1–6 as a colour badge. Hover for the description. | 🟢 Stages 2–3 are the target window. 🟡 Stage 4 = late, partial signal. 🔴 Stages 5–6 = avoid. |
 | **Components** | Five pills labelled A–E, each showing its sub-score. | See the component table below. A zero pill (greyed out) is a drag on the total. |
-| **Signal** | Dominant conviction signal extracted by the classifier (e.g. `"researched_bull"`). | The single most prevalent `conviction_state` across recent posts. |
+| **Signal** | Dominant conviction signal derived from the axis classifier (e.g. `"bull_researched"`). | Compound label from `direction×substance` axes; one of `bull_researched` / `bear_researched` / `bull_emotional` / `bear_emotional` (ADR-0021). |
 | **Flags** | Active haircuts that reduced the ACS. | See the flags table below. A ticker with no flags hit its score cleanly. |
 
 **Sort any column** by clicking its header. ACS descending is the default.
@@ -947,7 +948,7 @@ ACS = A + B + C + D + E, max 100 (E is 0 in the current release).
 | **A** — Attention persistence | 25 | Decay-weighted mention density over 14 days | Discussion has been sustained and recent, not a one-day spike |
 | **B** — Contributor quality | 20 | Author breadth relative to volume, penalised by Gini concentration | Many distinct authors posting, not one person flooding | 
 | **C** — Narrative strength | 20 | Lifecycle stage × stage confidence (from HDBSCAN cluster coherence) | Narratives have coalesced into a coherent thesis cluster |
-| **D** — Thesis quality | 20 | Researched bull/bear ratios + DD intensity (conviction_dd_norm) | Significant fraction of posts are analytical, not emotional |
+| **D** — Thesis quality | 20 | Joint shares: `bull_researched` (0.6) + `bear_researched` (0.2) | Significant fraction of posts are analytical, not emotional |
 | **E** — Market confirmation | 15 | Price / options flow confirmation *(not yet implemented — always 0)* | — |
 
 A strong ACS score is one where **A, B, and D are all meaningful** — sustained

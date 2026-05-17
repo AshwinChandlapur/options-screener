@@ -107,26 +107,47 @@ export function TickerDetailPanel({ detail, loading, error, onClose }: TickerDet
       </div>
 
       <h4>What are people saying?</h4>
-      <div className="panel-row">
-        <span className="label" title="Posts with real analysis: DCF, earnings data, competitive moats">Bullish — analytical</span>
-        <span className="value">{fmtPct(detail.conviction_researched_bull_ratio)}</span>
-      </div>
-      <div className="panel-row">
-        <span className="label" title="Critical analysis: short thesis, valuation concern, risk factors">Bearish — analytical</span>
-        <span className="value">{fmtPct(detail.conviction_researched_bear_ratio)}</span>
-      </div>
-      <div className="panel-row">
-        <span className="label" title="Bullish posts driven by price momentum, FOMO, or excitement rather than research">Bullish — hype-driven</span>
-        <span className="value">{fmtPct(detail.conviction_emotional_bull_ratio)}</span>
-      </div>
-      <div className="panel-row">
-        <span className="label" title="Overall quality of analysis on a scale of -0.5 to 1.0. Above 0.5 = strong analytical signal.">Analysis depth</span>
-        <span className="value">{fmtNum(detail.conviction_dd_norm)}</span>
-      </div>
-      <div className="panel-row">
-        <span className="label" title="Number of posts that have been analysed. Fewer than 10 makes percentages unreliable.">Posts analysed</span>
-        <span className="value">{detail.conviction_classified_14d ?? '—'}</span>
-      </div>
+      {detail.conviction_bull_share !== null ? (
+        <>
+          <div className="panel-row">
+            <span className="label" title="Share of classified posts where the author leans bullish (ADR-0020 direction axis).">Direction — bull</span>
+            <span className="value">{fmtPct(detail.conviction_bull_share)}</span>
+          </div>
+          <div className="panel-row">
+            <span className="label" title="Share of classified posts that contain substantive analysis vs hype (ADR-0020 substance axis).">Substance — researched</span>
+            <span className="value">{fmtPct(detail.conviction_researched_share)}</span>
+          </div>
+          <div className="panel-row">
+            <span className="label" title="Share of classified posts where the author is entering a new position (ADR-0020 position axis).">Position — entering</span>
+            <span className="value">{fmtPct(detail.conviction_entering_share)}</span>
+          </div>
+          <div className="panel-row">
+            <span className="label" title="Share of classified posts where the author is exiting a position (ADR-0020 position axis).">Position — exiting</span>
+            <span className="value">{fmtPct(detail.conviction_exiting_share)}</span>
+          </div>
+          <div className="panel-row">
+            <span className="label" title="Most-common driver across classified posts: earnings, product, macro, flows, valuation, or other (ADR-0020 driver axis).">Top driver</span>
+            <span className="value">{detail.conviction_driver_top ?? '—'}</span>
+          </div>
+          <div className="panel-row">
+            <span className="label" title="Joint share: posts that are both bullish AND substantive. Drives ACS Component D (ADR-0021).">Bullish — analytical</span>
+            <span className="value">{fmtPct(detail.conviction_bull_researched_share)}</span>
+          </div>
+          <div className="panel-row">
+            <span className="label" title="Joint share: posts that are both bearish AND substantive. Drives ACS Component D (ADR-0021).">Bearish — analytical</span>
+            <span className="value">{fmtPct(detail.conviction_bear_researched_share)}</span>
+          </div>
+          <div className="panel-row">
+            <span className="label" title="Number of posts that have been classified. Fewer than 10 makes percentages unreliable.">Posts analysed</span>
+            <span className="value">{detail.conviction_classified_14d ?? '—'}</span>
+          </div>
+        </>
+      ) : (
+        <div className="panel-row">
+          <span className="label">Posts analysed</span>
+          <span className="value">—</span>
+        </div>
+      )}
 
       {s.flags.length > 0 && (
         <>

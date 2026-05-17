@@ -99,16 +99,17 @@ class TickerTimelineSnapshot:
     bearish_ratio: float = 0.0         # fraction of signals with sentiment="bearish"
     avg_confidence: float = 0.0        # mean confidence score across all signals in 14d
 
-    # --- Phase 4+ fields (None until conviction classifier runs) ---
-    # Ratios computed over classified signals in the 14d window only.
-    # None = no signals have been classified yet (classifier hasn't run).
-    conviction_researched_bull_ratio: float | None = None
-    conviction_researched_bear_ratio: float | None = None
-    conviction_emotional_bull_ratio: float | None = None
-    # Weighted conviction score: mean(weight[state]) over classified signals.
-    # Range: [-0.5, 1.0] per weights table in §3. None until classified.
-    conviction_dd_norm: float | None = None
-    # Count of classified signals in 14d window (denominator for ratios above).
+    # --- Conviction axes (ADR-0020 / ADR-0021) ---
+    # All None until the axis-aware classifier has tagged at least one signal
+    # in the 14d window. Marginals drive UI + detector; joint shares drive
+    # ACS Component D. See backend/services/narrative/attention.compute_axis_distributions.
+    conviction_bull_share: float | None = None
+    conviction_researched_share: float | None = None
+    conviction_entering_share: float | None = None
+    conviction_exiting_share: float | None = None
+    conviction_driver_top: str | None = None
+    conviction_bull_researched_share: float | None = None
+    conviction_bear_researched_share: float | None = None
     conviction_classified_14d: int | None = None
 
     # --- Phase 5+ fields (None until narrative detector runs) ---
@@ -175,10 +176,14 @@ class TickerDetail:
     unique_authors_14d: int = 0
     gini_14d: float = 0.0
     contributor_count_growth_7d: float = 0.0
-    conviction_researched_bull_ratio: float | None = None
-    conviction_researched_bear_ratio: float | None = None
-    conviction_emotional_bull_ratio: float | None = None
-    conviction_dd_norm: float | None = None
+    # ADR-0020 / ADR-0021 — axis-only conviction view.
+    conviction_bull_share: float | None = None
+    conviction_researched_share: float | None = None
+    conviction_entering_share: float | None = None
+    conviction_exiting_share: float | None = None
+    conviction_driver_top: str | None = None
+    conviction_bull_researched_share: float | None = None
+    conviction_bear_researched_share: float | None = None
     conviction_classified_14d: int | None = None
 
 

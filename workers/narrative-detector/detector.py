@@ -173,8 +173,10 @@ def assign_stage(
         2 — Early conviction:    tier1_pct ∈ [0.20,0.50]  AND dd_post_ratio ≥ 0.10 AND gini < 0.45
         3 — Expanding awareness: contributor_count_growth_7d ≥ 0.30  (tier2 rising proxy)
         4 — Institutional attn:  (not computable at Phase 5 — external_media/analyst data absent)
-        5 — Consensus:           conviction_emotional_bull_ratio ≥ 0.50 AND gini < 0.30
-        6 — Saturation:          conviction_emotional_bull_ratio ≥ 0.65 AND gini_14d ≥ 0.55
+        5 — Consensus:           bull_share ≥ 0.65 AND researched_share < 0.40 AND gini < 0.30
+                                 (ADR-0020 / ADR-0021 — axis-only, no legacy fallback)
+        6 — Saturation:          bull_share ≥ 0.75 AND researched_share < 0.30 AND gini_14d ≥ 0.55
+                                 (ADR-0020 / ADR-0021 — axis-only, no legacy fallback)
     """
     if cluster_result.n_clusters == 0:
         return 0, 0.0
@@ -188,18 +190,21 @@ def assign_stage(
     # contributor_count_growth_7d: week-over-week change in unique contributors,
     # written by the aggregator (workers/aggregator/attention.compute_contributor_growth).
     contributor_growth: float = timeline.get("contributor_count_growth_7d") or 0.0
-    emotional_bull_ratio: float = timeline.get("conviction_emotional_bull_ratio") or 0.0
+    # Axis shares (ADR-0020 / ADR-0021) — None when no signal in the 14d
+    # window has been axis-classified yet. In that case Stages 5/6 do not
+    # fire; the lifecycle stays at whatever Stages 1-3 produce (or catch-all).
+    bull_share: float | None = timeline.get("conviction_bull_share")
+    researched_share: float | None = timeline.get("conviction_researched_share")
 
     # Confidence base = fraction of non-noise signals in dominant cluster,
     # weighted by how cleanly the rule matches.
     base_conf = cluster_result.dominant_fraction
 
     # Rules evaluated in reverse priority (later stages override earlier).
-    # Boundary inequalities use ≥ / ≤ rather than strict > / < so that ratios
-    # landing exactly on a methodology threshold (e.g. emotional_bull_ratio
-    # = 0.50 with a small even-count classified pool) still trigger the
-    # intended stage. Strict inequality made stages flicker at exact-tie
-    # ratios in the experimental data; methodology doc was updated to match.
+    # Boundary inequalities use ≥ / ≤ rather than strict > / < so ratios
+    # landing exactly on a methodology threshold still trigger the intended
+    # stage. Strict inequality made stages flicker at exact-tie ratios in the
+    # experimental data; methodology doc was updated to match.
     stage = 0
     conf = 0.0
 
@@ -221,13 +226,25 @@ def assign_stage(
     # Stage 4 — Institutional attention (requires external_media/analyst data — not Phase 5)
     # Skipped; will be enabled in Phase 6 when scorer provides those fields.
 
-    # Stage 5 — Consensus (emotional bull dominant, concentrated)
-    if emotional_bull_ratio >= 0.50 and gini_14d < 0.30:
+    # Stage 5 — Consensus (lots of bulls, mostly unsubstantive, concentrated)
+    if (
+        bull_share is not None
+        and researched_share is not None
+        and bull_share >= 0.65
+        and researched_share < 0.40
+        and gini_14d < 0.30
+    ):
         stage = 5
         conf = base_conf * 0.85
 
-    # Stage 6 — Saturation (emotional bull very dominant, Gini rising)
-    if emotional_bull_ratio >= 0.65 and gini_14d >= 0.55:
+    # Stage 6 — Saturation (very bull-dominant, low substance, Gini rising)
+    if (
+        bull_share is not None
+        and researched_share is not None
+        and bull_share >= 0.75
+        and researched_share < 0.30
+        and gini_14d >= 0.55
+    ):
         stage = 6
         conf = base_conf * 0.90
 

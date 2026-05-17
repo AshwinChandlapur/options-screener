@@ -6,7 +6,7 @@ Components:
     A  Attention persistence  — decay_weighted_density_14d * A_max
     B  Contributor quality   — unique_authors / log(mentions) * (1-G) * B_max
     C  Narrative strength    — stage_map[stage] * stage_confidence * (C_max / 20)
-    D  Thesis quality        — (0.6*r_rb + 0.2*r_rB + 0.2*conv_norm) * D_max, floored at 0
+    D  Thesis quality        — min(0.6*s_br + 0.2*s_Br, 1) * D_max   (ADR-0021)
     E  Market confirmation   — 0 (deferred to Phase 6.1)
 
 Adjustments (multipliers, in order — §5.3):
@@ -108,16 +108,16 @@ def compute_acs(doc: dict, weights: dict[str, float]) -> AcsResult:
     else:
         comp_c = 0.0
 
-    # --- Component D: thesis quality ---
-    # conv_norm is the §3 weighted-conviction mean over classified 14d signals,
-    # range [-0.5, 1.0]. A wave of exit_signal posts can push thesis_score
-    # negative; we floor comp_d at 0 so every ACS component is bounded in
-    # [0, max] and calibration math stays well-behaved (§5.1).
-    r_rb: float = doc.get("conviction_researched_bull_ratio") or 0.0
-    r_rB: float = doc.get("conviction_researched_bear_ratio") or 0.0
-    conv_norm: float = doc.get("conviction_dd_norm") or 0.0
-    thesis_score = (0.6 * r_rb) + (0.2 * r_rB) + (0.2 * conv_norm)
-    comp_d = max(0.0, min(thesis_score, 1.0)) * d_max
+    # --- Component D: thesis quality (ADR-0021) ---
+    # s_br = P(direction=bull ∧ substance=researched) over classified 14d signals.
+    # s_Br = P(direction=bear ∧ substance=researched). Both are joint shares
+    # written by the aggregator (compute_axis_distributions); they cannot be
+    # derived from the marginal axis ratios. Component D rewards substantive
+    # conviction in either direction — a deeply argued bear case still counts.
+    s_br: float = doc.get("conviction_bull_researched_share") or 0.0
+    s_Br: float = doc.get("conviction_bear_researched_share") or 0.0
+    thesis_score = (0.6 * s_br) + (0.2 * s_Br)
+    comp_d = min(max(thesis_score, 0.0), 1.0) * d_max
 
     # --- Component E: market confirmation (§5.1, §6) ---
     # Sub-signals are pre-populated by main.py via get_market_confirmation();
@@ -204,20 +204,26 @@ def _days_since(iso_str: str) -> float:
 
 
 def _dominant_signal(doc: dict) -> str:
-    """Return the conviction state label with the highest ratio, or 'unknown'."""
-    candidates = {
-        "researched_bull": doc.get("conviction_researched_bull_ratio") or 0.0,
-        "researched_bear": doc.get("conviction_researched_bear_ratio") or 0.0,
-        "emotional_bull":  doc.get("conviction_emotional_bull_ratio") or 0.0,
-    }
-    # Also consider raw sentiment if conviction hasn't run yet.
-    if all(v == 0.0 for v in candidates.values()):
-        bullish: float = doc.get("bullish_ratio") or 0.0
-        bearish: float = doc.get("bearish_ratio") or 0.0
-        if bullish > 0 or bearish > 0:
-            return "bullish" if bullish >= bearish else "bearish"
-        return "unknown"
-    return max(candidates, key=lambda k: candidates[k])
+    """Return the compound axis label (direction×substance) for this doc.
+
+    ADR-0021 — derived from axis marginals only. Returns one of
+    ``bull_researched`` / ``bull_emotional`` / ``bear_researched`` /
+    ``bear_emotional``. Falls back to the raw sentiment polarity
+    (``bullish`` / ``bearish``) when no axis data is available, and
+    ``unknown`` when nothing has been classified at all.
+    """
+    bull = doc.get("conviction_bull_share")
+    researched = doc.get("conviction_researched_share")
+    if bull is not None and researched is not None:
+        direction = "bull" if bull >= 0.5 else "bear"
+        substance = "researched" if researched >= 0.5 else "emotional"
+        return f"{direction}_{substance}"
+
+    bullish: float = doc.get("bullish_ratio") or 0.0
+    bearish: float = doc.get("bearish_ratio") or 0.0
+    if bullish > 0 or bearish > 0:
+        return "bullish" if bullish >= bearish else "bearish"
+    return "unknown"
 
 
 def _is_decelerating_streak(daily_buckets: list, streak_days: int) -> bool:

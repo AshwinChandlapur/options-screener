@@ -52,9 +52,8 @@ def _doc(**overrides: object) -> dict:
         "gini_14d": 0.0,
         "lifecycle_stage": 0,
         "stage_confidence": 0.0,
-        "conviction_researched_bull_ratio": 0.0,
-        "conviction_researched_bear_ratio": 0.0,
-        "conviction_dd_norm": 0.0,
+        "conviction_bull_researched_share": 0.0,
+        "conviction_bear_researched_share": 0.0,
         "acceleration_7d": 0.0,
         "computed_at": datetime.now(tz=timezone.utc).isoformat(),
         # Component E sub-signals (pre-populated by main.py via get_market_confirmation)
@@ -154,34 +153,31 @@ class TestComponentD:
     def test_weighted_average_formula(self) -> None:
         result = compute_acs(
             _doc(
-                conviction_researched_bull_ratio=0.5,
-                conviction_researched_bear_ratio=0.5,
-                conviction_dd_norm=0.5,
+                conviction_bull_researched_share=0.5,
+                conviction_bear_researched_share=0.5,
             ),
             DEFAULT_WEIGHTS,
         )
-        # 0.6*0.5 + 0.2*0.5 + 0.2*0.5 = 0.5 → 0.5 * 20 = 10
-        assert result.components["D"] == pytest.approx(10.0)
+        # 0.6*0.5 + 0.2*0.5 = 0.4 → 0.4 * 20 = 8
+        assert result.components["D"] == pytest.approx(8.0)
 
     def test_clipped_to_d_max(self) -> None:
         result = compute_acs(
             _doc(
-                conviction_researched_bull_ratio=2.0,
-                conviction_researched_bear_ratio=2.0,
-                conviction_dd_norm=2.0,
+                conviction_bull_researched_share=2.0,
+                conviction_bear_researched_share=2.0,
             ),
             DEFAULT_WEIGHTS,
         )
         assert result.components["D"] == pytest.approx(20.0)
 
-    def test_floored_at_zero_for_exit_signal_dominant(self) -> None:
-        """conv_norm < 0 (e.g. exit_signal-heavy 14d window) must not push
-        Component D negative — every ACS component is bounded in [0, max]."""
+    def test_floored_at_zero_when_shares_zero(self) -> None:
+        """Both joint shares are bounded in [0, 1]; D therefore lives in
+        [0, D_max]. With no researched signal the component is exactly 0."""
         result = compute_acs(
             _doc(
-                conviction_researched_bull_ratio=0.0,
-                conviction_researched_bear_ratio=0.0,
-                conviction_dd_norm=-0.5,  # all exit_signal extreme
+                conviction_bull_researched_share=0.0,
+                conviction_bear_researched_share=0.0,
             ),
             DEFAULT_WEIGHTS,
         )
@@ -251,7 +247,7 @@ class TestAdjustments:
             mentions_14d=10,                 # B clipped to 20
             lifecycle_stage=3,
             stage_confidence=1.0,            # C=20
-            conviction_researched_bull_ratio=1.0,  # D=12
+            conviction_bull_researched_share=1.0,  # D=12 (0.6 * 1.0 * 20)
         )
         base.update(overrides)
         return base
@@ -366,9 +362,8 @@ class TestBoundsAndCi:
                 mentions_14d=10,
                 lifecycle_stage=3,
                 stage_confidence=1.0,
-                conviction_researched_bull_ratio=1.0,
-                conviction_dd_norm=1.0,
-                conviction_researched_bear_ratio=1.0,
+                conviction_bull_researched_share=1.0,
+                conviction_bear_researched_share=1.0,
             ),
             DEFAULT_WEIGHTS,
         )
@@ -413,9 +408,8 @@ class TestBoundsAndCi:
                 mentions_14d=10,
                 lifecycle_stage=3,
                 stage_confidence=1.0,
-                conviction_researched_bull_ratio=1.0,
-                conviction_dd_norm=1.0,
-                conviction_researched_bear_ratio=1.0,
+                conviction_bull_researched_share=1.0,
+                conviction_bear_researched_share=1.0,
             ),
             DEFAULT_WEIGHTS,
         )
@@ -467,15 +461,22 @@ class TestTimeDecay:
 
 
 class TestDominantSignal:
-    def test_picks_highest_ratio(self) -> None:
+    def test_compound_label_from_axes_when_present(self) -> None:
+        # bull ≥ 0.5 ∧ researched ≥ 0.5 → bull_researched.
         doc = _doc(
-            conviction_researched_bull_ratio=0.6,
-            conviction_researched_bear_ratio=0.2,
-            conviction_emotional_bull_ratio=0.1,
+            conviction_bull_share=0.8,
+            conviction_researched_share=0.7,
         )
-        assert _dominant_signal(doc) == "researched_bull"
+        assert _dominant_signal(doc) == "bull_researched"
 
-    def test_falls_back_to_sentiment_when_no_conviction(self) -> None:
+    def test_bear_emotional_when_low_bull_low_researched(self) -> None:
+        doc = _doc(
+            conviction_bull_share=0.2,
+            conviction_researched_share=0.3,
+        )
+        assert _dominant_signal(doc) == "bear_emotional"
+
+    def test_falls_back_to_sentiment_when_no_axes(self) -> None:
         doc = {"bullish_ratio": 0.7, "bearish_ratio": 0.3}
         assert _dominant_signal(doc) == "bullish"
 

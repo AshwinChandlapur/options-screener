@@ -9,10 +9,29 @@ Tests cover:
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# Ensure worker modules resolve flat (same pattern as test_classifier.py).
+_WORKER_ROOT = str(Path(__file__).resolve().parent.parent)
+if _WORKER_ROOT not in sys.path:
+    sys.path.insert(0, _WORKER_ROOT)
+
+from classifier import ConvictionAxes  # noqa: E402
+
+
+def _make_axes(
+    direction: str = "bull",
+    substance: str = "researched",
+    driver: str = "earnings",
+    position: str = "entering",
+    confidence: float = 0.9,
+) -> ConvictionAxes:
+    return ConvictionAxes(direction, substance, driver, position, confidence)
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +68,7 @@ def patches(fake_secrets):
         p_cosmos_cls.return_value = cosmos
 
         clf = MagicMock()
-        clf.classify.return_value = ("researched_bull", 0.9)
+        clf.classify.return_value = _make_axes()
         p_clf_cls.return_value = clf
 
         embedder = MagicMock()
@@ -122,7 +141,7 @@ def test_main_does_not_exit_when_some_classified(patches) -> None:
         [],
     ]
     # First succeeds, second raises
-    patches.clf.classify.side_effect = [("researched_bull", 0.9), RuntimeError("x")]
+    patches.clf.classify.side_effect = [_make_axes(), RuntimeError("x")]
 
     # Should NOT raise SystemExit
     main()
@@ -157,8 +176,8 @@ def test_backfill_runs_when_main_loop_empty(patches) -> None:
     patches.cosmos.fetch_unclassified.return_value = []
     patches.cosmos.fetch_missing_embeddings.side_effect = [
         [
-            {"id": "old1", "rationale": "r1", "conviction_state": "researched_bull"},
-            {"id": "old2", "rationale": "r2", "conviction_state": "emotional_bull"},
+            {"id": "old1", "rationale": "r1", "conviction_direction": "bull"},
+            {"id": "old2", "rationale": "r2", "conviction_direction": "bull"},
         ],
         [],
     ]
