@@ -1,0 +1,85 @@
+name: Screener — Worker build & deploy
+
+# Builds the screener precomputation worker image from the repo root
+# (the Dockerfile copies backend/ + workers/screener/) and updates all three
+# Container Apps Jobs (CSP, CC, DITM) with the new image.
+#
+# Required repo secrets:
+#   AZURE_CREDENTIALS      — service principal JSON (Contributor on RG)
+#   AZURE_RESOURCE_GROUP   — resource group name (e.g. options-rg)
+#   GHCR_PAT               — GitHub PAT with packages:write
+#
+# Required repo variables (Settings → Variables → Actions):
+#   GHCR_IMAGE_SCREENER    — e.g. ghcr.io/<owner>/options-screener-worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/screener/**'
+      - 'backend/services/**'
+      - 'backend/requirements.txt'
+      - '.github/workflows/screener-worker.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: screener-worker
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate image variable
+        run: |
+          [ -n "${{ vars.GHCR_IMAGE_SCREENER }}" ] \
+            || { echo "::error::GHCR_IMAGE_SCREENER is empty — set it under Settings → Variables → Actions"; exit 1; }
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: workers/screener/Dockerfile
+          push: true
+          no-cache: true
+          tags: |
+            ${{ vars.GHCR_IMAGE_SCREENER }}:${{ github.sha }}
+            ${{ vars.GHCR_IMAGE_SCREENER }}:latest
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Update Container Apps Jobs (CSP, CC, DITM)
+        run: |
+          IMAGE="${{ vars.GHCR_IMAGE_SCREENER }}:${{ github.sha }}"
+          RG="${{ secrets.AZURE_RESOURCE_GROUP }}"
+          for JOB in job-screener-csp job-screener-cc job-screener-ditm; do
+            echo "→ Updating $JOB to $IMAGE"
+            az containerapp job registry set \
+              --name "$JOB" \
+              --resource-group "$RG" \
+              --server ghcr.io \
+              --username "${{ github.actor }}" \
+              --password "${{ secrets.GHCR_PAT }}"
+            az containerapp job update \
+              --name "$JOB" \
+              --resource-group "$RG" \
+              --image "$IMAGE"
+          done
+          echo "All three screener jobs updated."
