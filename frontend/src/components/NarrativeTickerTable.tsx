@@ -24,7 +24,7 @@ interface NarrativeTickerTableProps {
   showContinuity?: boolean
 }
 
-type SortKey = 'ticker' | 'acs' | 'decay_acs' | 'stage' | 'flags' | 'streak' | 'slope'
+type SortKey = 'ticker' | 'acs' | 'decay_acs' | 'stage' | 'flags' | 'streak' | 'slope' | 'signal'
 type SortDir = 'asc' | 'desc'
 
 interface ColumnDef {
@@ -47,9 +47,22 @@ const COLUMNS: ColumnDef[] = [
     title: 'A: daily activity · B: post diversity · C: narrative coherence · D: analytical depth · E: market confirmation (price strength, call skew, institutional buying)',
     align: 'left',
   },
-  { key: null, label: 'Dominant signal', title: 'Most common discussion type: direction (Bullish/Bearish) \u00d7 style (Analytical = data-backed; Hype-driven = momentum/FOMO)' },
+  { key: 'signal', label: 'Dominant signal', title: 'Most common discussion type: direction (Bullish/Bearish) \u00d7 style (Analytical = data-backed; Hype-driven = momentum/FOMO). Click to sort, or use the chips above to filter.' },
   { key: 'flags', label: 'Warnings' },
 ]
+
+// Sort order for dominant_signal: group analytical-bull first (the most
+// actionable bucket), then analytical-bear, hype-bull, hype-bear, sentiment
+// fallbacks, then unknown. Numeric so desc/asc both produce intuitive orders.
+const _SIGNAL_RANK: Record<string, number> = {
+  bull_researched: 0,
+  bear_researched: 1,
+  bull_emotional:  2,
+  bear_emotional:  3,
+  bullish:         4,
+  bearish:         5,
+  unknown:         6,
+}
 
 function getSortValue(row: AcsScore, key: SortKey): number | string {
   switch (key) {
@@ -61,6 +74,21 @@ function getSortValue(row: AcsScore, key: SortKey): number | string {
     case 'streak':    return row.stage_streak_days ?? 0
     // Null slope sorts as -Infinity so "Fading" stays at the bottom of desc sort.
     case 'slope':     return row.acs_slope_14d ?? Number.NEGATIVE_INFINITY
+    case 'signal':    return _SIGNAL_RANK[row.dominant_signal] ?? 99
+  }
+}
+
+// Dominant-signal filter chips. Each chip is a predicate over the raw
+// dominant_signal string. "All" disables the filter.
+type SignalFilter = 'all' | 'bullish' | 'bearish' | 'analytical' | 'hype'
+
+function matchesSignal(signal: string, f: SignalFilter): boolean {
+  switch (f) {
+    case 'all':        return true
+    case 'bullish':    return signal.startsWith('bull')
+    case 'bearish':    return signal.startsWith('bear')
+    case 'analytical': return signal.endsWith('_researched')
+    case 'hype':       return signal.endsWith('_emotional')
   }
 }
 
@@ -96,6 +124,7 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
   // shows the full stage-1\u20133 set; chips narrow it client-side without a refetch.
   type ContinuityFilter = 'all' | 'new' | 'sustaining' | 'fading'
   const [continuityFilter, setContinuityFilter] = useState<ContinuityFilter>('all')
+  const [signalFilter, setSignalFilter] = useState<SignalFilter>('all')
 
   const visibleColumns = useMemo(
     () => COLUMNS.filter((c) => showContinuity || !c.continuityOnly),
@@ -103,8 +132,9 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
   )
 
   const filtered = useMemo(() => {
-    if (!showContinuity || continuityFilter === 'all') return rows
     return rows.filter((r) => {
+      if (signalFilter !== 'all' && !matchesSignal(r.dominant_signal, signalFilter)) return false
+      if (!showContinuity || continuityFilter === 'all') return true
       const streak = r.stage_streak_days ?? 0
       const slope = r.acs_slope_14d
       if (continuityFilter === 'new')        return streak <= 7
@@ -112,7 +142,7 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
       if (continuityFilter === 'fading')     return slope != null && slope < 0
       return true
     })
-  }, [rows, showContinuity, continuityFilter])
+  }, [rows, showContinuity, continuityFilter, signalFilter])
 
   const sorted = useMemo(() => {
     const copy = [...filtered]
@@ -140,7 +170,9 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
     else {
       setSortKey(key)
-      setSortDir(key === 'ticker' ? 'asc' : 'desc')
+      // 'ticker' and 'signal' read more naturally ascending (A→Z, best→worst);
+      // numeric metrics default to descending so the top rows are the strongest.
+      setSortDir(key === 'ticker' || key === 'signal' ? 'asc' : 'desc')
     }
   }
 
@@ -166,6 +198,25 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
           ))}
         </div>
       )}
+      <div className="continuity-filters" role="group" aria-label="Dominant signal filters">
+        {(['all', 'bullish', 'bearish', 'analytical', 'hype'] as const).map((f) => (
+          <button
+            key={f}
+            type="button"
+            className={`continuity-chip${signalFilter === f ? ' active' : ''}`}
+            onClick={() => setSignalFilter(f)}
+            title={
+              f === 'bullish'    ? 'Direction = bull (researched or hype-driven)' :
+              f === 'bearish'    ? 'Direction = bear (researched or hype-driven)' :
+              f === 'analytical' ? 'Substance = researched (data-backed discussion)' :
+              f === 'hype'       ? 'Substance = emotional (momentum / FOMO discussion)' :
+                                   'Show all signal types'
+            }
+          >
+            {f === 'all' ? 'All signals' : f.charAt(0).toUpperCase() + f.slice(1)}
+          </button>
+        ))}
+      </div>
       <table className="screener-table">
       <thead>
         <tr>
