@@ -2,13 +2,18 @@
 
 Implements §4 of NARRATIVE_METHODOLOGY.md:
 
-  cluster()     — HDBSCAN on cosine distance, then merges nearby cluster centroids.
+  cluster()     — HDBSCAN on cosine distance, then merges nearby cluster centroids,
+                  then applies an intra-cluster similarity floor (ADR-0026).
   assign_stage() — pure signal-side lifecycle rules (no LLM).
 
-Design decisions per ADR-0017:
+Design decisions per ADR-0017 / ADR-0026:
   - min_cluster_size=3 (configurable), metric="cosine" (via precomputed distance matrix).
   - Clusters with cosine similarity > merge_threshold (default 0.82) between centroids
     are merged into a single narrative thread.
+  - Clusters whose mean pairwise cosine similarity falls below
+    min_intra_cluster_similarity (default 0.35) are demoted to noise — they represent
+    semantically unrelated posts that happened to be nearest neighbours rather than a
+    shared narrative thread.
   - Noise points (label -1) are excluded from lifecycle assignment.
   - Stage assignment is deterministic; confidence = fraction of signals in the
     dominant cluster relative to total non-noise signals.
@@ -38,13 +43,21 @@ def cluster(
     embeddings: list[list[float]],
     min_cluster_size: int = 3,
     merge_threshold: float = 0.82,
+    min_intra_cluster_similarity: float = 0.35,
 ) -> ClusterResult:
     """Run HDBSCAN on embeddings (cosine metric) and merge nearby cluster centroids.
+
+    After merging, any cluster whose mean pairwise cosine similarity is below
+    *min_intra_cluster_similarity* is demoted to noise (label -1).  This prevents
+    low-coherence pairs — posts that happen to be nearest neighbours but discuss
+    unrelated topics — from being promoted to a narrative stage.
 
     Args:
         embeddings: list of 1536-dim float vectors.
         min_cluster_size: HDBSCAN parameter (ADR-0017 default=3).
         merge_threshold: cosine similarity above which two clusters are merged.
+        min_intra_cluster_similarity: quality floor — clusters below this mean
+            pairwise similarity are treated as noise (ADR-0026 default=0.35).
 
     Returns:
         ClusterResult with per-signal labels and summary stats.
@@ -123,6 +136,31 @@ def cluster(
         )
     else:
         final_labels = raw_labels.copy()
+
+    # --- Intra-cluster similarity floor (ADR-0026) ---
+    # For each surviving cluster, compute the mean pairwise cosine similarity of
+    # its members. A pair of posts that HDBSCAN grouped purely because they were
+    # the two closest points in a sparse space will have a low mean similarity;
+    # a genuine shared-narrative cluster will score well above the floor.
+    if min_intra_cluster_similarity > 0.0:
+        for lbl in set(final_labels.tolist()):
+            if lbl == -1:
+                continue
+            idxs = np.where(final_labels == lbl)[0]
+            if len(idxs) < 2:
+                # Degenerate singleton — demote (should not occur with min_cluster_size>=2).
+                final_labels[final_labels == lbl] = -1
+                continue
+            sub = cos_sim[np.ix_(idxs, idxs)]
+            n_pairs = len(idxs) * (len(idxs) - 1)
+            mean_sim = float((sub.sum() - np.trace(sub)) / n_pairs)
+            if mean_sim < min_intra_cluster_similarity:
+                final_labels[final_labels == lbl] = -1
+                logger.debug(
+                    "cluster(): label=%d demoted to noise "
+                    "(mean_intra_sim=%.3f < floor=%.3f, n=%d)",
+                    lbl, mean_sim, min_intra_cluster_similarity, len(idxs),
+                )
 
     labels_list = final_labels.tolist()
     non_noise = [lbl for lbl in labels_list if lbl != -1]

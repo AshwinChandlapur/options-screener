@@ -80,6 +80,7 @@ def main() -> None:
                 embeddings,
                 min_cluster_size=config.min_cluster_size,
                 merge_threshold=config.merge_threshold,
+                min_intra_cluster_similarity=config.min_intra_cluster_similarity,
             )
 
             timeline = cosmos.fetch_timeline_doc(ticker, today) or {}
