@@ -113,6 +113,19 @@ export function NarrativeView() {
 
       <ScoreLegend />
 
+      {/* Show when detector isn't assigning stages to most tickers — indicates
+          ingestion density is still below the HDBSCAN clustering threshold.
+          Auto-hides once the majority of tickers carry a stage. */}
+      {top.length > 0 && top.filter(r => r.lifecycle_stage > 0).length / top.length < 0.30 && (
+        <div className="info-banner" style={{ marginBottom: '1rem' }}>
+          <strong>Stage badges are limited right now.</strong>{' '}
+          The narrative detector requires a minimum cluster density to assign stages 1–6.
+          Most tickers currently show stage 0 while discussion volume ramps up —
+          the ACS <em>score</em> is still valid and scored independently.{' '}
+          <small>Tickers with the most active discussion (e.g. NVDA, MSFT) carry full stage badges.</small>
+        </div>
+      )}
+
       <div className="narrative-grid">
         <section>
           <h3>Top by ACS</h3>
