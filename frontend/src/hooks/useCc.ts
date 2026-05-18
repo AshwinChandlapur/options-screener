@@ -12,6 +12,7 @@ interface UseCcReturn {
   isScanMode: boolean
   errorMessage: string | null
   cachedAt: number | null
+  lastUpdatedAt: string | null
   run: (req: CcRequest) => Promise<void>
   scan: (topN?: number, minDTE?: number, maxDTE?: number, universe?: string) => Promise<void>
 }
@@ -24,6 +25,7 @@ export function useCc(): UseCcReturn {
   const [isScanMode, setIsScanMode] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [cachedAt, setCachedAt] = useState<number | null>(null)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
 
   useEffect(() => {
     const entry = loadResultCache<{ results: CcResult[]; errors: CcError[] }>('cc')
@@ -105,6 +107,7 @@ export function useCc(): UseCcReturn {
       const data: CcResponse = await response.json()
       setResults(data.results)
       setErrors(data.errors)
+      setLastUpdatedAt(data.last_updated_at ?? null)
       saveResultCache('cc', { results: data.results, errors: data.errors })
       setCachedAt(Date.now())
     } catch (err: unknown) {
@@ -115,5 +118,5 @@ export function useCc(): UseCcReturn {
     }
   }
 
-  return { results, errors, loading, symbolCount, isScanMode, errorMessage, cachedAt, run, scan }
+  return { results, errors, loading, symbolCount, isScanMode, errorMessage, cachedAt, lastUpdatedAt, run, scan }
 }

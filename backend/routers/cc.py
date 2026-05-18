@@ -14,6 +14,7 @@ from pydantic import BaseModel, field_validator
 from services.cc_service import CcResult, process_cc_symbol
 from services.data_service import get_risk_free_rate
 from services.scan_cache import cc_scan_cache
+from services.screener.result_store import ScreenerStoreEmpty, get_cc_results
 from services.universe import UNIVERSES, get_universe
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,7 @@ class CcErrorOut(BaseModel):
 class CcResponse(BaseModel):
     results: List[CcResultOut]
     errors: List[CcErrorOut]
+    last_updated_at: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -167,50 +169,35 @@ async def run_cc_scan(
     max_dte: int = Query(default=60, ge=1, le=90),
     universe: str = Query(default="all", description=f"Universe key: one of {sorted(UNIVERSES)}"),
 ) -> CcResponse:
-    """Scans the selected universe and returns the top_n CC results by score."""
+    """Returns precomputed CC universe scan results (ADR-0024). Custom lists use POST /cc."""
     if min_dte > max_dte:
         raise HTTPException(status_code=422, detail="min_dte must be <= max_dte")
 
     universe_key, symbols = get_universe(universe)
 
-    cache_key = f"{universe_key}:{top_n}:{min_dte}:{max_dte}"
-    cached = cc_scan_cache.get(cache_key)
-    if cached is not None:
-        logger.info("CC scan cache hit: %s", cache_key)
-        return cached
-
-    rf_rate = await asyncio.to_thread(get_risk_free_rate)
-    logger.info(
-        "Starting CC scan universe=%s (%d stocks), DTE %d\u2013%d, top_n=%d",
-        universe_key, len(symbols), min_dte, max_dte, top_n,
-    )
-
-    sem = asyncio.Semaphore(10)
-
-    async def process_one(symbol: str):
-        async with sem:
-            return await asyncio.to_thread(process_cc_symbol, symbol, min_dte, max_dte, rf_rate)
-
-    pairs = await asyncio.gather(*[process_one(s) for s in symbols])
-
-    results: list[CcResultOut] = []
-    errors: list[CcErrorOut] = []
-    for result_list, error in pairs:
-        for result in result_list:
-            results.append(_to_out(result))
-        if error is not None:
-            errors.append(CcErrorOut(symbol=error.symbol, reason=error.reason))
-
-    results.sort(key=lambda r: r.best_cc_score, reverse=True)
-    top_results = results[:top_n]
+    try:
+        rows, last_updated_at, _oldest_age = await asyncio.to_thread(
+            get_cc_results, symbols, min_dte, max_dte, top_n
+        )
+    except ScreenerStoreEmpty as exc:
+        logger.warning("CC precomputed store empty: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Precomputed CC results are not yet available. "
+                "The background worker is populating the store — retry in a few minutes."
+            ),
+        ) from exc
 
     logger.info(
-        "CC scan complete: universe=%s returning top %d of %d (errors=%d)",
-        universe_key, len(top_results), len(symbols), len(errors),
+        "CC scan (precomputed): universe=%s returning %d rows, last_updated=%s",
+        universe_key, len(rows), last_updated_at,
     )
-    response = CcResponse(results=top_results, errors=errors)
-    cc_scan_cache.set(cache_key, response)
-    return response
+    return CcResponse(
+        results=[_to_out(r) for r in rows],
+        errors=[],
+        last_updated_at=last_updated_at,
+    )
 
 
 def _to_out(r: CcResult) -> CcResultOut:

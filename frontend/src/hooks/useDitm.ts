@@ -21,6 +21,7 @@ interface UseDitmReturn {
   isScanMode: boolean
   errorMessage: string | null
   cachedAt: number | null
+  lastUpdatedAt: string | null
   macroPass: boolean
   vixLevel: number | null
   vix5dChange: number | null
@@ -41,6 +42,7 @@ export function useDitm(): UseDitmReturn {
   const [vixLevel, setVixLevel] = useState<number | null>(null)
   const [vix5dChange, setVix5dChange] = useState<number | null>(null)
   const [spyAboveSma200, setSpyAboveSma200] = useState(true)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
 
   useEffect(() => {
     const entry = loadResultCache<DitmCachePayload>('ditm')
@@ -143,6 +145,7 @@ export function useDitm(): UseDitmReturn {
       setVixLevel(data.vix_level)
       setVix5dChange(data.vix_5d_change)
       setSpyAboveSma200(data.spy_above_sma200)
+      setLastUpdatedAt(data.last_updated_at ?? null)
       saveResultCache<DitmCachePayload>('ditm', {
         results: data.results,
         errors: data.errors,
@@ -159,5 +162,5 @@ export function useDitm(): UseDitmReturn {
     }
   }
 
-  return { results, errors, loading, symbolCount, isScanMode, errorMessage, cachedAt, macroPass, vixLevel, vix5dChange, spyAboveSma200, run, scan }
+  return { results, errors, loading, symbolCount, isScanMode, errorMessage, cachedAt, lastUpdatedAt, macroPass, vixLevel, vix5dChange, spyAboveSma200, run, scan }
 }

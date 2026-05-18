@@ -1,9 +1,14 @@
 """
 In-memory TTL cache for expensive scan results.
 
-One module-level ScanCache instance per strategy.  The routers call
-``get`` before running the scan and ``set`` after — no other module
-should need to import this.
+As of ADR-0024, this cache is used exclusively by the custom-list POST
+endpoints (/csp, /cc, /ditm, /ditm). The universe GET /scan endpoints read
+from the precomputed Cosmos containers (screener_csp, screener_cc,
+screener_ditm) instead, which are durable across process restarts.
+
+One module-level ScanCache instance per strategy. The routers call
+``get`` before running the custom-list scan and ``set`` after — no other
+module should need to import this.
 """
 from __future__ import annotations
 

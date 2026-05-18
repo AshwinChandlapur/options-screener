@@ -51,6 +51,15 @@ param detectorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 @description('Container image for job-acs-scorer. Preserved from live deployment by infra workflow.')
 param scorerImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 
+@description('Container image for job-screener-csp (ADR-0024). Preserved from live deployment by infra workflow.')
+param screenerCspImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
+@description('Container image for job-screener-cc (ADR-0024). Preserved from live deployment by infra workflow.')
+param screenerCcImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
+@description('Container image for job-screener-ditm (ADR-0024). Preserved from live deployment by infra workflow.')
+param screenerDitmImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
 @description('GHCR username for pulling worker images. Leave empty to skip registry binding (placeholder/public images only).')
 param ghcrUsername string = ''
 
@@ -368,6 +377,130 @@ resource scorerJob 'Microsoft.App/jobs@2024-03-01' = {
   }
 }
 
+// ADR-0024: three screener precomputation jobs (CSP, CC, DITM).
+// All three share the same image (STRATEGY env selects which screener to run).
+// Cron: */15 * * * * — 14-min replica timeout fits inside the 15-min window.
+
+resource screenerCspJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-screener-csp'
+  location: location
+  tags: tags
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    environmentId: env.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 840
+      scheduleTriggerConfig: {
+        cronExpression: '*/15 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      secrets: ghcrSecrets
+      registries: ghcrRegistries
+    }
+    template: {
+      containers: [
+        {
+          name: 'screener-csp'
+          image: screenerCspImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1.0Gi'
+          }
+          env: [
+            { name: 'COSMOS_ENDPOINT',              value: cosmosEndpoint }
+            { name: 'STRATEGY',                     value: 'csp' }
+            { name: 'LOG_LEVEL',                    value: 'INFO' }
+            { name: 'MIN_REFRESH_SECONDS_MARKET',   value: '900' }
+            { name: 'MIN_REFRESH_SECONDS_OFF',      value: '14400' }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+resource screenerCcJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-screener-cc'
+  location: location
+  tags: tags
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    environmentId: env.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 840
+      scheduleTriggerConfig: {
+        cronExpression: '*/15 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      secrets: ghcrSecrets
+      registries: ghcrRegistries
+    }
+    template: {
+      containers: [
+        {
+          name: 'screener-cc'
+          image: screenerCcImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1.0Gi'
+          }
+          env: [
+            { name: 'COSMOS_ENDPOINT',              value: cosmosEndpoint }
+            { name: 'STRATEGY',                     value: 'cc' }
+            { name: 'LOG_LEVEL',                    value: 'INFO' }
+            { name: 'MIN_REFRESH_SECONDS_MARKET',   value: '900' }
+            { name: 'MIN_REFRESH_SECONDS_OFF',      value: '14400' }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+resource screenerDitmJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-screener-ditm'
+  location: location
+  tags: tags
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    environmentId: env.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 840
+      scheduleTriggerConfig: {
+        cronExpression: '*/15 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      secrets: ghcrSecrets
+      registries: ghcrRegistries
+    }
+    template: {
+      containers: [
+        {
+          name: 'screener-ditm'
+          image: screenerDitmImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1.0Gi'
+          }
+          env: [
+            { name: 'COSMOS_ENDPOINT',              value: cosmosEndpoint }
+            { name: 'STRATEGY',                     value: 'ditm' }
+            { name: 'LOG_LEVEL',                    value: 'INFO' }
+            { name: 'MIN_REFRESH_SECONDS_MARKET',   value: '900' }
+            { name: 'MIN_REFRESH_SECONDS_OFF',      value: '14400' }
+          ]
+        }
+      ]
+    }
+  }
+}
+
 output envId string = env.id
 output envName string = env.name
 output ingestionAppName string = ingestion.name
@@ -377,6 +510,9 @@ output aggregatorJobPrincipalId string = aggregatorJob.identity.principalId
 output classifierJobPrincipalId string = classifierJob.identity.principalId
 output detectorJobPrincipalId string = detectorJob.identity.principalId
 output scorerJobPrincipalId string = scorerJob.identity.principalId
+output screenerCspJobPrincipalId string = screenerCspJob.identity.principalId
+output screenerCcJobPrincipalId string = screenerCcJob.identity.principalId
+output screenerDitmJobPrincipalId string = screenerDitmJob.identity.principalId
 
 resource detectorKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(keyVaultId)) {
   name: guid(keyVaultId, detectorJob.name, roleSecretsUser)
@@ -468,3 +604,11 @@ resource extractorEhReceiverRole 'Microsoft.Authorization/roleAssignments@2022-0
     principalType: 'ServicePrincipal'
   }
 }
+
+// ---------------------------------------------------------------------------
+// Cosmos DB Data Contributor role for screener workers (ADR-0024).
+// Screener jobs need only Cosmos — no Key Vault secrets.
+// The Cosmos account grants access via cosmos-roles.bicep using the
+// principalId outputs above. These role assignments are here as a reminder
+// that no KV assignment is needed for these jobs.
+// ---------------------------------------------------------------------------

@@ -153,6 +153,18 @@ Every adapter referenced by `ScreenerConfig` is a **pure function of declared in
 
 This is the property the refactor was designed to preserve; breaking it puts the runner-vs-services contract back in the same hole the legacy code was in.
 
+### Screener precomputation (ADR-0024)
+
+As of [ADR-0024](adr/0024-screener-precomputation.md), **GET `/csp`  `/cc`  `/ditm` endpoints no longer run live yfinance scans**. Instead:
+
+1. **Background workers** — three Azure Container Apps Jobs (`job-screener-csp`, `job-screener-cc`, `job-screener-ditm`) each on a `*/15 * * * *` cron call `workers/screener/main.py`, which calls `runner.run_strategy(strategy)` and upserts per-ticker results into dedicated Cosmos containers (`screener_csp`, `screener_cc`, `screener_ditm`, all TTL 24h).
+
+2. **Read path** — `backend/services/screener/result_store.py` provides `get_csp_results` / `get_cc_results` / `get_ditm_results`. The GET scan endpoints call these instead of the live yfinance fan-out. Point reads by partition key keep p99 latency under 200 ms.
+
+3. **Fallback policy** — if the containers are empty (worker never ran or results expired) the endpoint returns HTTP 503. There is no live-fallback; this is deliberate (see ADR-0024 §Consequences).
+
+4. **Custom-list POST endpoints** — the POST `/csp` / `/cc` / `/ditm` endpoints that accept an arbitrary ticker list continue to run live scans through `process_*_symbol` unchanged. `scan_cache.py` is used exclusively by these endpoints.
+
 ### Legacy bodies
 
 The pre-refactor per-symbol functions are retained in-file as `_legacy_process_symbol` / `_legacy_process_cc_symbol` for one-commit revert. They are **not wired in** — production calls go through the runner. They will be deleted in a follow-up cleanup phase once the new path has accumulated enough production miles.

@@ -95,6 +95,7 @@ export interface CspRequest {
 export interface CspResponse {
   results: CspResult[]
   errors: CspError[]
+  last_updated_at?: string | null
 }
 
 export interface CspFilterState {

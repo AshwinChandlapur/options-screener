@@ -16,6 +16,7 @@ from services.csp_service import CspResult, process_symbol
 from services.data_service import get_risk_free_rate
 from services.em_scan_service import EmRankError, EmRankResult, process_em_symbol
 from services.scan_cache import ScanCache, csp_scan_cache
+from services.screener.result_store import ScreenerStoreEmpty, get_csp_results
 from services.screener_insight_service import InsightError, InsightRequest, InsightResult, get_insight
 from services.universe import UNIVERSES, get_universe
 
@@ -134,6 +135,7 @@ class CspErrorOut(BaseModel):
 class CspResponse(BaseModel):
     results: List[CspResultOut]
     errors: List[CspErrorOut]
+    last_updated_at: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -191,55 +193,38 @@ async def run_csp_scan(
     max_capital: Optional[float] = Query(default=None, ge=100, description="Max capital per contract ($); only strikes where strike\u00d7100 \u2264 max_capital are returned"),
 ) -> CspResponse:
     """
-    Scans the selected universe and returns the top_n results ranked by CSP composite score.
+    Returns precomputed CSP universe scan results. Results are updated every
+    15 min during market hours and every 4 h outside market hours by a
+    background Container Apps Job (ADR-0024). Custom symbol lists use POST /csp.
     """
     if min_dte > max_dte:
         raise HTTPException(status_code=422, detail="min_dte must be <= max_dte")
 
     universe_key, symbols = get_universe(universe)
 
-    cache_key = f"{universe_key}:{top_n}:{min_dte}:{max_dte}:{max_capital}"
-    cached = csp_scan_cache.get(cache_key)
-    if cached is not None:
-        logger.info("CSP scan cache hit: %s", cache_key)
-        return cached
-
-    rf_rate = await asyncio.to_thread(get_risk_free_rate)
-    logger.info(
-        "Starting CSP scan universe=%s (%d stocks), DTE %d\u2013%d, top_n=%d",
-        universe_key, len(symbols), min_dte, max_dte, top_n,
-    )
-
-    sem = asyncio.Semaphore(10)
-
-    async def process_one(symbol: str):
-        async with sem:
-            return await asyncio.to_thread(
-                process_symbol, symbol,
-                min_dte=min_dte, max_dte=max_dte,
-                rf_rate=rf_rate, max_capital=max_capital,
-            )
-
-    pairs = await asyncio.gather(*[process_one(s) for s in symbols])
-
-    results: list[CspResultOut] = []
-    errors: list[CspErrorOut] = []
-    for result_list, error in pairs:
-        for result in result_list:
-            results.append(_to_out(result))
-        if error is not None:
-            errors.append(CspErrorOut(symbol=error.symbol, reason=error.reason))
-
-    results.sort(key=lambda r: r.best_csp_score, reverse=True)
-    top_results = results[:top_n]
+    try:
+        rows, last_updated_at, _oldest_age = await asyncio.to_thread(
+            get_csp_results, symbols, min_dte, max_dte, top_n, max_capital
+        )
+    except ScreenerStoreEmpty as exc:
+        logger.warning("CSP precomputed store empty: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Precomputed CSP results are not yet available. "
+                "The background worker is populating the store — retry in a few minutes."
+            ),
+        ) from exc
 
     logger.info(
-        "CSP scan complete: universe=%s returning top %d of %d (errors=%d)",
-        universe_key, len(top_results), len(symbols), len(errors),
+        "CSP scan (precomputed): universe=%s returning %d rows, last_updated=%s",
+        universe_key, len(rows), last_updated_at,
     )
-    response = CspResponse(results=top_results, errors=errors)
-    csp_scan_cache.set(cache_key, response)
-    return response
+    return CspResponse(
+        results=[_to_out(r) for r in rows],
+        errors=[],
+        last_updated_at=last_updated_at,
+    )
 
 
 def _to_out(r: CspResult) -> CspResultOut:

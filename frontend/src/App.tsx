@@ -106,21 +106,34 @@ function applyDitmFilters(results: DitmResult[], filters: DitmFilterState): Ditm
 // Narrative tab is shown by default (Phase 6). Set VITE_NARRATIVE_ENABLED=0 to hide.
 const NARRATIVE_ENABLED = import.meta.env.VITE_NARRATIVE_ENABLED !== '0'
 
+/** Format a backend ISO timestamp as a relative "Updated X min ago" badge label. */
+function _formatPrecomputedAge(isoTimestamp: string): string {
+  try {
+    const updated = new Date(isoTimestamp)
+    const ageMin = Math.round((Date.now() - updated.getTime()) / 60_000)
+    if (ageMin < 1) return 'Updated just now'
+    if (ageMin === 1) return 'Updated 1 min ago'
+    return `Updated ${ageMin} min ago`
+  } catch {
+    return 'Updated recently'
+  }
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'csp' | 'cc' | 'ditm' | 'swing' | 'em-rank' | 'supply' | 'dcf' | 'narrative'>('csp')
 
   // CSP state
-  const { results: cspResults, errors: cspErrors, loading: cspLoading, symbolCount: cspSymbolCount, isScanMode: cspIsScanMode, errorMessage: cspErrorMessage, cachedAt: cspCachedAt, run: runCsp, scan: scanCsp } = useCsp()
+  const { results: cspResults, errors: cspErrors, loading: cspLoading, symbolCount: cspSymbolCount, isScanMode: cspIsScanMode, errorMessage: cspErrorMessage, cachedAt: cspCachedAt, lastUpdatedAt: cspLastUpdatedAt, run: runCsp, scan: scanCsp } = useCsp()
   const [cspFilters, setCspFilters] = useState<CspFilterState>(DEFAULT_CSP_FILTERS)
   const filteredCsp = useMemo(() => applyCspFilters(cspResults, cspFilters), [cspResults, cspFilters])
 
   // CC state
-  const { results: ccResults, errors: ccErrors, loading: ccLoading, symbolCount: ccSymbolCount, isScanMode: ccIsScanMode, errorMessage: ccErrorMessage, cachedAt: ccCachedAt, run: runCc, scan: scanCc } = useCc()
+  const { results: ccResults, errors: ccErrors, loading: ccLoading, symbolCount: ccSymbolCount, isScanMode: ccIsScanMode, errorMessage: ccErrorMessage, cachedAt: ccCachedAt, lastUpdatedAt: ccLastUpdatedAt, run: runCc, scan: scanCc } = useCc()
   const [ccFilters, setCcFilters] = useState<CcFilterState>(DEFAULT_CC_FILTERS)
   const filteredCc = useMemo(() => applyCcFilters(ccResults, ccFilters), [ccResults, ccFilters])
 
   // DITM state
-  const { results: ditmResults, errors: ditmErrors, loading: ditmLoading, symbolCount: ditmSymbolCount, isScanMode: ditmIsScanMode, errorMessage: ditmErrorMessage, cachedAt: ditmCachedAt, macroPass, vixLevel, vix5dChange, spyAboveSma200, run: runDitm, scan: scanDitm } = useDitm()
+  const { results: ditmResults, errors: ditmErrors, loading: ditmLoading, symbolCount: ditmSymbolCount, isScanMode: ditmIsScanMode, errorMessage: ditmErrorMessage, cachedAt: ditmCachedAt, lastUpdatedAt: ditmLastUpdatedAt, macroPass, vixLevel, vix5dChange, spyAboveSma200, run: runDitm, scan: scanDitm } = useDitm()
   const [ditmFilters, setDitmFilters] = useState<DitmFilterState>(DEFAULT_DITM_FILTERS)
   const filteredDitm = useMemo(() => applyDitmFilters(ditmResults, ditmFilters), [ditmResults, ditmFilters])
 
@@ -207,7 +220,7 @@ export default function App() {
               <div className="loading-state">
                 <div className="spinner" />
                 {cspIsScanMode
-                  ? <p>Scanning <strong>selected universe</strong> in parallel &mdash; est. <strong>~25s</strong></p>
+                  ? <p>Loading precomputed results&hellip;</p>
                   : <p>Fetching <strong>{cspSymbolCount}</strong> symbol{cspSymbolCount !== 1 ? 's' : ''} in parallel
                       &nbsp;&mdash; est. <strong>~{Math.ceil(cspSymbolCount / 5) * 4}s</strong></p>
                 }
@@ -226,7 +239,10 @@ export default function App() {
               <div className="results-meta">
                 Showing <strong>{filteredCsp.length}</strong> of <strong>{cspResults.length}</strong> results
                 {filteredCsp.length < cspResults.length && ' (filters active)'}
-                {cspCachedAt !== null && (
+                {cspIsScanMode && cspLastUpdatedAt && (
+                  <span className="precomputed-badge"> · {_formatPrecomputedAge(cspLastUpdatedAt)}</span>
+                )}
+                {!cspIsScanMode && cspCachedAt !== null && (
                   <span className="cache-notice"> · cached {Math.round((Date.now() - cspCachedAt) / 60000) < 1 ? '< 1' : Math.round((Date.now() - cspCachedAt) / 60000)} min ago</span>
                 )}
               </div>
@@ -254,7 +270,7 @@ export default function App() {
               <div className="loading-state">
                 <div className="spinner" />
                 {ccIsScanMode
-                  ? <p>Scanning <strong>selected universe</strong> in parallel &mdash; est. <strong>~25s</strong></p>
+                  ? <p>Loading precomputed results&hellip;</p>
                   : <p>Fetching <strong>{ccSymbolCount}</strong> symbol{ccSymbolCount !== 1 ? 's' : ''} in parallel
                       &nbsp;&mdash; est. <strong>~{Math.ceil(ccSymbolCount / 5) * 4}s</strong></p>
                 }
@@ -273,7 +289,10 @@ export default function App() {
               <div className="results-meta">
                 Showing <strong>{filteredCc.length}</strong> of <strong>{ccResults.length}</strong> results
                 {filteredCc.length < ccResults.length && ' (filters active)'}
-                {ccCachedAt !== null && (
+                {ccIsScanMode && ccLastUpdatedAt && (
+                  <span className="precomputed-badge"> · {_formatPrecomputedAge(ccLastUpdatedAt)}</span>
+                )}
+                {!ccIsScanMode && ccCachedAt !== null && (
                   <span className="cache-notice"> · cached {Math.round((Date.now() - ccCachedAt) / 60000) < 1 ? '< 1' : Math.round((Date.now() - ccCachedAt) / 60000)} min ago</span>
                 )}
               </div>
@@ -301,7 +320,7 @@ export default function App() {
               <div className="loading-state">
                 <div className="spinner" />
                 {ditmIsScanMode
-                  ? <p>Scanning <strong>selected universe</strong> in parallel &mdash; est. <strong>~30s</strong></p>
+                  ? <p>Loading precomputed results&hellip;</p>
                   : <p>Fetching <strong>{ditmSymbolCount}</strong> symbol{ditmSymbolCount !== 1 ? 's' : ''} in parallel
                       &nbsp;&mdash; est. <strong>~{Math.ceil(ditmSymbolCount / 5) * 5}s</strong></p>
                 }
@@ -320,7 +339,10 @@ export default function App() {
               <div className="results-meta">
                 Showing <strong>{filteredDitm.length}</strong> of <strong>{ditmResults.length}</strong> results
                 {filteredDitm.length < ditmResults.length && ' (filters active)'}
-                {ditmCachedAt !== null && (
+                {ditmIsScanMode && ditmLastUpdatedAt && (
+                  <span className="precomputed-badge"> · {_formatPrecomputedAge(ditmLastUpdatedAt)}</span>
+                )}
+                {!ditmIsScanMode && ditmCachedAt !== null && (
                   <span className="cache-notice"> · cached {Math.round((Date.now() - ditmCachedAt) / 60000) < 1 ? '< 1' : Math.round((Date.now() - ditmCachedAt) / 60000)} min ago</span>
                 )}
               </div>

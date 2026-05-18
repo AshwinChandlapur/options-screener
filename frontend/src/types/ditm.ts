@@ -96,4 +96,5 @@ export interface DitmResponse {
   vix_level: number | null
   vix_5d_change: number | null
   spy_above_sma200: boolean
+  last_updated_at?: string | null
 }

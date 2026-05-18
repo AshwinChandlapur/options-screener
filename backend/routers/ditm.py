@@ -20,6 +20,7 @@ from services.ditm_service import (
     process_symbol,
 )
 from services.scan_cache import ditm_scan_cache
+from services.screener.result_store import ScreenerStoreEmpty, get_ditm_results
 from services.universe import UNIVERSES, get_universe
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ class DitmResponse(BaseModel):
     vix_level: Optional[float] = None
     vix_5d_change: Optional[float] = None
     spy_above_sma200: bool = True
+    last_updated_at: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -184,60 +186,39 @@ async def run_ditm_scan(
     max_dte: int = Query(default=365, ge=30, le=730),
     universe: str = Query(default="all", description=f"Universe key: one of {sorted(UNIVERSES)}"),
 ) -> DitmResponse:
-    """
-    Scans the selected universe and returns top_n DITM results ranked by score.
-    """
+    """Returns precomputed DITM universe scan results (ADR-0024). Custom lists use POST /ditm."""
     if min_dte > max_dte:
         raise HTTPException(status_code=422, detail="min_dte must be <= max_dte")
 
     universe_key, symbols = get_universe(universe)
-    cache_key = f"{universe_key}:{top_n}:{min_dte}:{max_dte}"
-    cached = ditm_scan_cache.get(cache_key)
-    if cached is not None:
-        logger.info("DITM scan cache hit: %s", cache_key)
-        return cached
-    rf_rate = await asyncio.to_thread(get_risk_free_rate)
-    macro_ctx = await asyncio.to_thread(get_macro_context)
-    logger.info(
-        "Starting DITM scan universe=%s (%d stocks), DTE %d–%d, top_n=%d",
-        universe_key, len(symbols), min_dte, max_dte, top_n,
-    )
 
-    sem = asyncio.Semaphore(10)
-
-    async def process_one(symbol: str):
-        async with sem:
-            return await asyncio.to_thread(
-                process_symbol, symbol, min_dte, max_dte, rf_rate, macro_ctx
-            )
-
-    pairs = await asyncio.gather(*[process_one(s) for s in symbols])
-
-    results: list[DitmResultOut] = []
-    errors: list[DitmErrorOut] = []
-    for result_list, error in pairs:
-        for result in result_list:
-            results.append(_to_out(result))
-        if error is not None:
-            errors.append(DitmErrorOut(symbol=error.symbol, reason=error.reason))
-
-    results.sort(key=lambda r: r.best_ditm_score, reverse=True)
-    top_results = results[:top_n]
+    try:
+        rows, macro_fields, last_updated_at, _oldest_age = await asyncio.to_thread(
+            get_ditm_results, symbols, min_dte, max_dte, top_n
+        )
+    except ScreenerStoreEmpty as exc:
+        logger.warning("DITM precomputed store empty: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Precomputed DITM results are not yet available. "
+                "The background worker is populating the store — retry in a few minutes."
+            ),
+        ) from exc
 
     logger.info(
-        "DITM scan complete: universe=%s returning top %d of %d (errors=%d)",
-        universe_key, len(top_results), len(symbols), len(errors),
+        "DITM scan (precomputed): universe=%s returning %d rows, last_updated=%s",
+        universe_key, len(rows), last_updated_at,
     )
-    response = DitmResponse(
-        results=top_results,
-        errors=errors,
-        macro_pass=macro_ctx["macro_pass"],
-        vix_level=macro_ctx.get("vix_level"),
-        vix_5d_change=macro_ctx.get("vix_5d_change"),
-        spy_above_sma200=macro_ctx.get("spy_above_sma200", True),
+    return DitmResponse(
+        results=[_to_out(r) for r in rows],
+        errors=[],
+        macro_pass=macro_fields["macro_pass"],
+        vix_level=macro_fields.get("vix_level"),
+        vix_5d_change=macro_fields.get("vix_5d_change"),
+        spy_above_sma200=macro_fields.get("spy_above_sma200", True),
+        last_updated_at=last_updated_at,
     )
-    ditm_scan_cache.set(cache_key, response)
-    return response
 
 
 def _to_out(r: DitmResult) -> DitmResultOut:

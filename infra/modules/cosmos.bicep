@@ -147,6 +147,88 @@ resource tickerTimelineContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatab
   }
 }
 
+// screener_csp: precomputed CSP scan results (ADR-0024).
+// One doc per ticker; TTL 24 h so stale docs auto-expire if the worker goes down.
+resource screenerCspContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: 'screener_csp'
+  properties: {
+    resource: {
+      id: 'screener_csp'
+      partitionKey: {
+        paths: ['/ticker']
+        kind: 'Hash'
+        version: 2
+      }
+      defaultTtl: 86400  // 24 h
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/ticker/?' }
+          { path: '/computed_at/?' }
+          { path: '/result/best_csp_score/?' }
+        ]
+        excludedPaths: [{ path: '/*' }]
+      }
+    }
+  }
+}
+
+// screener_cc: precomputed CC scan results (ADR-0024).
+resource screenerCcContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: 'screener_cc'
+  properties: {
+    resource: {
+      id: 'screener_cc'
+      partitionKey: {
+        paths: ['/ticker']
+        kind: 'Hash'
+        version: 2
+      }
+      defaultTtl: 86400  // 24 h
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/ticker/?' }
+          { path: '/computed_at/?' }
+          { path: '/result/best_cc_score/?' }
+        ]
+        excludedPaths: [{ path: '/*' }]
+      }
+    }
+  }
+}
+
+// screener_ditm: precomputed DITM scan results (ADR-0024).
+resource screenerDitmContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: 'screener_ditm'
+  properties: {
+    resource: {
+      id: 'screener_ditm'
+      partitionKey: {
+        paths: ['/ticker']
+        kind: 'Hash'
+        version: 2
+      }
+      defaultTtl: 86400  // 24 h
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/ticker/?' }
+          { path: '/computed_at/?' }
+          { path: '/result/best_ditm_score/?' }
+        ]
+        excludedPaths: [{ path: '/*' }]
+      }
+    }
+  }
+}
+
 // narratives: aggregated narrative clusters (Phase 4+).
 resource narrativesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
   parent: database

@@ -94,6 +94,7 @@ export interface CcRequest {
 export interface CcResponse {
   results: CcResult[]
   errors: CcError[]
+  last_updated_at?: string | null
 }
 
 export interface CcFilterState {

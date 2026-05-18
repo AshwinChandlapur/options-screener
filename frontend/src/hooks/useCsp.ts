@@ -12,6 +12,7 @@ interface UseCspReturn {
   isScanMode: boolean
   errorMessage: string | null
   cachedAt: number | null
+  lastUpdatedAt: string | null
   run: (req: CspRequest) => Promise<void>
   scan: (topN?: number, minDTE?: number, maxDTE?: number, universe?: string, maxCapital?: number) => Promise<void>
 }
@@ -24,6 +25,7 @@ export function useCsp(): UseCspReturn {
   const [isScanMode, setIsScanMode] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [cachedAt, setCachedAt] = useState<number | null>(null)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
 
   useEffect(() => {
     const entry = loadResultCache<{ results: CspResult[]; errors: CspError[] }>('csp')
@@ -109,6 +111,7 @@ export function useCsp(): UseCspReturn {
       const data: CspResponse = await response.json()
       setResults(data.results)
       setErrors(data.errors)
+      setLastUpdatedAt(data.last_updated_at ?? null)
       saveResultCache('csp', { results: data.results, errors: data.errors })
       setCachedAt(Date.now())
     } catch (err: unknown) {
@@ -118,5 +121,5 @@ export function useCsp(): UseCspReturn {
     }
   }
 
-  return { results, errors, loading, symbolCount, isScanMode, errorMessage, cachedAt, run, scan }
+  return { results, errors, loading, symbolCount, isScanMode, errorMessage, cachedAt, lastUpdatedAt, run, scan }
 }

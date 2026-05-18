@@ -1,0 +1,7 @@
+# Screener precomputation worker deps (ADR-0024).
+# Backend deps are installed separately (see Dockerfile) — only worker-specific
+# packages are listed here.
+azure-identity==1.17.1
+azure-cosmos==4.7.0
+tenacity==9.0.0
+pytz==2024.1
