@@ -141,7 +141,7 @@ export default function App() {
   const { results: emResults, errors: emErrors, loading: emLoading, symbolCount: emSymbolCount, isScanMode: emIsScanMode, errorMessage: emErrorMessage, cachedAt: emCachedAt, run: runEm, scan: scanEm } = useEmScan()
 
   // Swing state
-  const { results: swingResults, regime: swingRegime, loading: swingLoading, isScanMode: swingIsScanMode, errorMessage: swingErrorMessage, cachedAt: swingCachedAt, scan: scanSwing, run: runSwing } = useSwing()
+  const { results: swingResults, regime: swingRegime, loading: swingLoading, isScanMode: swingIsScanMode, errorMessage: swingErrorMessage, cachedAt: swingCachedAt, lastUpdatedAt: swingLastUpdatedAt, scan: scanSwing, run: runSwing } = useSwing()
   const [swingFilters, setSwingFilters] = useState<SwingFilterState>(DEFAULT_SWING_FILTERS)
   const filteredSwing = useMemo(() => applySwingFilters(swingResults, swingFilters), [swingResults, swingFilters])
 
@@ -431,6 +431,9 @@ export default function App() {
                 {filteredSwing.length < swingResults.length && ' (filters active)'}
                 {swingCachedAt !== null && (
                   <span className="cache-notice"> · cached {Math.round((Date.now() - swingCachedAt) / 60000) < 1 ? '< 1' : Math.round((Date.now() - swingCachedAt) / 60000)} min ago</span>
+                )}
+                {swingIsScanMode && swingLastUpdatedAt && (
+                  <span className="precomputed-badge"> · {_formatPrecomputedAge(swingLastUpdatedAt)}</span>
                 )}
               </div>
             )}

@@ -33,6 +33,7 @@ _CONTAINER_MAP = {
     "csp": "screener_csp",
     "cc": "screener_cc",
     "ditm": "screener_ditm",
+    "swing": "screener_swing",
 }
 
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-_VALID_STRATEGIES = frozenset({"csp", "cc", "ditm"})
+_VALID_STRATEGIES = frozenset({"csp", "cc", "ditm", "swing"})
 
 
 @dataclass(frozen=True)

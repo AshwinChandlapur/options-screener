@@ -229,6 +229,33 @@ resource screenerDitmContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabas
   }
 }
 
+// screener_swing: precomputed swing scan results (ADR-0025).
+resource screenerSwingContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: 'screener_swing'
+  properties: {
+    resource: {
+      id: 'screener_swing'
+      partitionKey: {
+        paths: ['/ticker']
+        kind: 'Hash'
+        version: 2
+      }
+      defaultTtl: 86400  // 24 h
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/ticker/?' }
+          { path: '/computed_at/?' }
+          { path: '/result/data/swing_score/?' }
+        ]
+        excludedPaths: [{ path: '/*' }]
+      }
+    }
+  }
+}
+
 // narratives: aggregated narrative clusters (Phase 4+).
 resource narrativesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
   parent: database

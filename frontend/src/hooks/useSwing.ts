@@ -12,6 +12,7 @@ interface UseSwingReturn {
   errorMessage: string | null
   cachedAt: number | null
   scoringVersion: string | null
+  lastUpdatedAt: string | null
   scan: (topN?: number, universe?: string) => Promise<void>
   run: (symbols: string[]) => Promise<void>
 }
@@ -24,6 +25,7 @@ export function useSwing(): UseSwingReturn {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [cachedAt, setCachedAt] = useState<number | null>(null)
   const [scoringVersion, setScoringVersion] = useState<string | null>(null)
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
 
   useEffect(() => {
     const entry = loadResultCache<{ results: SwingResult[]; scoringVersion: string | null; regime: RegimeState | null }>('swing')
@@ -51,6 +53,7 @@ export function useSwing(): UseSwingReturn {
     setResults(data.results)
     setScoringVersion(data.scoring_version)
     setRegime(data.regime ?? null)
+    setLastUpdatedAt(data.last_updated_at ?? null)
     saveResultCache('swing', { results: data.results, scoringVersion: data.scoring_version, regime: data.regime ?? null })
     setCachedAt(Date.now())
   }
@@ -95,5 +98,5 @@ export function useSwing(): UseSwingReturn {
     }
   }
 
-  return { results, regime, loading, isScanMode, errorMessage, cachedAt, scoringVersion, scan, run }
+  return { results, regime, loading, isScanMode, errorMessage, cachedAt, scoringVersion, lastUpdatedAt, scan, run }
 }

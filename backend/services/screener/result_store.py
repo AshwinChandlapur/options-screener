@@ -43,6 +43,7 @@ _CONTAINER_MAP = {
     "csp": "screener_csp",
     "cc": "screener_cc",
     "ditm": "screener_ditm",
+    "swing": "screener_swing",
 }
 
 
@@ -397,3 +398,41 @@ def _ditm_from_dict(d: dict[str, Any]) -> DitmResult:
         iv_percentile=d.get("iv_percentile"),
         trend_r2=d.get("trend_r2"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Swing results (ADR-0025)
+# ---------------------------------------------------------------------------
+
+def get_swing_results(
+    tickers: list[str],
+    top_n: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any], str | None, float | None]:
+    """Return precomputed swing results.
+
+    Returns:
+        (rows, regime_dict, last_updated_at, oldest_age_s)
+        rows         — qualified SwingResult dicts sorted by swing_score desc, sliced to top_n
+        regime_dict  — RegimeState fields extracted from the freshest doc; empty dict if unavailable
+        last_updated_at — ISO UTC of the newest doc, or None
+        oldest_age_s    — seconds since oldest doc was written, or None
+    """
+    docs = _fetch_docs("swing", tickers)
+    rows: list[dict[str, Any]] = []
+    regime_dict: dict[str, Any] = {}
+
+    for doc in docs:
+        result_data = doc.get("result")
+        if not result_data:
+            continue
+        data = result_data.get("data")
+        if not data:
+            continue
+        # Extract regime from first doc that has it.
+        if not regime_dict:
+            regime_dict = result_data.get("regime") or {}
+        rows.append(data)
+
+    rows.sort(key=lambda r: r.get("swing_score", 0.0), reverse=True)
+    last_updated, oldest_age = _timestamps(docs)
+    return rows[:top_n], regime_dict, last_updated, oldest_age

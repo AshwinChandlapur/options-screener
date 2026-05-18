@@ -39,6 +39,9 @@ def run_strategy(
 async def _run_async(
     strategy: str,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    if strategy == "swing":
+        return await _run_swing_async()
+
     # Defer backend imports so this module is importable in test environments
     # where the backend package is not on sys.path.
     from services.data_service import get_risk_free_rate  # noqa: PLC0415
@@ -138,3 +141,56 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
     """Convert a result dataclass to a JSON-serialisable dict."""
     import dataclasses
     return dataclasses.asdict(result)
+
+
+# ---------------------------------------------------------------------------
+# Swing strategy (ADR-0025) — full-universe scan via run_scan()
+# ---------------------------------------------------------------------------
+
+async def _run_swing_async() -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    """Run the swing universe scan.
+
+    swing_service.run_scan() handles its own threading and regime computation
+    internally, so we call it as a single to_thread rather than a per-ticker
+    semaphore fan-out.
+
+    Doc shape stored per ticker:
+        {"data": <SwingResult dict>, "regime": <RegimeState dict>}
+
+    AI commentary is deliberately omitted (ADR-0025 §Decision).
+    """
+    import dataclasses  # noqa: PLC0415
+
+    from services.swing_service import run_scan  # noqa: PLC0415
+    from services.universe import MOMENTUM_UNIVERSE  # noqa: PLC0415
+
+    tickers = list(MOMENTUM_UNIVERSE)
+    logger.info("Swing scan starting — %d tickers", len(tickers))
+
+    # run_scan is CPU+IO bound; run in a thread so we don't block the event loop.
+    qualified: list[dict[str, Any]] = await asyncio.to_thread(run_scan, tickers)
+
+    # run_scan populates regime_cache as a side-effect; retrieve it.
+    regime_dict: dict[str, Any] = {}
+    try:
+        from services.scan_cache import regime_cache  # noqa: PLC0415
+        regime = regime_cache.get("regime:global")
+        if regime is not None:
+            regime_dict = dataclasses.asdict(regime)
+            logger.info(
+                "Swing regime: label=%s rr_gate=%.1f",
+                regime_dict.get("regime_label"),
+                regime_dict.get("rr_gate"),
+            )
+    except Exception:
+        logger.warning("Could not extract regime from cache", exc_info=True)
+
+    results: dict[str, dict[str, Any]] = {}
+    for row in qualified:
+        ticker = row.get("symbol", "")
+        if not ticker:
+            continue
+        results[ticker] = {"data": row, "regime": regime_dict}
+
+    logger.info("Swing scan complete: %d qualified tickers", len(results))
+    return results, {}  # swing excluded symbols are silently dropped by run_scan

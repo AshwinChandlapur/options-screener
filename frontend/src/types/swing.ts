@@ -81,6 +81,7 @@ export interface SwingResponse {
   results: SwingResult[]
   scoring_version: string
   regime?: RegimeState | null
+  last_updated_at?: string | null
 }
 
 export interface SwingFilterState {

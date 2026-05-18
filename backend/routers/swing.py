@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 
 from services.scan_cache import regime_cache, swing_scan_cache
 from services.scoring.swing import SWING_SCORER_VERSION
+from services.screener.result_store import ScreenerStoreEmpty, get_swing_results
 from services.swing.regime import RegimeState, compute_regime
 from services.swing_insight_service import get_batch_commentary
 from services.swing_service import process_symbol, run_scan
@@ -95,6 +97,7 @@ class SwingResponse(BaseModel):
     results: list[SwingResultOut]
     scoring_version: str = SWING_SCORER_VERSION
     regime: RegimeOut | None = None
+    last_updated_at: Optional[str] = None
 
 
 class RegimeOut(BaseModel):
@@ -137,6 +140,28 @@ def _regime_to_out(r: RegimeState) -> RegimeOut:
     )
 
 
+def _regime_from_dict(d: dict[str, Any]) -> RegimeOut:
+    """Reconstruct a RegimeOut from a stored regime dict."""
+    return RegimeOut(
+        index_trend=d.get("index_trend", ""),
+        vol_regime=d.get("vol_regime", ""),
+        breadth_pct=d.get("breadth_pct", 50.0),
+        risk_appetite=d.get("risk_appetite", 0.5),
+        risk_on_score=d.get("risk_on_score", 50.0),
+        regime_label=d.get("regime_label", "neutral"),
+        rr_gate=d.get("rr_gate", 2.5),
+        multiplier=d.get("multiplier", 1.0),
+        disable_setups=d.get("disable_setups", []),
+        drivers=d.get("drivers", []),
+        degraded=d.get("degraded", False),
+        spy_close=d.get("spy_close", 0.0),
+        spy_ema21=d.get("spy_ema21", 0.0),
+        spy_ema50=d.get("spy_ema50", 0.0),
+        vix=d.get("vix", 0.0),
+        vix_percentile=d.get("vix_percentile", 50.0),
+    )
+
+
 def _get_cached_regime(spy_df=None, universe_ohlc=None) -> RegimeState:
     """Memoize the regime calc per scan (30-min TTL)."""
     cached = regime_cache.get("regime:global")
@@ -173,38 +198,39 @@ async def run_swing_scan(
         description=f"Universe key: one of {sorted(UNIVERSES)}",
     ),
 ) -> SwingResponse:
-    """Scan a universe, return top_n by swing_score."""
+    """
+    Returns precomputed swing universe scan results. Results are updated every
+    15 min during market hours and every 4 h outside market hours by a
+    background Container Apps Job (ADR-0025). Custom symbol lists use POST /swing.
+    """
     universe_key, symbols = get_universe(universe)
-    cache_key = f"swing:{universe_key}:{top_n}"
-    cached = swing_scan_cache.get(cache_key)
-    if cached is not None:
-        logger.info("Swing scan cache hit: %s", cache_key)
-        return cached
 
-    logger.info("Starting swing scan universe=%s (%d stocks)", universe_key, len(symbols))
-    raw = await asyncio.to_thread(run_scan, symbols)
-    results = [SwingResultOut(**r) for r in raw[:top_n]]
+    try:
+        rows, regime_dict, last_updated_at, _oldest_age = await asyncio.to_thread(
+            get_swing_results, symbols, top_n
+        )
+    except ScreenerStoreEmpty as exc:
+        logger.warning("Swing precomputed store empty: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Precomputed swing results are not yet available. "
+                "The background worker is populating the store — retry in a few minutes."
+            ),
+        ) from exc
 
-    # LLM commentary for top 3 (batched single call). Best-effort.
-    if results:
-        top3_raw = raw[: min(3, len(results))]
-        commentary = await asyncio.to_thread(get_batch_commentary, top3_raw)
-        by_sym = {c.symbol: c for c in commentary}
-        for r in results[: min(3, len(results))]:
-            c = by_sym.get(r.symbol)
-            if c is not None:
-                r.narrative = c.narrative
-                r.risk_note = c.risk_note
+    results = [SwingResultOut(**r) for r in rows]
+    regime_out = _regime_from_dict(regime_dict) if regime_dict else None
 
-    logger.info("Swing scan complete: %d qualified of %d", len(raw), len(symbols))
-
-    regime_state = regime_cache.get("regime:global")
-    response = SwingResponse(
-        results=results,
-        regime=_regime_to_out(regime_state) if regime_state is not None else None,
+    logger.info(
+        "Swing scan (precomputed): universe=%s returning %d rows, last_updated=%s",
+        universe_key, len(results), last_updated_at,
     )
-    swing_scan_cache.set(cache_key, response)
-    return response
+    return SwingResponse(
+        results=results,
+        regime=regime_out,
+        last_updated_at=last_updated_at,
+    )
 
 
 @router.post("/swing", response_model=SwingResponse)

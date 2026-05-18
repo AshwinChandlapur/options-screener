@@ -57,6 +57,9 @@ param screenerCspImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 @description('Container image for job-screener-cc (ADR-0024). Preserved from live deployment by infra workflow.')
 param screenerCcImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 
+@description('Container image for job-screener-swing (ADR-0025). Preserved from live deployment by infra workflow.')
+param screenerSwingImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+
 @description('Container image for job-screener-ditm (ADR-0024). Preserved from live deployment by infra workflow.')
 param screenerDitmImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
 
@@ -501,6 +504,46 @@ resource screenerDitmJob 'Microsoft.App/jobs@2024-03-01' = {
   }
 }
 
+resource screenerSwingJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-screener-swing'
+  location: location
+  tags: tags
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    environmentId: env.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 840
+      scheduleTriggerConfig: {
+        cronExpression: '*/15 * * * *'
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      secrets: ghcrSecrets
+      registries: ghcrRegistries
+    }
+    template: {
+      containers: [
+        {
+          name: 'screener-swing'
+          image: screenerSwingImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1.0Gi'
+          }
+          env: [
+            { name: 'COSMOS_ENDPOINT',              value: cosmosEndpoint }
+            { name: 'STRATEGY',                     value: 'swing' }
+            { name: 'LOG_LEVEL',                    value: 'INFO' }
+            { name: 'MIN_REFRESH_SECONDS_MARKET',   value: '900' }
+            { name: 'MIN_REFRESH_SECONDS_OFF',      value: '14400' }
+          ]
+        }
+      ]
+    }
+  }
+}
+
 output envId string = env.id
 output envName string = env.name
 output ingestionAppName string = ingestion.name
@@ -513,6 +556,7 @@ output scorerJobPrincipalId string = scorerJob.identity.principalId
 output screenerCspJobPrincipalId string = screenerCspJob.identity.principalId
 output screenerCcJobPrincipalId string = screenerCcJob.identity.principalId
 output screenerDitmJobPrincipalId string = screenerDitmJob.identity.principalId
+output screenerSwingJobPrincipalId string = screenerSwingJob.identity.principalId
 
 resource detectorKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(keyVaultId)) {
   name: guid(keyVaultId, detectorJob.name, roleSecretsUser)
