@@ -37,19 +37,19 @@ param ingestionImage string = 'ghcr.io/ashwinchandlapur/narrative-ingestion:late
 param ingestionMinReplicas int = 1
 
 @description('Container image for job-extractor. Preserved from live deployment by infra workflow.')
-param extractorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+param extractorImage string = 'ghcr.io/ashwinchandlapur/narrative-extractor:latest'
 
 @description('Container image for job-aggregator. Preserved from live deployment by infra workflow.')
-param aggregatorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+param aggregatorImage string = 'ghcr.io/ashwinchandlapur/narrative-aggregator:latest'
 
 @description('Container image for job-classifier. Preserved from live deployment by infra workflow.')
-param classifierImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+param classifierImage string = 'ghcr.io/ashwinchandlapur/narrative-classifier:latest'
 
 @description('Container image for job-narrative-detector. Preserved from live deployment by infra workflow.')
-param detectorImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+param detectorImage string = 'ghcr.io/ashwinchandlapur/narrative-detector:latest'
 
 @description('Container image for job-acs-scorer. Preserved from live deployment by infra workflow.')
-param scorerImage string = 'mcr.microsoft.com/k8se/quickstart-jobs:latest'
+param scorerImage string = 'ghcr.io/ashwinchandlapur/narrative-scorer:latest'
 
 @description('Container image for job-screener-csp (ADR-0024). Preserved from live deployment by infra workflow.')
 param screenerCspImage string = 'ghcr.io/ashwinchandlapur/options-screener-worker:latest'
