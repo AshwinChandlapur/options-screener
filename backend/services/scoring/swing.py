@@ -29,7 +29,7 @@ Hard gates handled by the runner BEFORE scoring:
 """
 from __future__ import annotations
 
-SWING_SCORER_VERSION: str = "2.0.0"
+SWING_SCORER_VERSION: str = "2.2.0"
 
 SWING_WEIGHTS: dict[str, float] = {
     "RR": 40.0,
@@ -70,45 +70,61 @@ def _setup_points(setup_score: float) -> float:
     return max(0.0, min(30.0, setup_score * 0.30))
 
 
-def _context_points(rs_vs_spy: float | None, ema_alignment_score: float | None) -> float:
-    """RS (10) + EMA stack (10)."""
-    rs_pts = 0.0
-    if rs_vs_spy is not None and rs_vs_spy == rs_vs_spy:
-        if rs_vs_spy >= 1.2:
-            rs_pts = 10.0
-        elif rs_vs_spy >= 1.0:
-            rs_pts = 5.0 + 5.0 * (rs_vs_spy - 1.0) / 0.2
-        elif rs_vs_spy >= 0.9:
-            rs_pts = 5.0 * (rs_vs_spy - 0.9) / 0.1
-    ema_pts = 0.0
-    if ema_alignment_score is not None:
-        # 0–9 scale → 0–10 (slight reward for max)
-        ema_pts = max(0.0, min(10.0, ema_alignment_score * 10.0 / 9.0))
-    return rs_pts + ema_pts
+def _context_points(adx_value: float | None, ad_line_slope_pct: float | None) -> float:
+    """ADX trend strength (10) + A/D line slope (10) = 20 pts.
 
+    v2.2: replaces RS vs SPY + EMA alignment which were already scored inside
+    the setup classifier (momentum setup). ADX and A/D slope appear in no
+    setup detector's primary scoring, making this bucket genuinely orthogonal.
 
-def _institutional_points(
-    ad_line_slope_pct: float | None,
-    institutional_ownership_pct: float | None,
-) -> float:
-    """A/D slope (5) + ownership snapshot (5).
-
-    A/D: slope >= 5% → 5; 0–5% → linear; <0 → 0.
-    Ownership: ≥70% → 5; 40–70% → linear; <40% → 0.
+    ADX:       ≥30 → 10 · 22–30 → linear 7–10 · 15–22 → linear 3–7 · <15 → 0
+    A/D slope: ≥5% → 10 · 0–5% → linear 0–10 · <0 → 0
     """
+    adx_pts = 0.0
+    if adx_value is not None and adx_value == adx_value:
+        if adx_value >= 30.0:
+            adx_pts = 10.0
+        elif adx_value >= 22.0:
+            adx_pts = 7.0 + (adx_value - 22.0) / 8.0 * 3.0
+        elif adx_value >= 15.0:
+            adx_pts = 3.0 + (adx_value - 15.0) / 7.0 * 4.0
     ad_pts = 0.0
     if ad_line_slope_pct is not None and ad_line_slope_pct == ad_line_slope_pct:
         if ad_line_slope_pct >= 5.0:
-            ad_pts = 5.0
+            ad_pts = 10.0
         elif ad_line_slope_pct > 0:
-            ad_pts = 5.0 * ad_line_slope_pct / 5.0
+            ad_pts = 10.0 * ad_line_slope_pct / 5.0
+    return adx_pts + ad_pts
+
+
+def _institutional_points(
+    higher_lows: int | None,
+    institutional_ownership_pct: float | None,
+) -> float:
+    """Consecutive higher lows (5) + institutional ownership snapshot (5).
+
+    v2.2: replaces A/D line slope (moved to context bucket at doubled weight)
+    with higher_lows structure count. Higher lows appear in momentum setup
+    scoring but not in breakout/reversion/retest, so the overlap is minor.
+
+    Higher lows: ≥3 → 5 · 2 → 4 · 1 → 2 · 0 → 0
+    Ownership:   ≥70% → 5 · 40–70% → linear · <40% → 0
+    """
+    hl_pts = 0.0
+    if higher_lows is not None:
+        if higher_lows >= 3:
+            hl_pts = 5.0
+        elif higher_lows == 2:
+            hl_pts = 4.0
+        elif higher_lows == 1:
+            hl_pts = 2.0
     own_pts = 0.0
     if institutional_ownership_pct is not None and institutional_ownership_pct == institutional_ownership_pct:
         if institutional_ownership_pct >= 70:
             own_pts = 5.0
         elif institutional_ownership_pct >= 40:
             own_pts = 5.0 * (institutional_ownership_pct - 40) / 30.0
-    return ad_pts + own_pts
+    return hl_pts + own_pts
 
 
 def earnings_factor(days_to_earnings: int | None) -> float:
@@ -127,9 +143,9 @@ def earnings_factor(days_to_earnings: int | None) -> float:
 def compute_swing_score(
     rr: float,
     setup_score: float,
-    rs_vs_spy: float | None,
-    ema_alignment_score: float | None,
+    adx_value: float | None,
     ad_line_slope_pct: float | None,
+    higher_lows: int | None,
     institutional_ownership_pct: float | None,
     *,
     regime_factor: float = 1.0,
@@ -144,12 +160,17 @@ def compute_swing_score(
       multipliers  : dict regime/earnings/extended → factor used
       confidence   : "high" | "medium" | "speculative"
 
+    v2.2 context bucket: ADX trend strength (10) + A/D slope (10).
+    v2.2 institutional bucket: higher_lows (5) + ownership snapshot (5).
+
     Confidence tiers reference the POST-multiplier score and rr.
+    With ATR-projection targets (v2.2), R:R varies per symbol so
+    the high tier (rr ≥ 3.5) is now reachable on tight setups.
     """
     rr_pts = round(_rr_points(rr), 2)
     setup_pts = round(_setup_points(setup_score), 2)
-    ctx_pts = round(_context_points(rs_vs_spy, ema_alignment_score), 2)
-    inst_pts = round(_institutional_points(ad_line_slope_pct, institutional_ownership_pct), 2)
+    ctx_pts = round(_context_points(adx_value, ad_line_slope_pct), 2)
+    inst_pts = round(_institutional_points(higher_lows, institutional_ownership_pct), 2)
     raw = round(rr_pts + setup_pts + ctx_pts + inst_pts, 2)
 
     e_factor = earnings_factor(days_to_earnings)

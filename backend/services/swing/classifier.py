@@ -161,16 +161,23 @@ def detect_reversion(f: dict[str, Any]) -> dict:
         score += 15
         drivers.append("holding 0.618 fib")
 
-    # Higher-timeframe context: must still be above 200 EMA for clean reversion
+    # Higher-timeframe context: must still be above 200 EMA for clean reversion.
+    # Guard against NaN: ema200 from compute_ema_alignment is float("nan") when there
+    # are fewer than 200 bars. `if nan` is truthy in Python, but `x > nan` is False,
+    # so the reward branch silently never fires — but the block branch also silently
+    # never fires (NaN < x = False), letting falling-knife reversions through on new
+    # listings. Explicit NaN check (x == x is False for NaN) fixes both branches.
     ema = f.get("ema_alignment") or {}
-    if ema.get("ema200") and f.get("price", 0) > ema.get("ema200", 0):
+    ema200 = ema.get("ema200")
+    _ema200_valid = ema200 is not None and ema200 == ema200 and float(ema200) > 0
+    price = float(f.get("price") or 0)
+    if _ema200_valid and price > float(ema200):
         score += 15
         drivers.append("above 200 EMA")
 
     # Hard floor: reversion below the 200 EMA is catching falling knives.
     # Zero out the setup so the runner's MIN_SETUP_SCORE gate excludes the row.
-    ema200 = ema.get("ema200")
-    if ema200 and f.get("price", 0) < ema200:
+    if _ema200_valid and price < float(ema200):
         return {"score": 0.0, "drivers": drivers + ["below 200 EMA — reversion blocked"]}
 
     return {"score": _clamp(score), "drivers": drivers}

@@ -163,28 +163,33 @@ def _breadth_score(breadth_pct: float) -> float:
 
 
 def _compute_risk_appetite(iwm_close: pd.Series, spy_close: pd.Series, period: int = 20) -> float:
-    """Ratio of IWM 20d return to SPY 20d return; ~1.0 = neutral, >1 = risk-on."""
+    """Arithmetic 20d return difference IWM minus SPY.
+
+    Positive = small caps outperforming = risk appetite present.
+    Using arithmetic difference (not ratio) so the signal is well-behaved
+    when both indexes are negative (crash regime): if IWM falls 15% and SPY
+    falls 20%, diff = +5pp (small-caps more resilient), not a spurious 1.06
+    ratio that would incorrectly read as risk-on.
+    """
     if iwm_close is None or spy_close is None:
         return float("nan")
     if len(iwm_close) < period + 1 or len(spy_close) < period + 1:
         return float("nan")
     iwm_ret = float(iwm_close.iloc[-1]) / float(iwm_close.iloc[-period - 1]) - 1.0
     spy_ret = float(spy_close.iloc[-1]) / float(spy_close.iloc[-period - 1]) - 1.0
-    denom = 1.0 + spy_ret
-    if abs(denom) < 1e-9:
-        return float("nan")
-    return round((1.0 + iwm_ret) / denom, 4)
+    return round(iwm_ret - spy_ret, 4)
 
 
 def _risk_appetite_score(rs: float) -> float:
-    """Map IWM/SPY ratio → 0–100. 0.95 → 0, 1.00 → 50, 1.05+ → 100 (linear)."""
+    """Map IWM/SPY 20d arithmetic return diff → 0–100.
+    -5pp → 0, 0pp → 50, +5pp → 100 (linear)."""
     if np.isnan(rs):
         return 50.0
-    if rs <= 0.95:
+    if rs <= -0.05:
         return 0.0
-    if rs >= 1.05:
+    if rs >= 0.05:
         return 100.0
-    return (rs - 0.95) / 0.10 * 100.0
+    return (rs + 0.05) / 0.10 * 100.0
 
 
 def _label_regime(score: float) -> str:

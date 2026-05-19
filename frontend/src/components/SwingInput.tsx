@@ -64,7 +64,7 @@ const GATES = [
   { gate: 'Setup score',        threshold: '≥ 40 / 100',         note: 'Below this, no setup is well-formed enough' },
   { gate: 'ADV (dollar)',       threshold: '≥ $5,000,000',       note: 'Liquidity for clean exits' },
   { gate: 'Price',              threshold: '≥ $5',               note: 'Avoid sub-$5 chop' },
-  { gate: 'OHLC history',       threshold: '≥ 60 bars',          note: '~3 months — enough for ATR/BB/ADX' },
+  { gate: 'OHLC history',       threshold: '≥ 200 bars',         note: '~10 months — required for EMA 200 reliability and reversion safety guard' },
   { gate: 'Stop distance',      threshold: '≤ 50% of entry',     note: 'Wider stop = structurally invalid setup' },
   { gate: 'Earnings — any setup',     threshold: 'days_to_earnings > 1', note: '≤ 1 day to earnings → excluded outright' },
   { gate: 'Earnings — reversion',     threshold: 'days_to_earnings > 7', note: 'Reversion ≤ 7 days from earnings → excluded' },
@@ -129,31 +129,33 @@ const SCORE_BREAKDOWN: ScoreFactor[] = [
   // ─── Context bucket (20 pts) ─────────────────────────────────────────
   { factor: 'Context · 20 pts max', weight: null },
   {
-    factor: 'Relative Strength vs SPY',
+    factor: 'ADX trend strength',
     weight: 10,
-    detail: '< 0.9 → 0 · 1.0 → 5 · ≥ 1.2 → 10 (piecewise-linear)',
-    definition: ': Ratio of the symbol\'s 20-day return to SPY\'s 20-day return. RS = 1.2 means the name outperformed the market by 20% over the window.',
-    why: ': "A rising tide lifts all boats" — but you want the boats with their own engine. RS > 1.1 is institutional capital rotating IN to the name while the market is just drifting.',
-    formula: 'stock_ret = close[-1] / close[-20] - 1\nspy_ret = spy_close[-1] / spy_close[-20] - 1\nrs = (1 + stock_ret) / (1 + spy_ret)\n# piecewise: <0.9→0, 1.0→5, 1.2→10',
+    detail: '< 15 → 0 · 15–22 → linear 3–7 · 22–30 → linear 7–10 · ≥ 30 → 10',
+    definition: ': Average Directional Index (14-period). Measures the strength of any directional trend, regardless of direction. ADX below 20 = no real trend; above 25 = established; above 30 = strong.',
+    why: ': Setup detectors confirm pattern structure; ADX confirms the market is actually trending into that structure. A beautiful breakout in a 10-ADX chop zone typically fades. Not already scored inside any detector, so this is a genuinely orthogonal context signal.',
+    formula: 'tr = max(high-low, |high-prev_close|, |low-prev_close|)\natr = ema(tr, 14)\nplus_dm, minus_dm = directional movement\nadx = 100 * ema(|plus_di - minus_di| / (plus_di + minus_di), 14)\n# <15→0 | 15–22→linear 3–7 | 22–30→linear 7–10 | ≥30→10',
   },
   {
-    factor: 'EMA alignment',
+    factor: 'A/D line slope',
     weight: 10,
-    detail: '8 ≥ 21 ≥ 50 ≥ 100 ≥ 200 → 9 pts → scaled to 10',
-    definition: ': Counts how many of the EMA-pair comparisons (close>8, 8>21, 21>50, 50>100, 100>200, plus slopes) are in trending order. 0 = full bearish stack, 9 = perfect bullish stack.',
-    why: ': One EMA cross is noise; five in alignment is structure. This is the single best fast-read of "is the multi-timeframe trend with me".',
-    formula: 'pairs = [close>ema8, ema8>ema21, ema21>ema50,\n         ema50>ema100, ema100>ema200,\n         slope(ema8)>0, slope(ema21)>0,\n         slope(ema50)>0, slope(ema200)>0]\nscore = sum(pairs)  # 0–9\nctx_pts = min(10, score * 10/9)',
+    detail: '20-bar % slope · < 0 → 0 · 0–5% → linear 0–10 · ≥ 5% → 10',
+    definition: ': Accumulation/Distribution line is a cumulative volume-weighted closing-bias indicator. Up-slope = closes tending to bar highs on rising volume = institutional accumulation.',
+    why: ': Proxies for "is real money quietly buying". A flat or falling A/D slope behind a flashy price chart usually means the move is retail-driven and short-lived. Moved from the old institutional bucket to context at double weight (5→10 pts) because it measures market-level participation, not stock-level ownership.',
+    formula: 'mfm = ((close-low) - (high-close)) / (high-low)\nad = cumsum(mfm * volume)\nslope_pct = (ad[-1] - ad[-20]) / abs(ad[-20]) * 100\n# <0→0 | 0–5%→linear 0–10 | ≥5%→10',
   },
 
   // ─── Institutional bucket (10 pts) ───────────────────────────────────
   { factor: 'Institutional · 10 pts max', weight: null },
   {
-    factor: 'A/D line slope',
+    factor: 'Consecutive higher lows',
     weight: 5,
-    detail: '20-bar % slope · ≤ 0 → 0 · 5% → 5 (linear)',
-    definition: ': Accumulation/Distribution line is a cumulative volume-weighted closing-bias indicator. Up-slope = closes tending to bar highs on rising volume = accumulation.',
-    why: ': Proxies for "is real money quietly buying". A flat or down A/D slope behind a flashy price chart usually means the move is retail-driven and short-lived.',
-    formula: 'mfm = ((close-low) - (high-close)) / (high-low)\nad = cumsum(mfm * volume)\nslope_pct = (ad[-1] - ad[-20]) / abs(ad[-20]) * 100\n# >=5%→5pts, 0–5%→linear, <0→0',
+    detail: '0 → 0 · 1 → 2 · 2 → 4 · ≥ 3 → 5',
+    definition: ': Counts the number of consecutive swing lows where each is above the previous (over the last 20 bars). Confirms that buyers are absorbing supply at successively higher prices.',
+    why: ': The cleanest hand of \u201caccumulation without fanfare\u201d. Three consecutive higher lows with no higher high means someone is quietly stepping in. Already scored in the momentum detector (where it fires directly); at 5 pts here it gives a small universal credit across all setup types without dominating.',
+    formula: 'lows = rolling_min(low, window=3)
+higher_lows = count consecutive steps where lows[i] > lows[i-1]
+# 0\u21920 | 1\u21922 | 2\u21924 | \u22653\u21925',
   },
   {
     factor: 'Institutional ownership %',

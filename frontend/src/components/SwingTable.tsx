@@ -284,7 +284,7 @@ export function SwingTable({ data }: Props) {
                             <tbody>
                               <tr><td>R:R</td><td style={{ textAlign: 'right' }}>{r.breakdown.rr?.toFixed(1)} / 40</td></tr>
                               <tr><td>Setup</td><td style={{ textAlign: 'right' }}>{r.breakdown.setup?.toFixed(1)} / 30</td></tr>
-                              <tr><td>Context (RS + EMA)</td><td style={{ textAlign: 'right' }}>{r.breakdown.context?.toFixed(1)} / 20</td></tr>
+                              <tr><td>Context (ADX + A/D)</td><td style={{ textAlign: 'right' }}>{r.breakdown.context?.toFixed(1)} / 20</td></tr>
                               <tr><td>Institutional</td><td style={{ textAlign: 'right' }}>{r.breakdown.institutional?.toFixed(1)} / 10</td></tr>
                               <tr style={{ borderTop: '1px solid #334155' }}>
                                 <td style={{ paddingTop: 4 }}>Raw subtotal</td>

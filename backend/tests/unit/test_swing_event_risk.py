@@ -84,9 +84,9 @@ def _base_kwargs():
     return dict(
         rr=4.0,
         setup_score=80.0,
-        rs_vs_spy=1.05,
-        ema_alignment_score=8,
+        adx_value=28.0,
         ad_line_slope_pct=8.0,
+        higher_lows=3,
         institutional_ownership_pct=70.0,
     )
 
@@ -133,8 +133,8 @@ class TestCompositeScoring:
 
     def test_score_clamped_to_zero(self):
         out = compute_swing_score(
-            rr=0.0, setup_score=0.0, rs_vs_spy=None,
-            ema_alignment_score=None, ad_line_slope_pct=None,
+            rr=0.0, setup_score=0.0, adx_value=None,
+            ad_line_slope_pct=None, higher_lows=None,
             institutional_ownership_pct=None,
             regime_factor=0.0,
         )

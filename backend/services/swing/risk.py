@@ -23,19 +23,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# Setup-specific target R-multiples (target distance ÷ stop distance).
-#
-# KNOWN LIMITATION (tracked):
-# Because `target = entry + r_mult × (entry − stop)` and `rr = (target − entry) / risk`,
-# the resulting R:R is identically `r_mult` for every row of a given setup.
-# This makes R:R degenerate as a ranking signal — it's a per-setup constant.
-# The regime engine's RR gate (`services/swing/regime.py:RR_GATE_BY_REGIME`)
-# is calibrated against these constants today.
-#
-# Planned fix: replace the formula target with a *technical* target — next
-# resistance level, prior swing high, or `entry + N × ATR` projection — clipped
-# against `r_mult × risk` as a floor. R:R will then vary across rows and the
-# regime gate can be raised back to meaningful selectivity. See SWING_METHODOLOGY.md.
+# Setup-specific minimum R-multiples (used as the floor guarantee).
+# R:R is computed from a technical target (ATR projection), clipped to at least
+# r_mult × risk so that every setup still meets its structural minimum.
 SETUP_R_MULTIPLE: dict[str, float] = {
     "breakout": 3.0,
     "momentum": 2.75,
@@ -49,6 +39,16 @@ SETUP_HOLD_DAYS: dict[str, tuple[int, int]] = {
     "momentum": (7, 14),
     "reversion": (3, 7),
     "retest": (10, 21),
+}
+
+# ATR-projection multipliers for technical target computation (v2.2.0).
+# target = entry + ATR_TARGET_MULT[setup] × atr14, floored at r_mult × risk.
+# Tighter stop relative to ATR → higher R:R, correctly rewarding well-formed setups.
+ATR_TARGET_MULT: dict[str, float] = {
+    "breakout": 3.0,
+    "momentum": 2.5,
+    "reversion": 2.0,
+    "retest": 3.5,
 }
 
 ATR_STOP_MULT: float = 1.5
@@ -78,6 +78,7 @@ class RiskPlan:
     current_price: float = 0.0
     trigger_kind: str = ""
     extended: bool = False
+    target_method: str = ""  # "atr_projection" | "rr_floor" — which determined target
 
 
 def _atr_fallback_stop(current_price: float, atr14: float, recent_swing_low: float) -> float:
@@ -203,7 +204,17 @@ def build_risk_plan(
             extended=trig.extended,
         )
 
-    target = entry + r_mult * risk
+    # Technical target: ATR projection, floored at the setup's minimum R-multiple.
+    # This makes R:R vary per symbol (tight stop → high ATR → better R:R) rather
+    # than being a per-setup constant.
+    atr_target = entry + ATR_TARGET_MULT.get(setup, r_mult) * atr14
+    rr_floor_target = entry + r_mult * risk
+    if atr_target >= rr_floor_target:
+        target = atr_target
+        target_method = "atr_projection"
+    else:
+        target = rr_floor_target
+        target_method = "rr_floor"
     rr = (target - entry) / risk
     return RiskPlan(
         entry=round(entry, 2),
@@ -218,4 +229,5 @@ def build_risk_plan(
         current_price=round(current_price, 2),
         trigger_kind=trig.kind,
         extended=trig.extended,
+        target_method=target_method,
     )

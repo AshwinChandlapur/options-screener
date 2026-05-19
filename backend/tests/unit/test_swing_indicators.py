@@ -172,16 +172,16 @@ class TestDeterministic:
 class TestSwingScoring:
     def test_min_inputs_low_score(self):
         result = compute_swing_score(
-            rr=2.6, setup_score=42, rs_vs_spy=0.95,
-            ema_alignment_score=2, ad_line_slope_pct=-1, institutional_ownership_pct=30,
+            rr=2.6, setup_score=42, adx_value=14.0,
+            ad_line_slope_pct=-1.0, higher_lows=0, institutional_ownership_pct=30,
         )
         assert result["confidence"] == "speculative"
         assert result["score"] < 40
 
     def test_strong_inputs_high_score(self):
         result = compute_swing_score(
-            rr=4.0, setup_score=80, rs_vs_spy=1.3,
-            ema_alignment_score=9, ad_line_slope_pct=8, institutional_ownership_pct=75,
+            rr=4.0, setup_score=80, adx_value=30.0,
+            ad_line_slope_pct=8.0, higher_lows=3, institutional_ownership_pct=75,
         )
         assert result["confidence"] == "high"
         assert result["score"] >= 80
@@ -191,15 +191,15 @@ class TestSwingScoring:
 
     def test_rr_threshold_at_25(self):
         result = compute_swing_score(
-            rr=2.5, setup_score=50, rs_vs_spy=None,
-            ema_alignment_score=None, ad_line_slope_pct=None, institutional_ownership_pct=None,
+            rr=2.5, setup_score=50, adx_value=None,
+            ad_line_slope_pct=None, higher_lows=None, institutional_ownership_pct=None,
         )
         assert result["breakdown"]["rr"] == 0.0
 
     def test_rr_full_at_5(self):
         result = compute_swing_score(
-            rr=5.0, setup_score=50, rs_vs_spy=None,
-            ema_alignment_score=None, ad_line_slope_pct=None, institutional_ownership_pct=None,
+            rr=5.0, setup_score=50, adx_value=None,
+            ad_line_slope_pct=None, higher_lows=None, institutional_ownership_pct=None,
         )
         assert result["breakdown"]["rr"] == 40.0
 

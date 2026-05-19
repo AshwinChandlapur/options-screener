@@ -197,7 +197,7 @@ def process_symbol(
     try:
         if df is None:
             df = get_ohlc(symbol, period="1y")
-        if len(df) < 60:
+        if len(df) < 200:
             return _excluded(symbol, "insufficient history")
 
         price = float(df["Close"].iloc[-1])
@@ -316,9 +316,9 @@ def process_symbol(
         scored = compute_swing_score(
             rr=plan.rr,
             setup_score=cls["best_score"],
-            rs_vs_spy=rs,
-            ema_alignment_score=ema.get("score"),
+            adx_value=adx.get("adx"),
             ad_line_slope_pct=ad_slope,
+            higher_lows=hl,
             institutional_ownership_pct=inst_own,
             regime_factor=regime_factor,
             days_to_earnings=dte,
