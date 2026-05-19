@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from azure.cosmos import CosmosClient
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 _client: CosmosClient | None = None
 _timeline_container = None  # type: ignore[assignment]
 _alerts_container = None    # type: ignore[assignment]
+_cache_container = None     # type: ignore[assignment]
 
 
 def _get_client() -> CosmosClient:
@@ -58,6 +60,41 @@ def _get_alerts():  # type: ignore[return]
             .get_container_client("alerts")
         )
     return _alerts_container
+
+
+def _get_cache():  # type: ignore[return]
+    global _cache_container
+    if _cache_container is None:
+        db_name = os.getenv("NARRATIVE_COSMOS_DB") or os.getenv("COSMOS_DB", "narrative")
+        _cache_container = (
+            _get_client().get_database_client(db_name)
+            .get_container_client("narrative_cache")
+        )
+    return _cache_container
+
+
+# Scoreboard cache is stale after this many minutes — fall back to live scan.
+_CACHE_STALE_MINUTES: int = 30
+
+
+def _read_scoreboard() -> dict | None:
+    """Point-read the pre-computed scoreboard doc, or None if absent/stale."""
+    try:
+        doc = _get_cache().read_item(
+            item="scoreboard_v1",
+            partition_key="scoreboard_v1",
+        )
+        computed_at = doc.get("computed_at", "")
+        if computed_at:
+            age = datetime.now(tz=timezone.utc) - datetime.fromisoformat(computed_at)
+            if age.total_seconds() < _CACHE_STALE_MINUTES * 60:
+                return doc
+        return None  # doc present but stale
+    except CosmosResourceNotFoundError:
+        return None  # cold start — scorer hasn't written the cache yet
+    except Exception:
+        logger.warning("narrative cache read failed — falling back to scan")
+        return None
 
 
 # Rolling window for the cross-partition ticker scan. Keeping this at 14 days
@@ -104,16 +141,19 @@ def _fetch_all_scored() -> list[dict]:
 def query_top_acs(limit: int) -> list[dict]:
     """Return up to limit ticker_timeline docs ordered by acs descending.
 
-    ORDER BY is intentionally omitted from the Cosmos query. Cross-partition
-    ORDER BY on a non-partition-key field (acs) is unreliable on Cosmos
-    Serverless without a composite index and returns empty intermittently.
-    Sorting is done client-side after fetching all scored docs.
+    Reads from the pre-computed scoreboard in narrative_cache (single point
+    read, O(1)). Falls back to the cross-partition ticker_timeline scan when
+    the cache is absent or stale (cold start, or scorer missed a run).
 
-    The aggregator writes one snapshot per ticker per bucket_date, so the
-    raw result set contains multiple rows per ticker (one per day in the
-    retention window). We keep only the newest snapshot per ticker before
-    sorting, otherwise the same ticker can appear N times in the Top-N.
+    ORDER BY is intentionally omitted from the fallback Cosmos query. Cross-
+    partition ORDER BY on a non-partition-key field (acs) is unreliable on
+    Cosmos Serverless without a composite index. Sorting is done client-side.
     """
+    sb = _read_scoreboard()
+    if sb is not None:
+        logger.debug("query_top_acs: cache hit (computed_at=%s)", sb.get("computed_at"))
+        return sb.get("top", [])[:limit]
+    logger.debug("query_top_acs: cache miss — falling back to cross-partition scan")
     latest = _latest_per_ticker(_fetch_all_scored())
     latest.sort(key=lambda d: d.get("acs", 0.0), reverse=True)
     return latest[:limit]
@@ -122,13 +162,20 @@ def query_top_acs(limit: int) -> list[dict]:
 def query_emerging(limit: int) -> list[dict]:
     """Return stage 1–3 tickers with acs > 0, ordered by acs descending.
 
-    Dedup-then-filter: we dedup to the newest snapshot per ticker against
-    the *same* universe as query_top_acs, then keep only rows whose newest
-    snapshot is in lifecycle_stage 1–3. This guarantees both endpoints
-    reference the same "current" doc per ticker; a ticker whose newest
-    snapshot has no stage simply does not appear here (no fallback to a
-    stale older day with a stage assigned).
+    Reads from the pre-computed scoreboard in narrative_cache (single point
+    read, O(1)). Falls back to the cross-partition ticker_timeline scan when
+    the cache is absent or stale.
+
+    Dedup-then-filter: the fallback deduplicates to the newest snapshot per
+    ticker against the same universe as query_top_acs, then keeps only rows
+    whose newest snapshot is in lifecycle_stage 1–3. This guarantees both
+    endpoints reference the same “current” doc per ticker.
     """
+    sb = _read_scoreboard()
+    if sb is not None:
+        logger.debug("query_emerging: cache hit (computed_at=%s)", sb.get("computed_at"))
+        return sb.get("emerging", [])[:limit]
+    logger.debug("query_emerging: cache miss — falling back to cross-partition scan")
     latest = _latest_per_ticker(_fetch_all_scored())
     emerging = [
         d for d in latest

@@ -285,6 +285,35 @@ resource alertsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
   }
 }
 
+// narrative_cache: pre-computed scoreboard written by the scorer worker (ADR-0028).
+// One doc (id="scoreboard_v1") contains the sorted top-ACS and emerging lists.
+// TTL 24 h — if the scorer misses a run the cache expires and the read service
+// falls back to the cross-partition scan gracefully.
+resource narrativeCacheContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: 'narrative_cache'
+  properties: {
+    resource: {
+      id: 'narrative_cache'
+      partitionKey: {
+        paths: ['/id']
+        kind: 'Hash'
+        version: 2
+      }
+      defaultTtl: 86400  // 24 h
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/id/?' }
+          { path: '/computed_at/?' }
+        ]
+        excludedPaths: [{ path: '/*' }]
+      }
+    }
+  }
+}
+
 // narratives: aggregated narrative clusters (Phase 4+).
 resource narrativesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
   parent: database

@@ -24,6 +24,7 @@ class ScorerCosmosClient:
         self._db = self._client.get_database_client(database)
         self._timeline = self._db.get_container_client("ticker_timeline")
         self._alerts = self._db.get_container_client("alerts")
+        self._narrative_cache = self._db.get_container_client("narrative_cache")
 
     # ------------------------------------------------------------------
     # Read: today's ticker_timeline docs that have attention data but
@@ -168,3 +169,46 @@ class ScorerCosmosClient:
                     "Failed to write alert %s for %s — skipping",
                     alert.get("alert_type"), alert.get("ticker"),
                 )
+
+    # ------------------------------------------------------------------
+    # Write: pre-computed narrative scoreboard to narrative_cache container.
+    # Called once per scorer run after all tickers are scored (Phase B).
+    # ------------------------------------------------------------------
+
+    def write_narrative_cache(self, entries: list[dict]) -> None:
+        """Upsert the pre-sorted narrative scoreboard doc.
+
+        Writes a single ``id="scoreboard_v1"`` document containing two lists:
+        ``top`` (all entries sorted by acs desc) and ``emerging`` (stage 1–3
+        only, also sorted by acs desc). The FastAPI read service reads this
+        doc with a single point read instead of a 2,800-doc cross-partition
+        scan on every /top and /emerging request (ADR-0028).
+
+        Non-fatal — a write failure logs and continues; the read service
+        falls back to the cross-partition scan gracefully.
+        """
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        top = sorted(entries, key=lambda d: d.get("acs", 0.0), reverse=True)
+        emerging = sorted(
+            [
+                d for d in entries
+                if isinstance(d.get("lifecycle_stage"), int)
+                and 1 <= d["lifecycle_stage"] <= 3
+            ],
+            key=lambda d: d.get("acs", 0.0),
+            reverse=True,
+        )
+        doc = {
+            "id": "scoreboard_v1",
+            "computed_at": now_iso,
+            "top": top,
+            "emerging": emerging,
+        }
+        try:
+            self._narrative_cache.upsert_item(doc)
+            logger.info(
+                "Narrative cache written: %d top, %d emerging",
+                len(top), len(emerging),
+            )
+        except Exception:
+            logger.exception("Failed to write narrative cache — run continues")
