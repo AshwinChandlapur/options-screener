@@ -161,3 +161,63 @@ which remains deferred per the original ADR.
 - [ADR-0013](0013-narrative-intelligence-platform.md) — platform skeleton
 - [ADR-0014](0014-narrative-cost-substitutions.md) — Redis deferral rationale
 - [ADR-0017](0017-narrative-phase5-detector.md) — predecessor (lifecycle detector)
+
+## Addendum (2026-05-19) — §6 scorer correctness fixes
+
+Two correctness issues found during the engineering audit have been fixed in
+[workers/scorer/scorer.py](../../workers/scorer/scorer.py):
+
+### Bootstrap CI seed non-determinism
+
+The §5 addendum stated the bootstrap resampler is "reseeded off the ticker for
+determinism." The original implementation used:
+
+```python
+rng = np.random.default_rng(abs(hash(ticker)) % (2**32))
+```
+
+Python's built-in `hash()` is randomised per-process since Python 3.3
+(`PYTHONHASHSEED` is non-zero by default). On every new worker pod start the
+seed changed, making the CI band non-reproducible across scorer runs — a
+`ticker_timeline` doc written at 06:00 could have a different `acs_ci_lower`
+/ `acs_ci_upper` than one written at 06:15 on the same inputs. This makes
+regression tests fragile and makes the persisted band meaningless as a stable
+reference.
+
+**Fix:** replace `hash()` with `hashlib.md5`, which is stable across processes
+and Python versions:
+
+```python
+import hashlib
+rng = np.random.default_rng(
+    int(hashlib.md5(ticker.encode()).hexdigest(), 16) % (2**32)
+)
+```
+
+The seed is now a pure function of the ticker string. Two scorer pods running
+simultaneously on the same inputs produce identical CI bands.
+
+### First-run ACS spike suppression
+
+A new ticker's first aggregator write sets `acs = 0` (no score yet). When the
+scorer runs for the first time, `history[0].acs == 0`. The previous code:
+
+```python
+prior_acs = float(history[0].get("acs", 0)) if history else None
+```
+
+…treated `0` as a valid prior, producing `acs_delta = today_acs − 0`, which
+almost always exceeded the `acs_rising_fast` threshold (Δ ≥ 15). This fired a
+spike alert on every new ticker's first scorer run.
+
+**Fix:** treat a falsy prior ACS (`0`, `None`, missing) as "no prior baseline":
+
+```python
+_prior_acs_raw = prior.get("acs") if prior else None
+prior_acs = float(_prior_acs_raw) if _prior_acs_raw else None
+```
+
+`acs_rising_fast` requires a non-`None` `prior_acs`, so first-run tickers
+produce no spike alert. The spike alert now fires only when a real prior
+scored baseline exists. See [ADR-0027](0027-alert-detection-platform.md) for
+the full alert detection design.

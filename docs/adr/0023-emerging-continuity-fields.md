@@ -174,3 +174,56 @@ refreshed and decay out of the table as the 90-day TTL expires them.
   - `backend/tests/unit/test_narrative_read_service.py` — new fields surfaced
 - Methodology doc updated in the same PR per the lockstep rule in
   [.github/copilot-instructions.md](../../.github/copilot-instructions.md).
+
+## Addendum (2026-05-19) — 14-day rolling window for `_fetch_all_scored()`
+
+### Context
+
+The `ticker_timeline` container has a 90-day TTL. Prior to this fix,
+`_fetch_all_scored()` in
+[backend/services/narrative/cosmos_client.py](../../backend/services/narrative/cosmos_client.py)
+fetched every scored doc in the container:
+
+```sql
+SELECT * FROM c WHERE IS_DEFINED(c.acs) AND c.acs > 0
+```
+
+At ~200 active tickers × 90 days of history this returns up to ~18,000 docs
+on every `/api/narrative/tickers/top` and `/api/narrative/emerging` request.
+`_latest_per_ticker()` then discards all but the newest per ticker — ~196 docs
+kept, ~17,800 discarded. Roughly 99% of fetched bytes are thrown away on every
+read.
+
+### Fix
+
+Add a `bucket_date >= @cutoff_date` clause using the `bucket_date` field
+introduced by this ADR:
+
+```sql
+SELECT * FROM c
+WHERE IS_DEFINED(c.acs) AND c.acs > 0
+AND c.bucket_date >= @cutoff_date        -- rolling 14-day window
+```
+
+`_SCORED_LOOKBACK_DAYS = 14` — the constant is set to 14 rather than 7 or 30
+for the same reasoning applied to the slope window in §"Why a 14-day slope
+window": 7 days is too tight for tickers with irregular scorer cadence; 30 days
+is unnecessarily wide given that `decay_acs` at 14 days is already at
+`e^{−0.07 × 14} ≈ 0.37` of its original value, meaning any ticker inactive
+beyond that window would not reach the top-N results regardless. Using 14 for
+both the slope window and the query window gives a single user-facing
+interpretation: all read-path data is over the same "two-week trend" horizon.
+
+### Correctness
+
+`_latest_per_ticker()` is unchanged. Any ticker that has a newer snapshot
+within the 14-day window will always be selected. Any ticker that has not been
+scored in >14 days has a `decay_acs` near zero and would not appear in either
+the `top` or `emerging` results regardless of how many old docs it has.
+
+### Effect
+
+Docs fetched per request falls from ~18,000 (universe × 90) to ~2,800
+(universe × 14) — approximately 85% fewer RUs and bytes transferred on every
+`/top` and `/emerging` call. No schema change. No infra change. Constant
+defined once in `cosmos_client.py` and referenced in the query.
