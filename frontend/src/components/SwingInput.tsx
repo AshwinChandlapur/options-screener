@@ -153,9 +153,7 @@ const SCORE_BREAKDOWN: ScoreFactor[] = [
     detail: '0 → 0 · 1 → 2 · 2 → 4 · ≥ 3 → 5',
     definition: ': Counts the number of consecutive swing lows where each is above the previous (over the last 20 bars). Confirms that buyers are absorbing supply at successively higher prices.',
     why: ': The cleanest hand of \u201caccumulation without fanfare\u201d. Three consecutive higher lows with no higher high means someone is quietly stepping in. Already scored in the momentum detector (where it fires directly); at 5 pts here it gives a small universal credit across all setup types without dominating.',
-    formula: 'lows = rolling_min(low, window=3)
-higher_lows = count consecutive steps where lows[i] > lows[i-1]
-# 0\u21920 | 1\u21922 | 2\u21924 | \u22653\u21925',
+    formula: 'lows = rolling_min(low, window=3)\nhigher_lows = count consecutive steps where lows[i] > lows[i-1]\n# 0→0 | 1→2 | 2→4 | ≥3→5',
   },
   {
     factor: 'Institutional ownership %',
