@@ -496,7 +496,12 @@ def detect_alerts(
 
     prior = history[0] if history else None
     prior_stage = int(prior.get("lifecycle_stage") or 0) if prior else None
-    prior_acs = float(prior.get("acs") or 0.0) if prior else None
+    # Only treat the prior ACS as a real baseline if it was actually scored
+    # (acs > 0). A prior doc with acs=0/None means the scorer had not yet run
+    # on that day — using 0 as a baseline would falsely fire a spike alert
+    # for any ticker on its first real scoring run.
+    _prior_acs_raw = prior.get("acs") if prior else None
+    prior_acs = float(_prior_acs_raw) if _prior_acs_raw else None
 
     # stage_2_entry — just entered the opening of the entry window.
     if today_stage == 2 and prior_stage != 2:
