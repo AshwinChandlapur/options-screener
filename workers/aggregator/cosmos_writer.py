@@ -32,6 +32,10 @@ class CosmosTimelineWriter:
         "lifecycle_stage", "stage_confidence",
         "dominant_signal",
         "tier1_pct", "tier2_pct", "tier3_pct",
+        # ADR-0023 continuity fields written by job-acs-scorer. Must be
+        # preserved so the streak / slope do not reset on every aggregator
+        # re-upsert between scorer runs.
+        "stage_streak_days", "first_emerged_at", "acs_slope_14d",
         # Conviction shares are written by the aggregator itself on every run,
         # so they do not need to be preserved here — they're provided in the
         # incoming snapshot. Legacy conviction_*_ratio fields (ADR-0021
