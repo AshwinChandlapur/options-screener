@@ -1122,12 +1122,136 @@ body {
 .legend-component-detail dd { margin: 0; opacity: 0.85; }
 .legend-component-detail code { font-size: 10.5px; background: #1e293b; padding: 1px 4px; border-radius: 3px; }
 
+/* ── Narrative reading guide ─────────────────────────────────────────────── */
+.reading-guide {
+  background: #141720;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+.reading-guide-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.reading-guide-summary::-webkit-details-marker { display: none; }
+.reading-guide-tagline {
+  font-size: 13px;
+  font-weight: 600;
+  color: #93c5fd;
+  flex: 1;
+}
+.reading-guide-chevron {
+  font-size: 11px;
+  color: #64748b;
+  transition: transform 0.15s;
+}
+.reading-guide[open] .reading-guide-chevron { transform: rotate(180deg); }
+
+.reading-guide-body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.reading-guide-tables {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .reading-guide-tables { grid-template-columns: 1fr; }
+}
+.reading-guide-section { display: flex; flex-direction: column; gap: 6px; }
+.reading-guide-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0;
+}
+.reading-guide-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  color: #cbd5e1;
+  width: 100%;
+}
+.reading-guide-table th {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-align: left;
+  padding: 4px 10px 4px 0;
+  border-bottom: 1px solid #2d3148;
+  white-space: nowrap;
+}
+.reading-guide-table td {
+  padding: 5px 10px 5px 0;
+  border-bottom: 1px solid #1e2235;
+  vertical-align: top;
+  line-height: 1.4;
+}
+.reading-guide-table tbody tr:last-child td { border-bottom: none; }
+
+/* Stage pills — colours must stay in sync with StageBadge.tsx STAGE_META */
+.rg-stage { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.rg-stage--1 { background: #2a2a2a; color: #7a7a7a; border: 1px solid #7a7a7a; }
+.rg-stage--2 { background: #0d2e1c; color: #1f9d55; border: 1px solid #1f9d55; }
+.rg-stage--3 { background: #0d2e1c; color: #2ec27e; border: 1px solid #2ec27e; }
+.rg-stage--4 { background: #2d2000; color: #f59f00; border: 1px solid #f59f00; }
+.rg-stage--5 { background: #2d1a0e; color: #e8590c; border: 1px solid #e8590c; }
+.rg-stage--6 { background: #2d1212; color: #c92a2a; border: 1px solid #c92a2a; }
+
+/* Posture labels */
+.rg-posture { font-size: 11px; white-space: nowrap; }
+.rg-posture--watch   { color: #7dd3fc; }
+.rg-posture--entry   { color: #6ee7b7; font-weight: 600; }
+.rg-posture--confirm { color: #fcd34d; }
+.rg-posture--trim    { color: #fb923c; }
+.rg-posture--skip    { color: #f87171; }
+
+/* ACS × Stage matrix cells */
+.rg-cell { font-size: 11.5px; max-width: 220px; }
+.rg-cell--best  { color: #6ee7b7; }
+.rg-cell--ok    { color: #fcd34d; }
+.rg-cell--trap  { color: #f87171; }
+.rg-cell--watch { color: #7dd3fc; }
+.rg-cell--noise { color: #94a3b8; }
+.rg-cell--skip  { color: #64748b; }
+
+/* Practical rule bar */
+.reading-guide-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #1a1d27;
+  border-radius: 6px;
+  border: 1px solid #2d3148;
+  font-size: 12px;
+}
+.reading-guide-rule strong { color: #94a3b8; margin-right: 2px; }
+.rg-rule-item { white-space: nowrap; }
+.rg-rule--go      { color: #6ee7b7; }
+.rg-rule--confirm { color: #fcd34d; }
+.rg-rule--avoid   { color: #f87171; }
+.rg-rule-sep { color: #2d3148; font-size: 14px; }
+
 /* Three-column grid (top / emerging / alerts) */
 .narrative-grid {
   display: grid;
-  /* Top by ACS gets the most weight since it carries the primary data;
-     Emerging is secondary; Alerts is a fixed-width sidebar. */
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1.3fr) 280px;
+  /* Equal split for the two table sections: Emerging carries more columns
+     than Top ACS (adds Streak + Trend), so they need comparable space. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 280px;
   gap: 16px;
   align-items: start;
 }
@@ -1159,6 +1283,27 @@ body {
 
 /* Highlight the active sort column header (aria-sort set by NarrativeTickerTable). */
 .screener-table thead th[aria-sort] { color: #93c5fd; }
+
+/* Narrative ticker table — fixed-layout column widths.
+   table-layout: fixed keeps columns stable as rows load and prevents the
+   auto-sizing algorithm from blowing out any single column.
+   col.col-flags has no explicit width and absorbs the remaining space.
+   At narrower viewports the table overflows the .table-wrapper and
+   horizontal scrolls; that's intentional — the sticky Ticker column stays. */
+.narrative-table { table-layout: fixed; width: 100%; }
+.narrative-table col.col-ticker    { width:  70px; }
+.narrative-table col.col-acs       { width:  90px; }
+.narrative-table col.col-stage     { width:  68px; }
+.narrative-table col.col-streak    { width:  56px; }
+.narrative-table col.col-slope     { width:  74px; }
+.narrative-table col.col-breakdown { width: 202px; }
+.narrative-table col.col-signal    { width: 132px; }
+/* col-flags: no explicit width → takes all remaining table width */
+.narrative-table td.col-flags {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 0;  /* forces ellipsis clip in fixed-layout cells */
+}
 
 /* ACS cell: primary number with CI band underneath, both centered on column. */
 .acs-cell {

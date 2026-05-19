@@ -46,7 +46,7 @@ const COLUMNS: ColumnDef[] = [
   { key: 'ticker', label: 'Ticker' },
   { key: 'acs', label: 'Score', title: 'Narrative Score (0\u2013100) with 95% confidence range. \u25b2 green = bullish conviction (\u226560%); \u25bc red = bearish conviction (\u226440%).', align: 'center' },
   { key: 'stage', label: 'Stage', title: 'How early is this narrative? Stages 2\u20133 are the ideal entry window.', align: 'center' },
-  { key: 'streak', label: 'Streak', title: 'Consecutive days in stages 1\u20133 ending today (ADR-0023).', align: 'center', continuityOnly: true },
+  { key: 'streak', label: 'Streak', title: 'Consecutive days in stages 2–3 (entry window) ending today (ADR-0023).', align: 'center', continuityOnly: true },
   { key: 'slope', label: 'Trend', title: '14-day ACS slope \u2014 positive means rising, negative means fading (ADR-0023).', align: 'center', continuityOnly: true },
   {
     key: null,
@@ -129,7 +129,7 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   // ADR-0023 — orthogonal continuity filter. Default 'all' so Emerging still
   // shows the full stage-1\u20133 set; chips narrow it client-side without a refetch.
-  type ContinuityFilter = 'all' | 'new' | 'sustaining' | 'fading'
+  type ContinuityFilter = 'all' | 'new' | 'sustaining' | 'declining'
   const [continuityFilter, setContinuityFilter] = useState<ContinuityFilter>('all')
   const [signalFilter, setSignalFilter] = useState<SignalFilter>('all')
 
@@ -146,7 +146,7 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
       const slope = r.acs_slope_14d
       if (continuityFilter === 'new')        return streak <= 7
       if (continuityFilter === 'sustaining') return streak >= 14 && (slope ?? 0) >= 0
-      if (continuityFilter === 'fading')     return slope != null && slope < 0
+      if (continuityFilter === 'declining')  return slope != null && slope < 0
       return true
     })
   }, [rows, showContinuity, continuityFilter, signalFilter])
@@ -187,7 +187,7 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
     <div className="table-wrapper">
       {showContinuity && (
         <div className="continuity-filters" role="group" aria-label="Continuity filters">
-          {(['all', 'new', 'sustaining', 'fading'] as const).map((f) => (
+          {(['all', 'new', 'sustaining', 'declining'] as const).map((f) => (
             <button
               key={f}
               type="button"
@@ -196,7 +196,7 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
               title={
                 f === 'new'        ? 'Streak \u2264 7 days \u2014 newly emerging' :
                 f === 'sustaining' ? 'Streak \u2265 14 days and ACS slope \u2265 0 \u2014 durable narratives' :
-                f === 'fading'     ? 'ACS slope < 0 \u2014 momentum cooling' :
+                f === 'declining'  ? 'ACS slope < 0 \u2014 momentum cooling' :
                                      'Show all rows'
               }
             >
@@ -224,13 +224,19 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
           </button>
         ))}
       </div>
-      <table className="screener-table">
+      <table className="screener-table narrative-table">
+        <colgroup>
+          {visibleColumns.map((col) => (
+            <col key={col.label} className={`col-${col.key ?? 'breakdown'}`} />
+          ))}
+        </colgroup>
       <thead>
         <tr>
           {visibleColumns.map((col) => {
             const sortable = col.key != null
             const active = col.key === sortKey
-            const classes = [sortable ? 'sortable' : ''].filter(Boolean).join(' ') || undefined
+            const colClass = `col-${col.key ?? 'breakdown'}`
+            const classes = [colClass, sortable ? 'sortable' : ''].filter(Boolean).join(' ')
             const style: React.CSSProperties = {}
             if (col.align) style.textAlign = col.align
             return (
@@ -309,8 +315,8 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
                   <ComponentPill letter="E" value={row.components.e_market_confirmation} title="Market confirmation: sector-relative price strength · call options skew · institutional buying (max 15)" />
                 </div>
               </td>
-              <td>{labelSignal(row.dominant_signal)}</td>
-              <td className="muted">{humanizeFlags(row.flags)}</td>
+              <td className="col-signal">{labelSignal(row.dominant_signal)}</td>
+              <td className="muted col-flags" title={humanizeFlags(row.flags)}>{humanizeFlags(row.flags)}</td>
             </tr>
           )
         })}

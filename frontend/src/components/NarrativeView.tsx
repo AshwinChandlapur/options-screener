@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNarrative } from '../hooks/useNarrative'
 import type { NarrativeError, TickerDetail } from '../types/narrative'
 import { NarrativeAlertList } from './NarrativeAlertList'
+import { NarrativeReadingGuide } from './NarrativeReadingGuide'
 import { NarrativeTickerTable } from './NarrativeTickerTable'
 import { ScoreLegend } from './ScoreLegend'
 import { TickerDetailPanel } from './TickerDetailPanel'
@@ -73,7 +74,7 @@ export function NarrativeView() {
         <div>
           <h2>Narrative Intelligence</h2>
           <p className="narrative-subtitle">
-            Reddit-driven attention &amp; conviction — surfacing companies in stages 1–3
+            Reddit-driven attention &amp; conviction — surfacing companies in stages 2–3
             of the narrative lifecycle, before institutional consensus.
           </p>
         </div>
@@ -111,29 +112,9 @@ export function NarrativeView() {
         <div className="error-banner">{error.detail}</div>
       )}
 
-      {/* Stage-density diagnostic banner.
-          Fires when <30% of Top-ACS rows carry a stage badge, which means
-          the HDBSCAN clustering threshold (min_cluster_size) is too high
-          for current ingestion volume. Auto-hides once the detector fix
-          propagates and most tickers receive stage assignments. */}
-      {!loading && top.length > 0 && (() => {
-        const withStage = top.filter(r => r.lifecycle_stage > 0).length
-        const pct = withStage / top.length
-        if (pct >= 0.30) return null
-        return (
-          <div className="info-banner info-banner--warn">
-            <strong>Stage badges are sparse ({withStage}/{top.length} tickers scored).</strong>{' '}
-            The narrative detector clusters posts by semantic similarity using HDBSCAN.
-            With <strong>min_cluster_size=3</strong> a ticker needs ≥3 posts sharing the same
-            thesis in 72 hours — too strict at current ingestion volume (~2 posts/ticker/day).
-            Lowering to <strong>min_cluster_size=2</strong> (2 posts = enough to confirm a
-            shared thesis) unblocks most tickers. The fix is being deployed; stage badges will
-            populate on the next detector run.
-          </div>
-        )
-      })()}
-
       <ScoreLegend />
+
+      <NarrativeReadingGuide />
 
       <div className="narrative-grid">
         <section>
