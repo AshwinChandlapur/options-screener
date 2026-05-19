@@ -107,7 +107,7 @@ const ADJUSTMENTS: AdjustmentDef[] = [
 const SCORE_TIERS = [
   { range: '≥ 75', label: 'Strong signal', color: '#2ec27e', detail: 'All five components firing. Rare — take it at normal size.' },
   { range: '65–74', label: 'Good signal', color: '#1f9d55', detail: 'Solid narrative with at most one weak component.' },
-  { range: '55–64', label: 'Developing', color: '#f59f00', detail: 'Mechanically forming but not yet confirmed — stage 1–2 setups land here.' },
+  { range: '55–64', label: 'Developing', color: '#f59f00', detail: 'Stage 1 watch setups and early Stage 2 entries — narrative forming. Stage 2 at this range is worth monitoring seriously.' },
   { range: '45–54', label: 'Weak', color: '#e8590c', detail: 'Something structural is off — thin contributor base, low quality, or late stage.' },
   { range: '< 45', label: 'Pass', color: '#c92a2a', detail: 'Multiple red flags. Skip.' },
 ]

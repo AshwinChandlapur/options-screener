@@ -315,7 +315,7 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
                   <ComponentPill letter="E" value={row.components.e_market_confirmation} title="Market confirmation: sector-relative price strength · call options skew · institutional buying (max 15)" />
                 </div>
               </td>
-              <td className="col-signal">{labelSignal(row.dominant_signal)}</td>
+              <td className="col-signal" title={labelSignal(row.dominant_signal)}>{labelSignal(row.dominant_signal)}</td>
               <td className="muted col-flags" title={humanizeFlags(row.flags)}>{humanizeFlags(row.flags)}</td>
             </tr>
           )
