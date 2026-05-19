@@ -501,7 +501,18 @@ def detect_alerts(
     now_iso = datetime.now(tz=timezone.utc).isoformat()
 
     prior = history[0] if history else None
-    prior_stage = int(prior.get("lifecycle_stage") or 0) if prior else None
+    # Effective prior stage: walk history for the last doc with a known stage.
+    # Mirrors the carry-forward in _streak_and_first_emerged so that a missed
+    # detector run on yesterday's doc (lifecycle_stage=None) does not falsely
+    # fire a stage entry alert when the ticker has been in that stage for days.
+    # prior_acs deliberately stays pinned to history[0] — spike detection is a
+    # strict 1-day ACS delta, not a "last known" comparison.
+    effective_prior_stage: int | None = None
+    for _h in history:
+        _ps = _h.get("lifecycle_stage")
+        if _ps is not None:
+            effective_prior_stage = int(_ps)
+            break
     # Only treat the prior ACS as a real baseline if it was actually scored
     # (acs > 0). A prior doc with acs=0/None means the scorer had not yet run
     # on that day — using 0 as a baseline would falsely fire a spike alert
@@ -510,7 +521,7 @@ def detect_alerts(
     prior_acs = float(_prior_acs_raw) if _prior_acs_raw else None
 
     # stage_2_entry — just entered the opening of the entry window.
-    if today_stage == 2 and prior_stage != 2:
+    if today_stage == 2 and effective_prior_stage != 2:
         alerts.append({
             "id": f"{ticker}_stage_2_entry_{bucket_date}",
             "ticker": ticker,
@@ -518,14 +529,14 @@ def detect_alerts(
             "triggered_at": now_iso,
             "bucket_date": bucket_date,
             "payload": {
-                "prev_stage": prior_stage,
+                "prev_stage": effective_prior_stage,
                 "curr_stage": 2,
                 "acs": round(today_acs, 1),
             },
         })
 
     # stage_3_entry — thesis growing, peak score window, premium may be elevated.
-    if today_stage == 3 and prior_stage != 3:
+    if today_stage == 3 and effective_prior_stage != 3:
         alerts.append({
             "id": f"{ticker}_stage_3_entry_{bucket_date}",
             "ticker": ticker,
@@ -533,7 +544,7 @@ def detect_alerts(
             "triggered_at": now_iso,
             "bucket_date": bucket_date,
             "payload": {
-                "prev_stage": prior_stage,
+                "prev_stage": effective_prior_stage,
                 "curr_stage": 3,
                 "acs": round(today_acs, 1),
             },

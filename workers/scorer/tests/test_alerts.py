@@ -219,6 +219,61 @@ class TestAcsRisingFast:
 
 
 # ---------------------------------------------------------------------------
+# Carry-forward: missed detector run on prior day must not cause false positive
+# ---------------------------------------------------------------------------
+
+class TestStageEntryCarryForward:
+    def test_prior_none_with_deeper_stage_2_suppresses_alert(self) -> None:
+        # yesterday: detector missed (lifecycle_stage=None)
+        # two days ago: stage 2 (confirmed)
+        # today: still stage 2 → should NOT fire (ticker was already there)
+        history = [
+            {"lifecycle_stage": None, "acs": 55.0, "bucket_date": "2026-05-18"},
+            {"lifecycle_stage": 2,    "acs": 53.0, "bucket_date": "2026-05-17"},
+        ]
+        alerts = detect_alerts(
+            ticker="NVDA",
+            today_stage=2,
+            today_acs=58.0,
+            bucket_date="2026-05-19",
+            history=history,
+        )
+        assert "stage_2_entry" not in _alert_types(alerts)
+
+    def test_prior_none_with_deeper_stage_1_still_fires(self) -> None:
+        # yesterday: detector missed (lifecycle_stage=None)
+        # two days ago: stage 1
+        # today: stage 2 → genuine transition, SHOULD fire
+        history = [
+            {"lifecycle_stage": None, "acs": 48.0, "bucket_date": "2026-05-18"},
+            {"lifecycle_stage": 1,    "acs": 46.0, "bucket_date": "2026-05-17"},
+        ]
+        alerts = detect_alerts(
+            ticker="NVDA",
+            today_stage=2,
+            today_acs=55.0,
+            bucket_date="2026-05-19",
+            history=history,
+        )
+        assert "stage_2_entry" in _alert_types(alerts)
+
+    def test_all_prior_stages_none_fires_as_new_entry(self) -> None:
+        # All history has no stage (e.g. detector never ran) — still a valid first entry
+        history = [
+            {"lifecycle_stage": None, "acs": 40.0, "bucket_date": "2026-05-18"},
+            {"lifecycle_stage": None, "acs": 38.0, "bucket_date": "2026-05-17"},
+        ]
+        alerts = detect_alerts(
+            ticker="NVDA",
+            today_stage=2,
+            today_acs=52.0,
+            bucket_date="2026-05-19",
+            history=history,
+        )
+        assert "stage_2_entry" in _alert_types(alerts)
+
+
+# ---------------------------------------------------------------------------
 # No alerts for non-emerging stages
 # ---------------------------------------------------------------------------
 
