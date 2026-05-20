@@ -27,8 +27,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field
 
 from limiter import limiter
-from services.narrative import read_service
-from services.narrative import signals_service
+from services.narrative import read_service, signals_service
 from services.narrative.errors import (
     NarrativeNotFound,
     NarrativeUnavailable,

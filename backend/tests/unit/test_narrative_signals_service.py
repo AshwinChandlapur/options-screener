@@ -12,7 +12,6 @@ from unittest.mock import patch
 
 from services.narrative import cosmos_client, signals_service
 
-
 # ---------------------------------------------------------------------------
 # Fake container — captures the most recent query + params, returns canned docs
 # ---------------------------------------------------------------------------
