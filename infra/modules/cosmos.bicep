@@ -267,7 +267,10 @@ resource alertsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
       partitionKey: {
         paths: ['/ticker']
         kind: 'Hash'
-        version: 2
+        // version intentionally omitted (= v1) to match the existing
+        // production container. Cosmos rejects PK-version changes
+        // in-place, so bumping to v2 would require recreating the
+        // container and losing in-flight alert history.
       }
       defaultTtl: 2592000  // 30 days in seconds
       indexingPolicy: {
@@ -305,7 +308,6 @@ resource narrativeCacheContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatab
         indexingMode: 'consistent'
         automatic: true
         includedPaths: [
-          { path: '/id/?' }
           { path: '/computed_at/?' }
         ]
         excludedPaths: [{ path: '/*' }]
