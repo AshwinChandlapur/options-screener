@@ -11,6 +11,8 @@ import type { ReactElement } from 'react'
 import type { CspResult, GroupedCspResult } from '../types/csp'
 import type { InsightResult, InsightVerdict, StockCycle } from '../types/insight'
 import { useInsight } from '../hooks/useInsight'
+import { useCspBacktest } from '../hooks/useCspBacktest'
+import { CspBacktestPanel } from './CspBacktestPanel'
 
 const col = createColumnHelper<GroupedCspResult>()
 
@@ -399,6 +401,9 @@ export function CspTable({ data }: Props) {
   const [insightExpanded, setInsightExpanded] = useState<Set<string>>(new Set())
   const [staleDismissed, setStaleDismissed] = useState(false)
   const { insights, loading: insightLoading, errors: insightErrors, fetchInsight } = useInsight()
+  const { backtests, loading: backtestLoading, errors: backtestErrors, fetchBacktest } = useCspBacktest()
+  // Backtest key is per-symbol (not per-expiration) since backtest result is the same across DTE buckets
+  const [backtestExpanded, setBacktestExpanded] = useState<Set<string>>(new Set())
 
   const anyStale = groupedData.some(
     r => r.using_hv_fallback || r.expirations.some(e => e.strikes.some(s => s.iv_stale))
@@ -556,7 +561,7 @@ export function CspTable({ data }: Props) {
               : 0
             const insightCount = insightExpanded.has(expKey) ? 1 : 0
             return sum + 1 + altCount + insightCount
-          }, 0)
+          }, 0) + (backtestExpanded.has(r.symbol) ? 1 : 0)
 
           const rows: ReactElement[] = []
           let absRowIdx = 0
@@ -725,6 +730,26 @@ export function CspTable({ data }: Props) {
                   >
                     {insightExpanded.has(key) ? '▲ AI' : '✦ AI'}
                   </button>
+                  <button
+                    className="insight-btn"
+                    title="Walk-forward backtest of v3.3 scoring on this ticker (ADR-0031)"
+                    style={{ marginLeft: 4 }}
+                    onClick={() => {
+                      const sym = r.symbol
+                      const isOpen = backtestExpanded.has(sym)
+                      setBacktestExpanded(prev => {
+                        const next = new Set(prev)
+                        if (isOpen) next.delete(sym); else next.add(sym)
+                        return next
+                      })
+                      const bkKey = `${sym}:2:35`
+                      if (!isOpen && !backtests.has(bkKey) && !backtestLoading.has(bkKey)) {
+                        fetchBacktest(sym, 2, 35)
+                      }
+                    }}
+                  >
+                    {backtestExpanded.has(r.symbol) ? '▲ BT' : '📊 BT'}
+                  </button>
                 </td>
                 <td>
                   {topDrags(bestStrike.env_detail ?? '', bestStrike.strike_detail ?? '').map(d => (
@@ -797,6 +822,25 @@ export function CspTable({ data }: Props) {
               )
               absRowIdx++
             }
+          }
+
+          // ── Backtest row (once per ticker, after the last expiration block) ──
+          if (backtestExpanded.has(r.symbol)) {
+            const bkKey = `${r.symbol}:2:35`
+            rows.push(
+              <tr key="backtest" className="insight-row">
+                <td colSpan={19} style={{ padding: 0 }}>
+                  {backtestLoading.has(bkKey) ? (
+                    <div className="insight-loading">📊 Running walk-forward backtest (~3–8s)…</div>
+                  ) : backtestErrors.get(bkKey) ? (
+                    <div className="insight-error">⚠ {backtestErrors.get(bkKey)}</div>
+                  ) : backtests.get(bkKey) ? (
+                    <CspBacktestPanel data={backtests.get(bkKey)!} />
+                  ) : null}
+                </td>
+              </tr>
+            )
+            absRowIdx++
           }
 
           return (
