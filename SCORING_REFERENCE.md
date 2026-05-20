@@ -27,6 +27,18 @@
 > `SCORING_VERSION = "3.3.0"` constant gates all ENV scoring. Diagnostic-preserved fields (`em_buffer_pct`, `dist_pct`, `otm_pct` for CSP/CC;
 > `theta_annualized_pct`, `capital_efficiency_pct`, `breakeven_pct`, `hv_rank` for DITM) are
 > still computed and returned in the response payload but contribute 0 to the score.
+>
+> **Empirical validation (2026-05-20, [ADR-0031](docs/adr/0031-csp-scoring-empirical-validation.md)).**
+> A 12,751-trade synthetic-BS walk-forward backtest (2024-01 → 2026-04, full
+> `MOMENTUM_UNIVERSE`) confirms the CSP scoring function is **monotone** in realised
+> annualised ROC: bucket means go −6.3% → −4.2% → +3.0% → +13.4% → +15.6% across the
+> 0-50 / 50-65 / 65-75 / 75-85 / 85-100 buckets. Spearman ρ(score, realised ROC) = +0.266
+> (p ≈ 0). The 65-cutoff carries +14.0% mean ROC of separation. Factor independence:
+> pairwise |r| within the trend cluster (Tr/SMA/SLP) maxes at 0.58 — below the audit's
+> 0.6 "triple-count" threshold. IVP is the most independent factor in the system
+> (max |corr| with any other factor = 0.08). Caveats: bull-regime sample; BA/LQ omitted
+> in backtest (no historical chain data); HV(30) used as IV proxy. See the ADR for full
+> methodology and limitations.
 
 ## Final score formula
 
