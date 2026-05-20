@@ -5,6 +5,7 @@ import { NarrativeAlertList } from './NarrativeAlertList'
 import { NarrativeReadingGuide } from './NarrativeReadingGuide'
 import { NarrativeTickerTable } from './NarrativeTickerTable'
 import { ScoreLegend } from './ScoreLegend'
+import { SignalsTab } from './SignalsTab'
 import { TickerDetailPanel } from './TickerDetailPanel'
 import { TickerSearch } from './TickerSearch'
 
@@ -141,6 +142,8 @@ export function NarrativeView() {
           <NarrativeAlertList alerts={alerts} />
         </section>
       </div>
+
+      <SignalsTab />
 
       {selectedTicker && (
         <TickerDetailPanel
