@@ -126,6 +126,17 @@ async def _score_one(
                 "acs_ci_lower": round(result.acs_ci_lower, 4),
                 "acs_ci_upper": round(result.acs_ci_upper, 4),
                 "decay_acs": round(result.decay_acs, 4),
+                # ADR-0028 follow-up: scoreboard rows are read by
+                # backend/services/narrative/read_service._doc_to_acs which
+                # expects the same shape as ticker_timeline docs. Without
+                # these fields the API returns zeroed component pills and
+                # zero stage_confidence even though ticker_timeline has the
+                # real values.
+                "acs_components": result.components,
+                "acs_flags": list(result.flags),
+                "dominant_signal": result.dominant_signal,
+                "acs_scored_at": datetime.now(tz=timezone.utc).isoformat(),
+                "stage_confidence": doc.get("stage_confidence"),
                 "lifecycle_stage": doc.get("lifecycle_stage"),
                 "stage_streak_days": continuity.stage_streak_days,
                 "first_emerged_at": continuity.first_emerged_at,
