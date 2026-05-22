@@ -21,9 +21,16 @@ from typing import Any
 # Tunables — keep methodology doc and tests in lockstep with these constants.
 # ---------------------------------------------------------------------------
 
-# EMA smoothing factor for volatile inputs.  alpha=0.4 → ~3-day half-life with
-# hourly detector runs (one EMA step per run).  Higher alpha = more reactive,
-# lower = more stable.
+# EMA smoothing factor for volatile inputs.
+# At hourly detector runs (one step per run), the exact half-life is:
+#   h = ln(2) / ln(1 / (1 - alpha)) = ln(2) / ln(1/0.6) ≈ 1.36 runs ≈ 81 minutes
+# This is deliberately short — the goal is to smooth minute-to-minute
+# volatility in aggregator metrics while still responding to genuine
+# multi-hour shifts within the same day.
+# If you need a longer half-life (e.g. ~1 day = 24 runs), use alpha ≈ 0.028.
+# If you need ~3 days (72 runs), use alpha ≈ 0.0097.
+# Note: ADR-0030 previously stated "~3-day half-life" — that was incorrect
+# for an hourly cadence at alpha=0.4.  The actual half-life is ~81 minutes.
 EMA_ALPHA: float = 0.4
 
 # Breadth-score band thresholds.  Computed empirically from §4 methodology.

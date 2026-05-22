@@ -153,6 +153,7 @@ class AcsScore:
     stage_streak_days: int = 0
     first_emerged_at: str | None = None     # ISO date "YYYY-MM-DD"
     acs_slope_14d: float | None = None      # ACS points / day, +ve = rising
+    market_cap: float | None = None         # USD, from yfinance at score time
 
 
 @dataclass(frozen=True)

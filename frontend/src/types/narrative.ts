@@ -6,11 +6,11 @@
  */
 
 export interface AcsComponents {
-  a_attention_persistence: number  // 0..25
-  b_contributor_quality: number    // 0..20
-  c_narrative_strength: number     // 0..20
+  a_attention_persistence: number  // 0..30 (post ADR-0034)
+  b_contributor_quality: number    // 0..25
+  c_narrative_strength: number     // 0..25
   d_thesis_quality: number         // 0..20
-  e_market_confirmation: number    // 0..15
+  e_market_confirmation: number    // always 0 — retired (ADR-0034)
 }
 
 export interface AcsScore {
@@ -33,6 +33,8 @@ export interface AcsScore {
   first_emerged_at?: string | null
   /** OLS slope of ACS over the last 14 daily snapshots; null if <5 samples. */
   acs_slope_14d?: number | null
+  /** Market cap in USD at score time; null when yfinance lookup failed. */
+  market_cap?: number | null
 }
 
 export interface DailyBucket {
@@ -91,4 +93,53 @@ export interface NarrativeError {
   detail: string
   /** True when the platform isn't yet provisioned (Phase 0 → 503). */
   unavailable: boolean
+}
+
+// ---------------------------------------------------------------------------
+// IC Monitor — GET /api/narrative/ic-monitor
+// ---------------------------------------------------------------------------
+
+export interface WeeklyIcPoint {
+  week_label: string           // "2026-W22"
+  n_pairs: number              // complete (ACS, return) pairs in this cohort
+  ic: number | null            // Spearman IC; null if cohort < 10
+  p_value: number | null
+  mean_acs: number
+  mean_return_pct: number
+}
+
+export interface FactorIcEntry {
+  factor: string               // e.g. "comp_a", "gini_14d"
+  n: number                    // complete pairs with this factor present
+  ic: number | null            // Spearman rho; null if n < 10
+  p_value: number | null
+}
+
+export interface AsymmetryBucket {
+  label: string                // e.g. "ACS top quartile", "Emerging (stage 2–3)"
+  n: number
+  mean_ret: number | null
+  median_ret: number | null
+  std_ret: number | null
+  skewness: number | null      // > 0 = right-skewed (fat right tail)
+  win_rate: number | null      // fraction of returns > 0
+  upside_10: number | null     // fraction of returns > +10%
+  downside_10: number | null   // fraction of returns < −10%
+  tail_ratio: number | null    // upside_10 / downside_10 ; >1 = right asymmetry
+}
+
+export interface IcMonitor {
+  forward_days: number
+  cumulative_ic: number | null
+  cumulative_n: number
+  cumulative_p_value: number | null
+  weekly: WeeklyIcPoint[]
+  factor_ics: FactorIcEntry[]  // per-factor IC across all complete pairs
+  asymmetry: AsymmetryBucket[] // return distribution by ACS/stage segment
+  total_snapshots: number
+  total_complete: number
+  pct_complete: number         // 0..1
+  window_start: string | null
+  window_end: string | null
+  last_computed_at: string
 }

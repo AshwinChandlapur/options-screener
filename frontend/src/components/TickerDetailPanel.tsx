@@ -17,8 +17,7 @@ const FLAG_LABELS: Record<string, string> = {
   late_stage:         'Late stage \u2014 narrative past the ideal entry window',
   small_cap:          'Small cap \u2014 extra caution advised on liquidity',
   small_cap_haircut:  'Small cap \u2014 extra caution advised on liquidity',
-  low_unique_authors: 'Few authors \u2014 not enough distinct voices yet',
-}
+  low_unique_authors: 'Few authors \u2014 not enough distinct voices yet',  cold_start:         'Early signal — limited data, no lifecycle stage or classifier data yet',}
 
 const fmtPct = (v: number | null | undefined, digits = 0) =>
   v == null ? '—' : `${(v * 100).toFixed(digits)}%`

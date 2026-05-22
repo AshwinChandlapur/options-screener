@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNarrative } from '../hooks/useNarrative'
 import type { NarrativeError, TickerDetail } from '../types/narrative'
-import { NarrativeAlertList } from './NarrativeAlertList'
+import { NarrativeIcMonitor } from './NarrativeIcMonitor'
 import { NarrativeReadingGuide } from './NarrativeReadingGuide'
 import { NarrativeTickerTable } from './NarrativeTickerTable'
 import { ScoreLegend } from './ScoreLegend'
 import { SignalsTab } from './SignalsTab'
 import { TickerDetailPanel } from './TickerDetailPanel'
 import { TickerSearch } from './TickerSearch'
+
+type ActiveTab = 'scores' | 'ic-monitor'
 
 function formatRelative(date: Date): string {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000)
@@ -26,7 +28,6 @@ export function NarrativeView() {
   const {
     top,
     emerging,
-    alerts,
     loading,
     error,
     lastUpdatedAt,
@@ -38,6 +39,7 @@ export function NarrativeView() {
   const [detail, setDetail] = useState<TickerDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<ActiveTab>('scores')
   const [, setTick] = useState(0)  // re-render so "X min ago" updates
 
   // Re-render every 30s so the "updated X min ago" text stays fresh.
@@ -117,33 +119,53 @@ export function NarrativeView() {
 
       <NarrativeReadingGuide />
 
-      <div className="narrative-grid">
-        <section>
-          <h3>Top by ACS</h3>
-          <NarrativeTickerTable
-            rows={top}
-            emptyMessage="No ACS scores yet."
-            loading={loading}
-            onSelect={(t) => void loadDetail(t)}
-          />
-        </section>
-        <section>
-          <h3>Emerging (stages 1–3)</h3>
-          <NarrativeTickerTable
-            rows={emerging}
-            emptyMessage="No emerging tickers yet."
-            loading={loading}
-            onSelect={(t) => void loadDetail(t)}
-            showContinuity
-          />
-        </section>
-        <section>
-          <h3>Alerts</h3>
-          <NarrativeAlertList alerts={alerts} />
-        </section>
+      {/* Tab switcher */}
+      <div className="tab-bar" style={{ marginLeft: 0, marginBottom: '16px' }}>
+        <button
+          className={`tab-btn${activeTab === 'scores' ? ' tab-btn-active' : ''}`}
+          onClick={() => setActiveTab('scores')}
+        >
+          Scores
+        </button>
+        <button
+          className={`tab-btn${activeTab === 'ic-monitor' ? ' tab-btn-active' : ''}`}
+          onClick={() => setActiveTab('ic-monitor')}
+        >
+          IC Monitor (90d)
+        </button>
       </div>
 
-      <SignalsTab />
+      {activeTab === 'scores' && (
+        <>
+          <div className="narrative-grid">
+            <section>
+              <h3>Top by ACS</h3>
+              <NarrativeTickerTable
+                rows={top}
+                emptyMessage="No ACS scores yet."
+                loading={loading}
+                onSelect={(t) => void loadDetail(t)}
+              />
+            </section>
+            <section>
+              <h3>Emerging (stages 1–3)</h3>
+              <NarrativeTickerTable
+                rows={emerging}
+                emptyMessage="No emerging tickers yet."
+                loading={loading}
+                onSelect={(t) => void loadDetail(t)}
+                showContinuity
+                defaultMarketCapFilter="sub10b"
+              />
+            </section>
+          </div>
+          <SignalsTab />
+        </>
+      )}
+
+      {activeTab === 'ic-monitor' && (
+        <NarrativeIcMonitor />
+      )}
 
       {selectedTicker && (
         <TickerDetailPanel

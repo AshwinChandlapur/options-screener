@@ -2,12 +2,23 @@
 
 Implements NARRATIVE_METHODOLOGY.md §5.
 
-Components:
-    A  Attention persistence  — decay_weighted_density_14d * A_max
-    B  Contributor quality   — unique_authors / log(mentions) * (1-G) * B_max
-    C  Narrative strength    — stage_map[stage] * stage_confidence * (C_max / 20)
-    D  Thesis quality        — min(0.6*s_br + 0.2*s_Br, 1) * D_max   (ADR-0021)
-    E  Market confirmation   — 0 (deferred to Phase 6.1)
+Components (total max = 100):
+    A  Attention persistence  — decay_weighted_density_14d * A_max   (default 30)
+    B  Contributor quality   — unique_authors / log(mentions) * (1-G) * B_max (default 25)
+    C  Narrative strength    — stage_map[stage] * stage_confidence * (C_max / 20) (default 25)
+    D  Thesis quality        — (min(s_br/0.75,1)*0.5 + min(s_Br/0.25,1)*0.5) * D_max  (default 20)
+
+        Base-rate normalization: Reddit is structurally ~75% bullish, so raw bull
+        share is compared against a 0.75 prior; bear against 0.25. Each normalized
+        half gets equal 0.5 weight so a 5% bear-DD post scores proportionally the
+        same as a 15% bull-DD post. See CF16 / ADR-0036.
+
+    Component E (market confirmation via rs_14d, options, 13F) was removed.
+    Reason: rs_14d_norm encoded pure 14-day price momentum — the dependent
+    variable — making it causally contaminated with the forward return being
+    predicted.  13F data is 1–4.5 months stale.  Removed pending design of a
+    genuinely contemporaneous, non-price-momentum confirmation signal.
+    See ADR-0034 for the removal decision.
 
 Adjustments (multipliers, in order — §5.3):
     G > 0.65                                → × 0.6   (gini_high)
@@ -48,6 +59,11 @@ assert _STAGE_MAP_PEAK == 20.0, "Component C denominator (see §5.1) drifted fro
 #     the 14-day attention window. half-life ≈ 6.9 days. Must match aggregator.
 _ACS_TIME_DECAY_RATE: float = 0.07
 _ATTENTION_DECAY_LAMBDA: float = 0.1
+
+# Component D base rates (CF16 / ADR-0036): Reddit's structural bull/bear mix.
+# Empirical prior — pin until recalibrated from corpus statistics.
+_BULL_BASE_RATE: float = 0.75
+_BEAR_BASE_RATE: float = 0.25
 _WINDOW_14D: int = 14                   # component-A window length
 
 # Bootstrap-CI parameters.
@@ -68,10 +84,12 @@ _DECEL_STREAK_DAYS: int = 3
 class AcsResult:
     ticker: str
     acs: float
+    acs_raw: float               # pre-haircut sum of components
+    acs_multiplier: float        # combined haircut (1.0 = no haircut)
     acs_ci_lower: float
     acs_ci_upper: float
     decay_acs: float
-    components: dict[str, float]   # {A, B, C, D, E}
+    components: dict[str, float]   # {A, B, C, D}
     dominant_signal: str
     flags: list[str] = field(default_factory=list)
 
@@ -87,9 +105,10 @@ def compute_acs(doc: dict, weights: dict[str, float]) -> AcsResult:
         AcsResult with all fields populated.
     """
     ticker: str = doc.get("ticker", "")
-    a_max: float = weights.get("A_max", 25.0)
-    b_max: float = weights.get("B_max", 20.0)
-    c_max: float = weights.get("C_max", 20.0)
+    # Default weights sum to 100; E_max removed (ADR-0034).
+    a_max: float = weights.get("A_max", 30.0)
+    b_max: float = weights.get("B_max", 25.0)
+    c_max: float = weights.get("C_max", 25.0)
     d_max: float = weights.get("D_max", 20.0)
 
     # --- Component A: attention persistence ---
@@ -120,21 +139,23 @@ def compute_acs(doc: dict, weights: dict[str, float]) -> AcsResult:
     # written by the aggregator (compute_axis_distributions); they cannot be
     # derived from the marginal axis ratios. Component D rewards substantive
     # conviction in either direction — a deeply argued bear case still counts.
-    s_br: float = doc.get("conviction_bull_researched_share") or 0.0
-    s_Br: float = doc.get("conviction_bear_researched_share") or 0.0
-    thesis_score = (0.6 * s_br) + (0.2 * s_Br)
+    #
+    # Base-rate normalization (CF16 / ADR-0036): normalize each joint share by
+    # Reddit's structural bull/bear mix so a rare bear DD scores proportionally
+    # the same as a common bull DD of equivalent relative prevalence.
+    _s_br_raw: float | None = doc.get("conviction_bull_researched_share")
+    _s_Br_raw: float | None = doc.get("conviction_bear_researched_share")
+    s_br: float = _s_br_raw if _s_br_raw is not None else 0.0
+    s_Br: float = _s_Br_raw if _s_Br_raw is not None else 0.0
+    bull_norm = min(s_br / _BULL_BASE_RATE, 1.0)
+    bear_norm = min(s_Br / _BEAR_BASE_RATE, 1.0)
+    thesis_score = 0.5 * bull_norm + 0.5 * bear_norm
     comp_d = min(max(thesis_score, 0.0), 1.0) * d_max
 
-    # --- Component E: market confirmation (§5.1, §6) ---
-    # Sub-signals are pre-populated by main.py via get_market_confirmation();
-    # absent = 0.0 so the scorer degrades gracefully when yfinance is down.
-    e_max: float = weights.get("E_max", 15.0)
-    rs_norm: float = doc.get("rs_14d_norm") or 0.0
-    opt_norm: float = doc.get("opt_ratio_norm") or 0.0
-    inst_norm: float = doc.get("institutional_13f_norm") or 0.0
-    comp_e = min(6.0 * rs_norm + 5.0 * opt_norm + 4.0 * inst_norm, e_max)
+    # Component E removed — see module docstring and ADR-0034.
+    comp_e = 0.0
 
-    acs_raw = comp_a + comp_b + comp_c + comp_d + comp_e
+    acs_raw = comp_a + comp_b + comp_c + comp_d
 
     # --- Adjustments (§5.3) ---
     multiplier = 1.0
@@ -157,6 +178,14 @@ def compute_acs(doc: dict, weights: dict[str, float]) -> AcsResult:
         multiplier *= 0.85
         flags.append("small_cap")
 
+    # Cold-start flag (CF17): stage==0 means the detector hasn't assigned a
+    # lifecycle stage yet AND no classifier conviction data is available.
+    # Score is not penalised — C and D are naturally 0.  The flag lets the UI
+    # badge these tickers as "Early signal — limited data" and lets the IC test
+    # segment cold-start vs. established cohorts independently.
+    if stage == 0 and _s_br_raw is None and _s_Br_raw is None:
+        flags.append("cold_start")
+
     acs = min(100.0, max(0.0, acs_raw * multiplier))
 
     # --- CI bands (§5.6 bootstrap; fallback ±15% heuristic) ---
@@ -165,7 +194,6 @@ def compute_acs(doc: dict, weights: dict[str, float]) -> AcsResult:
         comp_b=comp_b,
         comp_c=comp_c,
         comp_d=comp_d,
-        comp_e=comp_e,
         a_max=a_max,
         multiplier=multiplier,
         acs=acs,
@@ -182,6 +210,8 @@ def compute_acs(doc: dict, weights: dict[str, float]) -> AcsResult:
     return AcsResult(
         ticker=ticker,
         acs=round(acs, 4),
+        acs_raw=round(acs_raw, 4),
+        acs_multiplier=round(multiplier, 6),
         acs_ci_lower=round(acs_ci_lower, 4),
         acs_ci_upper=round(acs_ci_upper, 4),
         decay_acs=round(decay_acs, 4),
@@ -190,7 +220,6 @@ def compute_acs(doc: dict, weights: dict[str, float]) -> AcsResult:
             "B": round(comp_b, 4),
             "C": round(comp_c, 4),
             "D": round(comp_d, 4),
-            "E": round(comp_e, 4),
         },
         dominant_signal=dominant_signal,
         flags=flags,
@@ -279,7 +308,6 @@ def _bootstrap_ci(
     comp_b: float,
     comp_c: float,
     comp_d: float,
-    comp_e: float,
     a_max: float,
     multiplier: float,
     acs: float,
@@ -287,9 +315,13 @@ def _bootstrap_ci(
     """Bootstrap CI on the final ACS by resampling daily_buckets.
 
     Per §5.6: resample the 14-day daily counts with replacement, recompute
-    component A per resample, hold B/C/D/E and the adjustment multiplier
+    component A per resample, hold B/C/D and the adjustment multiplier
     constant (they aggregate over the same window or are doc-level constants),
     then take the 2.5/97.5 percentile of the resulting ACS distribution.
+
+    Note: B/C/D are held fixed — their uncertainty (lifecycle stage variance,
+    classifier variance) is not captured by this bootstrap.  CI bands reflect
+    only the sampling variance in attention density.
 
     Falls back to a ±15% heuristic when there are fewer than 5 daily buckets
     (not enough samples for a meaningful resample).
@@ -320,7 +352,7 @@ def _bootstrap_ci(
         resampled = arr[idx].tolist()
         dwd = _decay_weighted_density(resampled)
         comp_a_i = min(dwd, 1.0) * a_max
-        acs_raw_i = comp_a_i + comp_b + comp_c + comp_d + comp_e
+        acs_raw_i = comp_a_i + comp_b + comp_c + comp_d
         samples[i] = min(100.0, max(0.0, acs_raw_i * multiplier))
 
     lower = float(np.percentile(samples, _BOOTSTRAP_LOWER_PCT))

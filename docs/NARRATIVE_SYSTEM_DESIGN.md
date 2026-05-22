@@ -535,7 +535,7 @@ bands via bootstrap, and writes the score back to the same document.
 │  │  B = min(authors/log(mentions) × (1-G) × B_max, B_max)         │     │
 │  │      0 when mentions ≤ 1                                        │     │
 │  │  C = stage_map[stage] / 20 × stage_confidence × C_max          │     │
-│  │  D = min(0.6·s_br + 0.2·s_Br, 1) × D_max                          │  │
+│  │  D = (min(s_br/0.75,1)×0.5 + min(s_Br/0.25,1)×0.5) × D_max        │  │
 │  │  E = 0  (deferred to Phase 6.1)                                 │     │
 │  │                                                                  │     │
 │  │  ACS_raw = A + B + C + D                                        │     │
@@ -859,8 +859,8 @@ signal for this ticker in the 14d window.
 | `conviction_entering_share` | float \| null | Aggregator | Fraction with `conviction_position = "entering"`. UI-only — trajectory signal for crowding. |
 | `conviction_exiting_share` | float \| null | Aggregator | Fraction with `conviction_position = "exiting"`. UI-only — early warning for thesis dissolution. |
 | `conviction_driver_top` | str \| null | Aggregator | Most-common non-`"other"` driver across classified signals (`"earnings"`, `"product"`, …). `"other"` on tie or all-other. |
-| `conviction_bull_researched_share` | float \| null | Aggregator | Joint share: fraction where `direction=bull` AND `substance=researched`. ACS component D weights this at 0.60. *Not* derivable from the marginals — see ADR-0021. |
-| `conviction_bear_researched_share` | float \| null | Aggregator | Joint share: fraction where `direction=bear` AND `substance=researched`. ACS component D weights this at 0.20. |
+| `conviction_bull_researched_share` | float \| null | Aggregator | Joint share: fraction where `direction=bull` AND `substance=researched`. Component D normalizes this against a 0.75 Reddit bull base rate. *Not* derivable from the marginals — see ADR-0021. |
+| `conviction_bear_researched_share` | float \| null | Aggregator | Joint share: fraction where `direction=bear` AND `substance=researched`. Component D normalizes this against a 0.25 Reddit bear base rate. Equal 0.5 weight with the bull half (CF16 base-rate normalization). |
 | `conviction_classified_14d` | int \| null | Aggregator | Count of signals in the 14d window that have been axis-classified. The denominator for the shares above. |
 
 #### Phase 5 — Lifecycle stage (added by narrative detector)
@@ -880,7 +880,7 @@ signal for this ticker in the 14d window.
 | `acs_ci_upper` | float `[0,75]` | Scorer | Upper bound of the CI (97.5th percentile, or `acs × 1.15` heuristic). Wide CI = high uncertainty — displayed as an error bar in the UI. |
 | `decay_acs` | float `[0,75]` | Scorer | `acs × e^{-0.07 × days_since_scored}`. Temporal penalty so old snapshots rank lower than fresh ones. Pre-computed so the read path never does date arithmetic. |
 | `acs_components` | object | Scorer | Breakdown: `{a, b, c, d, e}` (each rounded to 4 decimal places). Shown in the UI detail panel so contributors can see which dimension is driving or suppressing the score. |
-| `acs_flags` | list[str] | Scorer | Active haircut flags: `"gini_high"` (×0.6), `"decelerating_3d"` (×0.8), `"late_stage"` (×0.5), `"small_cap"` (×0.85). Empty list = no haircuts applied. Displayed in the UI as warning badges. |
+| `acs_flags` | list[str] | Scorer | Active haircut flags: `"gini_high"` (×0.6), `"decelerating_3d"` (×0.8), `"late_stage"` (×0.5), `"small_cap"` (×0.85), `"cold_start"` (no haircut — informational only: stage=0 and no classifier conviction data yet). Empty list = no haircuts applied. Displayed in the UI as warning badges. |
 | `acs_scored_at` | str (ISO 8601) | Scorer | UTC timestamp of the last scorer run that wrote this document. The `acs_staleness_seconds` App Insights alert fires when `now − acs_scored_at > 900s`. |
 | `stage_streak_days` | int `≥ 0` | Scorer (ADR-0023) | Consecutive days ending today where `lifecycle_stage ∈ {1, 2, 3}`. Leading-edge `null` carries forward from the most recent prior non-null stage (24 h window). 0 when today's effective stage is outside the emerging set. Bounded above by the 90 d `ticker_timeline` TTL. |
 | `first_emerged_at` | str (ISO date) \| null | Scorer (ADR-0023) | `bucket_date` of the oldest day in the current streak. `null` when `stage_streak_days = 0`. Stored explicitly so the UI can render "Since YYYY-MM-DD" without arithmetic. |
@@ -951,7 +951,7 @@ ACS = A + B + C + D + E, max 100 (E is 0 in the current release).
 | **A** — Attention persistence | 25 | Decay-weighted mention density over 14 days | Discussion has been sustained and recent, not a one-day spike |
 | **B** — Contributor quality | 20 | Author breadth relative to volume, penalised by Gini concentration | Many distinct authors posting, not one person flooding | 
 | **C** — Narrative strength | 20 | Lifecycle stage × stage confidence (from HDBSCAN cluster coherence) | Narratives have coalesced into a coherent thesis cluster |
-| **D** — Thesis quality | 20 | Joint shares: `bull_researched` (0.6) + `bear_researched` (0.2) | Significant fraction of posts are analytical, not emotional |
+| **D** — Thesis quality | 20 | Base-rate-normalized joint shares: each half normalized against Reddit's 0.75 bull / 0.25 bear prior, equal 0.5 weight | Significant fraction of posts are analytical, not emotional |
 | **E** — Market confirmation | 15 | Price / options flow confirmation *(not yet implemented — always 0)* | — |
 
 A strong ACS score is one where **A, B, and D are all meaningful** — sustained

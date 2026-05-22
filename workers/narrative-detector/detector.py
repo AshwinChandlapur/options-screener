@@ -1,178 +1,156 @@
-"""HDBSCAN clustering + lifecycle stage assignment (Phase 5).
+"""Cosine-graph clustering + lifecycle stage assignment (Phase 5).
 
-Implements §4 of NARRATIVE_METHODOLOGY.md:
+Implements §4 of NARRATIVE_METHODOLOGY.md.
 
-  cluster()     — HDBSCAN on cosine distance, then merges nearby cluster centroids,
-                  then applies an intra-cluster similarity floor (ADR-0026).
+Clustering approach (replaces HDBSCAN, see ADR-0035):
+  cluster()     — pairwise cosine similarity graph: two signals are in the
+                  same cluster iff cosine(a, b) >= CLUSTER_SIMILARITY_FLOOR.
+                  Connected components of the resulting graph define clusters.
+                  This is deterministic, requires no hyperparameters, and
+                  degrades gracefully at low signal volumes (2–18 signals/72h
+                  is the typical range per ADR-0026 observations).
+
   assign_stage() — pure signal-side lifecycle rules (no LLM).
 
-Design decisions per ADR-0017 / ADR-0026:
-  - min_cluster_size=3 (configurable), metric="cosine" (via precomputed distance matrix).
-  - Clusters with cosine similarity > merge_threshold (default 0.82) between centroids
-    are merged into a single narrative thread.
-  - Clusters whose mean pairwise cosine similarity falls below
-    min_intra_cluster_similarity (default 0.35) are demoted to noise — they represent
-    semantically unrelated posts that happened to be nearest neighbours rather than a
-    shared narrative thread.
-  - Noise points (label -1) are excluded from lifecycle assignment.
-  - Stage assignment is deterministic; confidence = fraction of signals in the
-    dominant cluster relative to total non-noise signals.
+Why the change from HDBSCAN:
+  HDBSCAN with min_cluster_size=3 needs ≥3 samples to form any cluster;
+  at typical ingestion volumes most tickers had all signals labelled as
+  noise (-1) and stage assignment was arbitrary.  The cosine-graph approach
+  groups any two semantically similar signals together, making it well-suited
+  to sparse signal environments.  When signal volumes grow past ~30/72h,
+  the approach naturally produces multiple disconnected components.
+
+  See ADR-0035 for the full decision record.
 """
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-from sklearn.cluster import HDBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
+
+# Cosine similarity floor for the cluster graph edge.
+# Two signals are considered to share a narrative thread if their embedding
+# cosine similarity meets this threshold.  Calibrated at 0.45:
+#   < 0.35 — semantically unrelated (ADR-0026 observed noise floor)
+#   0.35–0.45 — marginal overlap
+#   > 0.45 — clearly shared topic
+# Raise this to tighten clustering (fewer, more coherent clusters);
+# lower to loosen (more inclusive but noisier).
+CLUSTER_SIMILARITY_FLOOR: float = 0.45
 
 
 @dataclass
 class ClusterResult:
     """Output of cluster() for a single ticker."""
-    labels: list[int]          # per-signal cluster label (-1 = noise)
-    n_clusters: int            # number of clusters after merging
-    dominant_cluster: int      # label of the largest non-noise cluster (-1 if all noise)
-    dominant_fraction: float   # fraction of non-noise signals in the dominant cluster
-    n_embedded: int = 0        # total signals fed to HDBSCAN (== len(labels))
+    labels: list[int]          # per-signal cluster label (-1 = noise / singleton)
+    n_clusters: int            # number of clusters (≥2 members each)
+    dominant_cluster: int      # label of the largest cluster (-1 if none)
+    dominant_fraction: float   # fraction of clustered signals in the dominant cluster
+    n_embedded: int = 0        # total signals fed to the algorithm
 
 
 def cluster(
     embeddings: list[list[float]],
-    min_cluster_size: int = 3,
-    merge_threshold: float = 0.82,
-    min_intra_cluster_similarity: float = 0.35,
+    similarity_floor: float = CLUSTER_SIMILARITY_FLOOR,
 ) -> ClusterResult:
-    """Run HDBSCAN on embeddings (cosine metric) and merge nearby cluster centroids.
+    """Cluster embeddings using a pairwise cosine similarity graph.
 
-    After merging, any cluster whose mean pairwise cosine similarity is below
-    *min_intra_cluster_similarity* is demoted to noise (label -1).  This prevents
-    low-coherence pairs — posts that happen to be nearest neighbours but discuss
-    unrelated topics — from being promoted to a narrative stage.
+    Builds a graph where nodes are signals and edges connect pairs whose
+    cosine similarity >= similarity_floor.  Connected components of this
+    graph are the clusters.  Singleton nodes (no edge to any other signal)
+    are labelled -1 (noise) — they represent posts that don't share enough
+    semantic content with any other post to form a narrative thread.
+
+    Algorithm:
+        1. Normalise embeddings to unit vectors.
+        2. Compute all-pairs cosine similarity matrix.
+        3. Threshold to adjacency matrix (sim >= floor → 1, else 0).
+        4. BFS/union-find to find connected components.
+        5. Singleton components → label -1.
+        6. Number remaining components 0, 1, 2 … by descending size.
+
+    Properties:
+        - Deterministic (no random state).
+        - No minimum cluster size hyperparameter — any pair of similar
+          signals forms a cluster.
+        - O(n²) time and space — acceptable up to ~500 signals per ticker.
+          At 18 signals/72h this is trivially fast.
 
     Args:
-        embeddings: list of 1536-dim float vectors.
-        min_cluster_size: HDBSCAN parameter (ADR-0017 default=3).
-        merge_threshold: cosine similarity above which two clusters are merged.
-        min_intra_cluster_similarity: quality floor — clusters below this mean
-            pairwise similarity are treated as noise (ADR-0026 default=0.35).
+        embeddings: list of float vectors (any dimension).
+        similarity_floor: minimum cosine similarity to draw an edge.
 
     Returns:
-        ClusterResult with per-signal labels and summary stats.
+        ClusterResult with per-signal labels and summary statistics.
     """
     n = len(embeddings)
     if n == 0:
-        return ClusterResult(
-            labels=[], n_clusters=0, dominant_cluster=-1,
-            dominant_fraction=0.0, n_embedded=0,
-        )
-
-    # HDBSCAN needs >=2 samples to fit, and >= min_cluster_size to form any
-    # cluster. Below that threshold everything is noise by definition — return
-    # a trivial result rather than letting sklearn raise. This is common in the
-    # ramp-up window where a ticker may have a single embedded signal.
-    if n < max(2, min_cluster_size):
-        return ClusterResult(
-            labels=[-1] * n,
-            n_clusters=0,
-            dominant_cluster=-1,
-            dominant_fraction=0.0,
-            n_embedded=n,
-        )
+        return ClusterResult(labels=[], n_clusters=0, dominant_cluster=-1,
+                             dominant_fraction=0.0, n_embedded=0)
+    if n == 1:
+        return ClusterResult(labels=[-1], n_clusters=0, dominant_cluster=-1,
+                             dominant_fraction=0.0, n_embedded=1)
 
     mat = np.array(embeddings, dtype=np.float32)
-
-    # Normalise rows so that cosine distance = 1 - dot product.
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
     mat_normed = mat / norms
 
-    # Precomputed cosine distance matrix: D[i,j] = 1 - cos(i,j), range [0,2].
-    cos_sim = cosine_similarity(mat_normed)
-    dist_matrix = np.clip(1.0 - cos_sim, 0.0, 2.0).astype(np.float64)
+    sim = cosine_similarity(mat_normed)   # (n, n) in [-1, 1]
 
-    clusterer = HDBSCAN(
-        min_cluster_size=min_cluster_size,
-        min_samples=1,
-        metric="precomputed",
-    )
-    raw_labels: np.ndarray = clusterer.fit_predict(dist_matrix)
+    # Adjacency: 1 if sim >= floor AND i != j.
+    adj = (sim >= similarity_floor).astype(bool)
+    np.fill_diagonal(adj, False)
 
-    # --- Merge clusters whose centroids are cosine-similar > merge_threshold ---
-    unique_labels = [lbl for lbl in set(raw_labels.tolist()) if lbl != -1]
-    if len(unique_labels) > 1:
-        centroids = np.array(
-            [mat_normed[raw_labels == lbl].mean(axis=0) for lbl in unique_labels]
-        )
-        centroid_sim = cosine_similarity(centroids)
-        # Union-find: merge label pairs above threshold.
-        parent = {lbl: lbl for lbl in unique_labels}
+    # Union-find connected components.
+    parent = list(range(n))
 
-        def find(x: int) -> int:
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
 
-        for i, lbl_i in enumerate(unique_labels):
-            for j, lbl_j in enumerate(unique_labels):
-                if j <= i:
-                    continue
-                if centroid_sim[i, j] >= merge_threshold:
-                    ri, rj = find(lbl_i), find(lbl_j)
-                    if ri != rj:
-                        parent[rj] = ri
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
 
-        # Remap all labels through the union-find roots.
-        remap = {lbl: find(lbl) for lbl in unique_labels}
-        merged_labels = np.array(
-            [remap[lbl] if lbl != -1 else -1 for lbl in raw_labels.tolist()],
-            dtype=np.int64,
-        )
-        # Re-number contiguously (0, 1, 2 ...) preserving -1.
-        roots = sorted(set(remap.values()))
-        root_to_idx = {r: idx for idx, r in enumerate(roots)}
-        final_labels = np.array(
-            [root_to_idx[lbl] if lbl != -1 else -1 for lbl in merged_labels.tolist()],
-            dtype=np.int64,
-        )
-    else:
-        final_labels = raw_labels.copy()
+    for i in range(n):
+        for j in range(i + 1, n):
+            if adj[i, j]:
+                union(i, j)
 
-    # --- Intra-cluster similarity floor (ADR-0026) ---
-    # For each surviving cluster, compute the mean pairwise cosine similarity of
-    # its members. A pair of posts that HDBSCAN grouped purely because they were
-    # the two closest points in a sparse space will have a low mean similarity;
-    # a genuine shared-narrative cluster will score well above the floor.
-    if min_intra_cluster_similarity > 0.0:
-        for lbl in set(final_labels.tolist()):
-            if lbl == -1:
-                continue
-            idxs = np.where(final_labels == lbl)[0]
-            if len(idxs) < 2:
-                # Degenerate singleton — demote (should not occur with min_cluster_size>=2).
-                final_labels[final_labels == lbl] = -1
-                continue
-            sub = cos_sim[np.ix_(idxs, idxs)]
-            n_pairs = len(idxs) * (len(idxs) - 1)
-            mean_sim = float((sub.sum() - np.trace(sub)) / n_pairs)
-            if mean_sim < min_intra_cluster_similarity:
-                final_labels[final_labels == lbl] = -1
-                logger.debug(
-                    "cluster(): label=%d demoted to noise "
-                    "(mean_intra_sim=%.3f < floor=%.3f, n=%d)",
-                    lbl, mean_sim, min_intra_cluster_similarity, len(idxs),
-                )
+    # Map each node to its root component.
+    roots = [find(i) for i in range(n)]
 
-    labels_list = final_labels.tolist()
-    non_noise = [lbl for lbl in labels_list if lbl != -1]
-    n_clusters = len(set(non_noise))
+    # Group by root; singletons (root == self and no edges) → noise.
+    from collections import defaultdict
+    component: dict[int, list[int]] = defaultdict(list)
+    for i, r in enumerate(roots):
+        component[r].append(i)
+
+    # Any component with only 1 member is a singleton → label -1.
+    labels = [-1] * n
+    cluster_idx = 0
+    cluster_sizes: list[tuple[int, int]] = []  # (cluster_idx, size)
+    for members in component.values():
+        if len(members) < 2:
+            continue  # singleton stays -1
+        for m in members:
+            labels[m] = cluster_idx
+        cluster_sizes.append((cluster_idx, len(members)))
+        cluster_idx += 1
+
+    n_clusters = cluster_idx
+    non_noise = [l for l in labels if l != -1]
 
     if non_noise:
-        from collections import Counter
         counts = Counter(non_noise)
         dominant_cluster, dominant_count = counts.most_common(1)[0]
         dominant_fraction = dominant_count / len(non_noise)
@@ -181,11 +159,11 @@ def cluster(
         dominant_fraction = 0.0
 
     logger.debug(
-        "cluster(): n=%d raw_clusters=%d merged_clusters=%d dominant_fraction=%.2f",
-        n, len(set(raw_labels.tolist()) - {-1}), n_clusters, dominant_fraction,
+        "cluster(): n=%d n_clusters=%d dominant_fraction=%.2f floor=%.2f",
+        n, n_clusters, dominant_fraction, similarity_floor,
     )
     return ClusterResult(
-        labels=labels_list,
+        labels=labels,
         n_clusters=n_clusters,
         dominant_cluster=dominant_cluster,
         dominant_fraction=dominant_fraction,

@@ -1698,3 +1698,174 @@ body {
 @media (max-width: 900px) {
   .signals-stat-row { grid-template-columns: 1fr; }
 }
+
+/* ── IC Monitor (90-day live test) ───────────────────────────────────────── */
+.ic-monitor { display: flex; flex-direction: column; gap: 20px; }
+
+.ic-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+@media (max-width: 900px) { .ic-stat-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.ic-stat-card {
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  padding: 16px;
+}
+.ic-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+.ic-stat-value {
+  font-size: 28px;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+.ic-stat-value.ic-good    { color: #4ade80; }
+.ic-stat-value.ic-ok      { color: #fbbf24; }
+.ic-stat-value.ic-poor    { color: #fb923c; }
+.ic-stat-value.ic-bad     { color: #f87171; }
+.ic-stat-sub {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 4px;
+}
+.ic-progress-track {
+  width: 100%;
+  background: #2d3148;
+  border-radius: 3px;
+  height: 4px;
+  margin-top: 8px;
+}
+.ic-progress-fill { background: #4f6ef7; height: 4px; border-radius: 3px; }
+
+.ic-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.ic-status-accumulating { background: #2d3148; color: #94a3b8; }
+.ic-status-signal       { background: #14532d; color: #4ade80; }
+.ic-status-below        { background: #422006; color: #fbbf24; }
+.ic-status-none         { background: #450a0a; color: #f87171; }
+
+.ic-section {
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ic-no-data {
+  text-align: center;
+  padding: 40px 20px;
+  color: #64748b;
+  font-size: 13px;
+}
+.ic-legend {
+  padding: 12px 16px;
+  background: #0f1117;
+  border: 1px solid #2d3148;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.8;
+}
+.ic-legend strong { color: #94a3b8; }
+.ic-legend .ic-good { color: #4ade80; }
+.ic-legend .ic-ok   { color: #fbbf24; }
+.ic-legend .ic-bad  { color: #f87171; }
+
+/* ── Experiment monitoring guide ─────────────────────────────── */
+.ic-guide {
+  margin-top: 28px;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  background: #0f172a;
+}
+.ic-guide-summary {
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: 0.03em;
+  list-style: none;
+  user-select: none;
+}
+.ic-guide-summary::-webkit-details-marker { display: none; }
+.ic-guide-summary::before {
+  content: '▶ ';
+  font-size: 10px;
+  color: #475569;
+}
+details[open] .ic-guide-summary::before { content: '▼ '; }
+.ic-guide-summary:hover { color: #94a3b8; }
+
+.ic-guide-body {
+  padding: 0 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.ic-guide-section h5 {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 8px;
+}
+.ic-guide-section ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ic-guide-section li {
+  font-size: 13px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+.ic-guide-section li strong { color: #cbd5e1; }
+.ic-guide-section li code {
+  background: #1e293b;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #a5b4fc;
+}
+
+.ic-guide-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ic-guide-table th {
+  text-align: left;
+  padding: 6px 10px;
+  color: #475569;
+  border-bottom: 1px solid #1e293b;
+  font-weight: 600;
+}
+.ic-guide-table td {
+  padding: 8px 10px;
+  vertical-align: top;
+  border-bottom: 1px solid #0f172a;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+.ic-guide-table td:first-child { white-space: nowrap; font-weight: 600; }
+
+.ic-guide-signal td:first-child { color: #4ade80; }
+.ic-guide-weak   td:first-child { color: #fbbf24; }
+.ic-guide-none   td:first-child { color: #f87171; }

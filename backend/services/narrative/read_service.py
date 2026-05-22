@@ -67,6 +67,9 @@ def _doc_to_acs(doc: dict) -> AcsScore:
         acs_slope_14d=(
             float(doc["acs_slope_14d"]) if doc.get("acs_slope_14d") is not None else None
         ),
+        market_cap=(
+            float(doc["market_cap"]) if doc.get("market_cap") is not None else None
+        ),
     )
 
 

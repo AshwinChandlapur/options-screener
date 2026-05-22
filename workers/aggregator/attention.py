@@ -38,14 +38,32 @@ _WINDOW_30D: int = 30
 # Terms that indicate a financially substantive post (§2.4).
 # Deliberately conservative — false positives (calling a shallow post deep)
 # are worse than false negatives.
+# IMPORTANT: do NOT add generic directional terms (bull/bear/calls/puts/short/
+# long/iv/oi/sector/macro/fed/rate/yield) — these appear in virtually every
+# Reddit finance post regardless of analytical depth and inflate the score
+# for shallow content.  Only retain terms that require genuine analytical
+# engagement to use correctly.
 _FINANCIAL_TERMS: frozenset[str] = frozenset({
-    "revenue", "earnings", "eps", "ebitda", "pe", "p/e", "margin", "guidance",
-    "catalyst", "valuation", "dcf", "bull", "bear", "thesis", "short", "long",
-    "calls", "puts", "iv", "oi", "open interest", "float", "shares", "dilution",
-    "buyback", "dividend", "debt", "fcf", "free cash", "moat", "competitive",
-    "market share", "gross margin", "operating", "capex", "sector", "index",
-    "analyst", "upgrade", "downgrade", "target price", "pt ", "beat", "miss",
-    "outlook", "macro", "fed", "rate", "inflation", "yield",
+    # Fundamental analysis
+    "revenue", "earnings", "eps", "ebitda", "ebit", "pe", "p/e",
+    "margin", "gross margin", "operating margin", "net margin",
+    "free cash", "fcf", "capex", "capital expenditure",
+    "dcf", "discounted cash flow", "intrinsic value",
+    "dilution", "dilutive", "buyback", "share repurchase",
+    "dividend", "debt", "leverage", "balance sheet",
+    "guidance", "catalyst", "valuation", "moat",
+    "competitive advantage", "market share",
+    # Structural / ownership
+    "institutional", "insider", "short interest",
+    "open interest",          # full phrase only — not the single word "oi"
+    "float", "shares outstanding",
+    # Analyst coverage
+    "analyst", "upgrade", "downgrade", "target price", "price target",
+    "beat", "miss", "consensus",
+    # Macro (only when specific enough to imply research)
+    "interest rate", "federal reserve", "quantitative",
+    "earnings call", "10-k", "10-q", "sec filing",
+    "thesis", "bull case", "bear case",
 })
 
 # Flair or title keywords that mark a DD (due diligence) post (§2.4).
@@ -59,7 +77,9 @@ _DD_TERMS: frozenset[str] = frozenset({
 # images and can't share Python imports. If you edit one, edit the other.
 # Comparison is case-insensitive on the subreddit name.
 _TIER1_SUBS: frozenset[str] = frozenset({
-    "investing", "stocks", "securityanalysis", "valueinvesting", "bogleheads",
+    "investing", "stocks", "securityanalysis", "valueinvesting",
+    # bogleheads REMOVED from Tier 1: passive-index community; individual
+    # stock signals from there are non-representative outliers.
 })
 _TIER2_SUBS: frozenset[str] = frozenset({
     "wallstreetbets", "options", "smallstreetbets", "pennystocks",
@@ -67,6 +87,7 @@ _TIER2_SUBS: frozenset[str] = frozenset({
 })
 _TIER3_SUBS: frozenset[str] = frozenset({
     "artificial", "semiconductors", "energy", "biotech", "space", "geopolitics",
+    "bogleheads",  # passive-investing; individual-stock mentions rare + non-representative
 })
 
 

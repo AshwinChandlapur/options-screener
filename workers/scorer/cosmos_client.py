@@ -25,6 +25,7 @@ class ScorerCosmosClient:
         self._timeline = self._db.get_container_client("ticker_timeline")
         self._alerts = self._db.get_container_client("alerts")
         self._narrative_cache = self._db.get_container_client("narrative_cache")
+        self._ic_snapshots = self._db.get_container_client("ic_snapshots")
 
     # ------------------------------------------------------------------
     # Read: today's ticker_timeline docs that have attention data but
@@ -214,3 +215,51 @@ class ScorerCosmosClient:
             )
         except Exception:
             logger.exception("Failed to write narrative cache — run continues")
+
+    # ------------------------------------------------------------------
+    # IC snapshot container — Phase 2 validation infrastructure.
+    # FROZEN: do not change read/write semantics for 90 days from first use.
+    # ------------------------------------------------------------------
+
+    def upsert_ic_snapshot(self, doc: dict) -> None:
+        """Write or update a single IC snapshot document.  Non-fatal."""
+        try:
+            self._ic_snapshots.upsert_item(doc)
+        except Exception:
+            logger.debug(
+                "ic_snapshot upsert failed for %s — non-fatal",
+                doc.get("ticker"), exc_info=True,
+            )
+
+    def get_ic_snapshot(self, ticker: str, snapshot_date: str) -> dict | None:
+        """Point-read one IC snapshot.  Returns None if absent."""
+        from ic_snapshot import make_snapshot_id  # noqa: PLC0415
+        doc_id = make_snapshot_id(ticker, snapshot_date)
+        try:
+            return self._ic_snapshots.read_item(item=doc_id, partition_key=ticker)
+        except Exception:
+            return None
+
+    def fetch_pending_ic_snapshots(self, limit: int = 200) -> list[dict]:
+        """Return incomplete IC snapshots that are candidates for return-fill.
+
+        Uses a cross-partition query — acceptable because this runs once per
+        scorer cycle, not on the hot path.
+        """
+        query = (
+            "SELECT * FROM c "
+            "WHERE c.is_complete = false AND c.px_at_snapshot != null "
+            "ORDER BY c.snapshot_date ASC "
+            "OFFSET 0 LIMIT @limit"
+        )
+        try:
+            return list(
+                self._ic_snapshots.query_items(
+                    query=query,
+                    parameters=[{"name": "@limit", "value": limit}],
+                    enable_cross_partition_query=True,
+                )
+            )
+        except Exception:
+            logger.debug("fetch_pending_ic_snapshots failed — non-fatal", exc_info=True)
+            return []

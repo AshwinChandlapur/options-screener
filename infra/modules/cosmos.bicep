@@ -382,6 +382,42 @@ resource signalEventsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabas
   }
 }
 
+// ic_snapshots: 90-day forward-walk IC validation (ADR-0034 amendment).
+// One doc per (ticker, snapshot_date): ACS + full factor vector at time of
+// snapshot; forward_return_pct and is_complete filled 30 days later by the
+// scorer's _fill_mature_ic_returns() pass.
+//
+// No TTL — data must persist beyond the 90-day window so the IC series
+// can be computed post-experiment without data loss.
+resource icSnapshotsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: database
+  name: 'ic_snapshots'
+  properties: {
+    resource: {
+      id: 'ic_snapshots'
+      partitionKey: {
+        paths: ['/ticker']
+        kind: 'Hash'
+        version: 2
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          { path: '/ticker/?' }
+          { path: '/snapshot_date/?' }
+          { path: '/acs/?' }
+          { path: '/is_complete/?' }
+          { path: '/forward_return_pct/?' }
+          { path: '/lifecycle_stage/?' }
+          { path: '/market_cap/?' }
+        ]
+        excludedPaths: [{ path: '/*' }]
+      }
+    }
+  }
+}
+
 // Grant Cosmos DB Built-in Data Contributor to provided principal IDs.
 // Built-in role definition ID is fixed across all accounts.
 var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'

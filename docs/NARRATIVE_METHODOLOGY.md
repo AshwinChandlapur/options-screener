@@ -383,7 +383,7 @@ narrative lifecycle (§4), and market confirmation (§6) for a single ticker.
 | A | Attention persistence index | 25 | $\min(\text{decay\_weighted\_density}_{14d},\ 1) \cdot A_{\max}$ |
 | B | Contributor quality | 20 | $\min\!\left(\dfrac{\text{unique\_authors}_{14d}}{\log(\text{mentions}_{14d})} \cdot (1 - G) \cdot B_{\max},\ B_{\max}\right)$; $0$ when $\text{mentions}_{14d} \le 1$ |
 | C | Narrative strength | 20 | $\dfrac{\text{stage\_map}[\text{stage}]}{\max(\text{stage\_map})} \cdot \text{stage\_confidence} \cdot C_{\max}$ |
-| D | Thesis quality | 20 | $\min(0.6 \cdot s_{\text{br}} + 0.2 \cdot s_{\text{Br}},\ 1) \cdot D_{\max}$ |
+| D | Thesis quality | 20 | $\left(\min\!\left(\tfrac{s_{\text{br}}}{0.75}, 1\right) \cdot 0.5 + \min\!\left(\tfrac{s_{\text{Br}}}{0.25}, 1\right) \cdot 0.5\right) \cdot D_{\max}$ |
 | E | Market confirmation | 15 | $6 \cdot \tilde{\text{RS}}_{14d} + 5 \cdot \tilde{\text{opt}} + 4 \cdot \tilde{\text{13F}}$; each sub-signal normalized to $[0, 1]$ — see normalization curves below |
 
 Where:
@@ -396,6 +396,14 @@ Where:
   Component D lives in $[0, D_{\max}]$ without further flooring. See
   [ADR-0021](adr/0021-retire-legacy-conviction-taxonomy.md) for why the
   earlier 0.2 weight on `conv_norm` was retired.
+
+  **Base-rate normalization (CF16):** Reddit is structurally ~75% bullish, so
+  raw joint shares are normalized against a $\hat{p}_{\text{bull}} = 0.75$ /
+  $\hat{p}_{\text{bear}} = 0.25$ prior before averaging with equal 0.5 weight.
+  This means a 5% bear-researched share (= 20% of the bear base) scores the
+  same as a 15% bull-researched share (= 20% of the bull base). The priors are
+  empirical constants; recalibrate from corpus statistics when $n > 50{,}000$
+  classified signals.
 - `stage_map` is `{1: 10, 2: 18, 3: 20, 4: 10, 5: 5, 6: 2}`. Stages 2 and 3 are
   the target window. Component C divides by $\max(\text{stage\_map}) = 20$ so
   that a perfectly-staged, fully-confident narrative scores exactly $C_{\max}$

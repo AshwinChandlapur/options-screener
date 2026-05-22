@@ -39,6 +39,7 @@ from services.narrative.types import (
     NarrativeCluster,
     TickerDetail,
 )
+from services.narrative import ic_service
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +50,13 @@ router = APIRouter(prefix="/api/narrative", tags=["narrative"])
 
 
 class AcsComponentsOut(BaseModel):
-    a_attention_persistence: float = Field(..., ge=0, le=25)
-    b_contributor_quality: float = Field(..., ge=0, le=20)
-    c_narrative_strength: float = Field(..., ge=0, le=20)
+    a_attention_persistence: float = Field(..., ge=0, le=30)
+    b_contributor_quality: float = Field(..., ge=0, le=25)
+    c_narrative_strength: float = Field(..., ge=0, le=25)
     d_thesis_quality: float = Field(..., ge=0, le=20)
-    e_market_confirmation: float = Field(..., ge=0, le=15)
+    # e_market_confirmation removed (ADR-0034); field kept for API backwards
+    # compatibility at zero so existing frontends don't break.
+    e_market_confirmation: float = Field(0.0, ge=0, le=0)
 
 
 class AcsScoreOut(BaseModel):
@@ -73,6 +76,7 @@ class AcsScoreOut(BaseModel):
     stage_streak_days: int = Field(0, ge=0)
     first_emerged_at: str | None = None
     acs_slope_14d: float | None = None
+    market_cap: float | None = None   # USD; None when yfinance lookup failed
 
 
 class DailyBucketOut(BaseModel):
@@ -176,7 +180,7 @@ def _acs_to_out(score: AcsScore) -> AcsScoreOut:
             b_contributor_quality=score.components.b_contributor_quality,
             c_narrative_strength=score.components.c_narrative_strength,
             d_thesis_quality=score.components.d_thesis_quality,
-            e_market_confirmation=score.components.e_market_confirmation,
+            e_market_confirmation=0.0,  # E retired (ADR-0034); clamp stale Cosmos docs
         ),
         dominant_signal=score.dominant_signal,
         decay_acs=score.decay_acs,
@@ -186,6 +190,7 @@ def _acs_to_out(score: AcsScore) -> AcsScoreOut:
         stage_streak_days=score.stage_streak_days,
         first_emerged_at=score.first_emerged_at,
         acs_slope_14d=score.acs_slope_14d,
+        market_cap=score.market_cap,
     )
 
 
@@ -404,4 +409,108 @@ async def get_signals(
             )
             for e in resp.events
         ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# IC Monitor  — GET /api/narrative/ic-monitor
+# ---------------------------------------------------------------------------
+
+
+class WeeklyIcPointOut(BaseModel):
+    week_label: str
+    n_pairs: int = Field(..., ge=0)
+    ic: float | None = None
+    p_value: float | None = None
+    mean_acs: float
+    mean_return_pct: float
+
+
+class FactorIcOut(BaseModel):
+    factor: str
+    n: int = Field(..., ge=0)
+    ic: float | None = None
+    p_value: float | None = None
+
+
+class AsymmetryBucketOut(BaseModel):
+    label: str
+    n: int = Field(..., ge=0)
+    mean_ret: float | None = None
+    median_ret: float | None = None
+    std_ret: float | None = None
+    skewness: float | None = None
+    win_rate: float | None = None
+    upside_10: float | None = None
+    downside_10: float | None = None
+    tail_ratio: float | None = None
+
+
+class IcMonitorOut(BaseModel):
+    forward_days: int
+    cumulative_ic: float | None = None
+    cumulative_n: int = Field(..., ge=0)
+    cumulative_p_value: float | None = None
+    weekly: list[WeeklyIcPointOut]
+    factor_ics: list[FactorIcOut] = []
+    asymmetry: list[AsymmetryBucketOut] = []
+    total_snapshots: int = Field(..., ge=0)
+    total_complete: int = Field(..., ge=0)
+    pct_complete: float = Field(..., ge=0, le=1)
+    window_start: str | None = None
+    window_end: str | None = None
+    last_computed_at: str
+
+
+@router.get("/ic-monitor", response_model=IcMonitorOut)
+@limiter.limit("10/minute")
+async def get_ic_monitor(request: Request) -> IcMonitorOut:
+    """Live 90-day IC test results.
+
+    Returns the rolling Spearman Information Coefficient between ACS at
+    snapshot date and 30-day forward return, grouped by ISO week.
+
+    This endpoint is read-only.  The ic_snapshots Cosmos container is
+    populated automatically by the scorer worker.  Do not modify the
+    ic_snapshot schema or this endpoint during the 90-day live window.
+    """
+    try:
+        report = ic_service.get_ic_report()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return IcMonitorOut(
+        forward_days=report.forward_days,
+        cumulative_ic=report.cumulative_ic,
+        cumulative_n=report.cumulative_n,
+        cumulative_p_value=report.cumulative_p_value,
+        weekly=[
+            WeeklyIcPointOut(
+                week_label=w.week_label,
+                n_pairs=w.n_pairs,
+                ic=w.ic,
+                p_value=w.p_value,
+                mean_acs=w.mean_acs,
+                mean_return_pct=w.mean_return_pct,
+            )
+            for w in report.weekly
+        ],
+        factor_ics=[
+            FactorIcOut(factor=f.factor, n=f.n, ic=f.ic, p_value=f.p_value)
+            for f in report.factor_ics
+        ],
+        asymmetry=[
+            AsymmetryBucketOut(
+                label=b.label, n=b.n,
+                mean_ret=b.mean_ret, median_ret=b.median_ret, std_ret=b.std_ret,
+                skewness=b.skewness, win_rate=b.win_rate,
+                upside_10=b.upside_10, downside_10=b.downside_10, tail_ratio=b.tail_ratio,
+            )
+            for b in report.asymmetry
+        ],
+        total_snapshots=report.total_snapshots,
+        total_complete=report.total_complete,
+        pct_complete=report.pct_complete,
+        window_start=report.window_start,
+        window_end=report.window_end,
+        last_computed_at=report.last_computed_at,
     )

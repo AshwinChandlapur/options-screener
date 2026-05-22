@@ -19,9 +19,9 @@ const COMPONENTS: ComponentDef[] = [
   {
     letter: 'A',
     name: 'Attention persistence',
-    max: 25,
+    max: 30,
     what: 'How consistently has this ticker been discussed over the last 14 days?',
-    formula: 'A = min(decay_weighted_density_14d, 1.0) × 25',
+    formula: 'A = min(decay_weighted_density_14d, 1.0) × 30',
     normalization:
       'decay_weighted_density_14d = Σ e^{−0.1·t} × daily_mentions_t / max_possible_weight  (λ=0.1, half-life ≈ 7 days). Capped at 1.0 before multiplying by 25.',
     why:
@@ -30,9 +30,9 @@ const COMPONENTS: ComponentDef[] = [
   {
     letter: 'B',
     name: 'Contributor quality',
-    max: 20,
+    max: 25,
     what: 'Are many different people posting, or just a handful of accounts?',
-    formula: 'B = min( (unique_authors_14d / ln(mentions_14d)) × (1 − Gini) × 20,  20 )',
+    formula: 'B = min( (unique_authors_14d / ln(mentions_14d)) × (1 − Gini) × 25,  25 )',
     normalization:
       'unique_authors / ln(mentions) scales for volume — 100 unique voices in 200 posts scores higher than 100 unique voices in 10,000 posts (the latter inflates mention count). (1 − Gini) further discounts when a few authors dominate.',
     why:
@@ -41,11 +41,11 @@ const COMPONENTS: ComponentDef[] = [
   {
     letter: 'C',
     name: 'Narrative strength',
-    max: 20,
+    max: 25,
     what: 'Is there a coherent shared thesis? Requires the narrative detector to have run.',
-    formula: 'C = (stage_map[stage] / 20) × stage_confidence × 20',
+    formula: 'C = (stage_map[stage] / 20) × stage_confidence × 25',
     normalization:
-      'stage_map = {1:10, 2:18, 3:20, 4:10, 5:5, 6:2}. Stages 2–3 are the target window (peak = 20). stage_confidence ∈ [0, 1] from the HDBSCAN cluster quality. Shows 0 until the hourly detector job runs.',
+      'stage_map = {1:10, 2:18, 3:20, 4:10, 5:5, 6:2}. Stages 2–3 are the target window (peak = 25). stage_confidence ∈ [0, 1] from the cosine-graph cluster quality. Shows 0 until the hourly detector job runs.',
     why:
       'Not all mentions form a narrative. The detector clusters the last 72 h of embedded signals into coherent thesis groups and assigns a lifecycle stage. Stage 2–3 = forming + growing narrative — the ideal entry window before institutional consensus.',
   },
@@ -54,24 +54,11 @@ const COMPONENTS: ComponentDef[] = [
     name: 'Thesis quality',
     max: 20,
     what: 'What fraction of posts include real research vs. pure hype?',
-    formula: 'D = min( 0.6·s_br + 0.2·s_Br,  1 ) × 20',
+    formula: 'D = ( min(s_br/0.75, 1)×0.5 + min(s_Br/0.25, 1)×0.5 ) × 20',
     normalization:
-      's_br = share of classified posts where direction = bull AND substance = researched. s_Br = same for direction = bear AND substance = researched. Both are joint shares written by the aggregator and bounded in [0, 1]; D therefore lives in [0, 20].',
+      's_br = share of classified posts where direction = bull AND substance = researched. s_Br = same for direction = bear AND substance = researched. Each is normalized against Reddit’s structural base rate (0.75 bull / 0.25 bear) so a rare bear DD scores proportionally the same as a common bull DD of equal relative prevalence.',
     why:
-      'Researched posts (DD, earnings analysis, competitive moat) signal that the thesis has been stress-tested. A substantive bear case still counts — the bear weight is intentional. Pure emotional momentum posts (YOLO, rocket emojis) can move price briefly but don\'t sustain a multi-week narrative.',
-  },
-  {
-    letter: 'E',
-    name: 'Market confirmation',
-    max: 15,
-    what: 'Is the price and options market beginning to reflect the narrative?',
-    formula: 'E = min( 6·RS̃₁₄d + 5·ñopt + 4·ĩnst,  15 )',
-    normalization:
-      'RS̃₁₄d = clip((ticker_return_14d − sector_ETF_return_14d) / 0.20, 0, 1) — saturates at +20% outperformance.\n' +
-      'ñopt = min((call_vol / call_OI) / 2.0, 1) for the nearest expiry — saturates at vol = 2× OI.\n' +
-      'ĩnst = clip(net_institutional_buying_pct / 0.05, 0, 1) — saturates at net +5% buying.',
-    why:
-      'Narrative formation precedes financial confirmation. The weights reflect temporal precedence: price momentum (6) appears first, then options positioning (5), then institutional rebalancing (4). Negative excess return floors at 0 — absence of confirmation is neutral, not bearish.',
+      'Researched posts (DD, earnings analysis, competitive moat) signal that the thesis has been stress-tested. A substantive bear case still counts — and is rewarded equally once normalized for base rate. Pure emotional momentum posts (YOLO, rocket emojis) can move price briefly but don’t sustain a multi-week narrative.',
   },
 ]
 
@@ -118,6 +105,7 @@ const FLAGS = [
   { flag: 'late_stage',       label: 'Late stage',           desc: 'Narrative is past the ideal entry window (stage > 3).' },
   { flag: 'small_cap',        label: 'Small cap',            desc: 'Market cap under $100M. Extra caution on liquidity and manipulation risk.' },
   { flag: 'low_unique_authors', label: 'Few voices',         desc: 'Not enough distinct people posting yet for reliable signals.' },
+  { flag: 'cold_start',       label: 'Early signal',         desc: 'Ticker has no lifecycle stage or classifier data yet. C and D scores are 0 — treat ACS as a rough attention proxy only.' },
 ]
 
 export function ScoreLegend() {
@@ -158,7 +146,7 @@ export function ScoreLegend() {
         <p style={{ opacity: 0.8, fontSize: '0.9em', marginBottom: '0.4em' }}>
           <strong>Score</strong> describes the <em>magnitude</em> of the signal — how credible and strong
           is it right now? It depends on absolute mention density (A), author breadth (B),
-          stage confidence (C), thesis quality (D), and price confirmation (E).
+          stage confidence (C), and thesis quality (D).
         </p>
         <p style={{ opacity: 0.8, fontSize: '0.9em', marginBottom: '0.4em' }}>
           A ticker can be <strong>Stage 3 with a low score</strong>: the discussion is expanding
