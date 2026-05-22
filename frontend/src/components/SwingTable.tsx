@@ -189,6 +189,24 @@ export function SwingTable({ data, gatesBypassed = false, scorerVersion = 'v3' }
           cell: info => {
             const v = info.getValue() as number
             const r = info.row.original
+            // If the doc was scored before v3 shipped, it carries neither
+            // swing_score_v3 nor p_target. Show "not scored" instead of a
+            // misleading 0% / speculative pill.
+            const hasV3 = r.swing_score_v3 != null && (r.p_target != null || r.lasso_top_features?.length)
+            if (!hasV3) {
+              return (
+                <span
+                  title="This row was scored before v3 shipped. Re-scan (or wait for the next screener-worker run) to populate the calibrated probability."
+                  style={{
+                    fontSize: 10, color: '#64748b', fontStyle: 'italic',
+                    display: 'inline-flex', flexDirection: 'column', gap: 2,
+                  }}
+                >
+                  <span style={{ color: '#94a3b8' }}>v3 pending</span>
+                  <span>re-scan needed</span>
+                </span>
+              )
+            }
             const p = r.p_target ?? v / 100
             const pill = confidencePillColor(r.lasso_confidence)
             return (
@@ -395,8 +413,31 @@ export function SwingTable({ data, gatesBypassed = false, scorerVersion = 'v3' }
 
   if (data.length === 0) return null
 
+  // Detect the "showing v3 but cached docs predate v3" case so we can warn the
+  // user instead of silently showing 0% for every row.
+  const v3Missing = scorerVersion === 'v3' &&
+    data.every(r => r.swing_score_v3 == null || (r.p_target == null && !r.lasso_top_features?.length))
+
   return (
     <div className="table-wrapper">
+      {v3Missing && (
+        <div style={{
+          margin: '0 0 10px',
+          padding: '8px 12px',
+          background: '#1e1b4b',
+          border: '1px solid #4338ca',
+          borderRadius: 4,
+          fontSize: 12,
+          color: '#cbd5e1',
+          lineHeight: 1.5,
+        }}>
+          <strong style={{ color: '#a5b4fc' }}>v3 not in these results.</strong>{' '}
+          The cached scan was produced before the v3 Lasso scorer shipped, so the
+          rows below only have legacy v2 scores. Re-run the scan (or wait for the
+          next screener-worker run) to populate calibrated P(target) values.
+          Switch the toggle to <strong>v2</strong> to see the ranks the cache was sorted by.
+        </div>
+      )}
       <table className="screener-table">
         <thead>
           {table.getHeaderGroups().map(hg => (
