@@ -158,7 +158,10 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
     const capThreshold = _CAP_FILTERS.find((f) => f.value === capFilter)?.threshold ?? null
     return rows.filter((r) => {
       if (signalFilter !== 'all' && !matchesSignal(r.dominant_signal, signalFilter)) return false
-      if (capThreshold !== null && r.market_cap != null && r.market_cap >= capThreshold) return false
+      if (capThreshold !== null) {
+        if (r.market_cap == null) return false
+        if (r.market_cap >= capThreshold) return false
+      }
       if (!showContinuity || continuityFilter === 'all') return true
       const streak = r.stage_streak_days ?? 0
       const slope = r.acs_slope_14d
@@ -188,6 +191,10 @@ export function NarrativeTickerTable({ rows, emptyMessage, loading, onSelect, sh
 
   if (rows.length === 0) {
     return <p className="muted">{emptyMessage}</p>
+  }
+
+  if (sorted.length === 0) {
+    return <p className="muted">No tickers match the active Narrative filters.</p>
   }
 
   const onHeaderClick = (key: SortKey | null) => {
