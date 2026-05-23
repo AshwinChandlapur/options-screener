@@ -61,11 +61,11 @@ const SCORE_LEGEND = [
 ]
 
 const SCORE_TIERS = [
-  { range: '≥ 83', label: 'Excellent',     color: '#4ade80', desc: 'Top decile — best retention, lowest opportunity cost',  action: 'Take it, size up if thesis matches' },
-  { range: '79–82', label: 'Strong',        color: '#86efac', desc: 'Phi crosses positive — upside preserved net of called-away cost', action: 'Take it, normal size' },
-  { range: '72–78', label: 'Good',          color: '#bef264', desc: 'Clear lift over middle pack — solid trade',              action: 'Take it, understand the weakest factor' },
-  { range: '56–71', label: 'Marginal',      color: '#facc15', desc: 'Noisy middle — score barely separates from random',     action: 'Only with a directional thesis' },
-  { range: '< 56',  label: 'Skip',          color: '#f87171', desc: 'Worst retention (57%), highest opp cost, deeply negative phi', action: 'Skip' },
+  { range: '≥ 83',  label: 'Excellent', color: '#4ade80', desc: 'Top decile — retain 83%, mean φ +15 (only tier with positive net phi)',           action: 'Take it, size up if thesis matches' },
+  { range: '79–82', label: 'Strong',    color: '#86efac', desc: 'Retain 78%, mean φ +3 — phi turns positive; upside preserved net of called-away cost', action: 'Take it, normal size' },
+  { range: '72–78', label: 'Good',      color: '#bef264', desc: 'Retain 74%, mean φ −4 (median positive) — first tier with median phi > 0',           action: 'Take it, understand the weakest factor' },
+  { range: '56–71', label: 'Marginal',  color: '#facc15', desc: 'Retain 69%, mean φ −18 — score barely separates from random within this band',        action: 'Only with a directional thesis' },
+  { range: '< 56',  label: 'Skip',      color: '#f87171', desc: 'Retain 57%, mean φ −25 — worst retention, highest opportunity cost, deeply negative phi', action: 'Skip' },
 ]
 
 const DECISION_STEPS = [

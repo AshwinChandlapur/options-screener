@@ -1,5 +1,5 @@
 """
-Swing-trade composite scoring (v2.3.0).
+Swing-trade composite scoring (v2.4.0).
 
 Composite (raw) = R:R (40) + setup_score (30) + context (20) + institutional (10)
 
@@ -8,14 +8,23 @@ Composite (raw) = R:R (40) + setup_score (30) + context (20) + institutional (10
   context 20        : ADX trend strength (10) + A/D line slope (10)
   institutional 10  : consecutive higher lows (5) + institutional ownership snapshot (5)
 
-Cross-bucket multipliers (v2):
+  v2.4.0 recalibration (2026-05, n=3,366-trade backtest):
+  • EXTENDED_FACTOR raised 0.70 → 0.85: the 0.70 penalty had negative IC
+    (ρ≈−0.23 on extended-flagged trades); the chase penalty intent is preserved.
+  • Confidence thresholds recalibrated to empirical distribution (max≈67, P90≈52,
+    P75≈45). Old ≥75 "high" gate was never reachable — ATR targets cap rr at ~3.0,
+    giving rr_pts ≤ 25 out of 40 possible.
+  • R:R remains the strongest single predictor (ρ=+0.21); raw_score IC=+0.095.
+    Use setup type (Momentum > Breakout > Reversion) and R:R as primary signals.
+
+Cross-bucket multipliers (v2.4):
 
   final = raw × regime_factor × earnings_factor × extended_factor
         clamped to [0, 100]
 
   regime_factor    : 0.6–1.0, from services.swing.regime (composite-multiplier curve)
   earnings_factor  : 1.0 / 0.9 / 0.75 / 0.5 by days-to-earnings bucket
-  extended_factor  : 0.7 if current price is >3% past structural trigger, else 1.0
+  extended_factor  : 0.85 if current price is >3% past structural trigger, else 1.0
 
 The R:R *gate* (RR_HARD_GATE) is NOT here — it's set per-regime in
 `services.swing.regime.RR_GATE_BY_REGIME` and enforced in the runner.
@@ -29,7 +38,7 @@ Hard gates handled by the runner BEFORE scoring:
 """
 from __future__ import annotations
 
-SWING_SCORER_VERSION: str = "2.3.0"
+SWING_SCORER_VERSION: str = "2.4.0"
 
 SWING_WEIGHTS: dict[str, float] = {
     "RR": 40.0,
@@ -45,8 +54,11 @@ EARNINGS_FACTOR_LE_3: float = 0.5
 EARNINGS_FACTOR_LE_7: float = 0.75
 EARNINGS_FACTOR_LE_14: float = 0.9
 
-# --- Chasing penalty ---------------------------------------------------------
-EXTENDED_FACTOR: float = 0.7
+# --- Chasing penalty --------------------------------------------------------
+# v2.4: raised from 0.7 → 0.85.  The 0.70 haircut had negative IC (ρ≈−0.23)
+# in the 3,366-trade backtest — extended setups were not materially worse;
+# 0.85 preserves the intent (penalise chasing) without over-discounting.
+EXTENDED_FACTOR: float = 0.85
 
 
 def _rr_points(rr: float) -> float:
@@ -178,9 +190,12 @@ def compute_swing_score(
     final = raw * regime_factor * e_factor * x_factor
     final = round(max(0.0, min(100.0, final)), 2)
 
-    if final >= 75 and rr >= 3.5 and setup_score >= 70:
+    # v2.4 recalibration: thresholds match empirical score distribution
+    # (backtest max ≈ 67, P90 ≈ 52, P75 ≈ 45).  The old ≥75 gate was never
+    # reachable since ATR-based R:R caps at ~3.0 → max rr_pts = 25.
+    if final >= 52 and setup_score >= 60:
         confidence = "high"
-    elif final >= 55:
+    elif final >= 37:
         confidence = "medium"
     else:
         confidence = "speculative"

@@ -21,12 +21,16 @@ interface ScoreFactor {
   formula?: string
 }
 
+// v2.4.0 recalibration (2026-05, n=3,366 backtest trades).
+// Max score ≈ 67; P90=52, P75=45, P50=37. R:R is the primary predictor
+// (ρ=+0.21); composite IC=+0.095 (weak positive). Use score as a
+// relative rank within the universe scan — not as an absolute gate.
 const SCORE_TIERS = [
-  { range: '≥ 75', label: 'High',          color: '#4ade80', desc: 'Strong R:R with confirming context + institutional',  action: 'Take it, normal size' },
-  { range: '65–74', label: 'Solid',         color: '#86efac', desc: 'Clean setup, R:R ≥ 3 typical',                       action: 'Take it; honor stop' },
-  { range: '55–64', label: 'Medium',        color: '#fbbf24', desc: 'Workable but mixed context or weak institutional',   action: 'Smaller size; tighter stop' },
-  { range: '45–54', label: 'Speculative',   color: '#fb923c', desc: 'Setup OK but R:R thin or trend uncertain',           action: 'Skip unless thesis is strong' },
-  { range: '< 45',  label: 'Skip',          color: '#f87171', desc: 'Below quality bar after hard gates',                 action: 'Skip' },
+  { range: '≥ 52', label: 'High',        color: '#4ade80', desc: 'Top ~10% — best R:R + confirming context; confidence="high" (v2.4)',  action: 'Take it, normal size' },
+  { range: '45–51', label: 'Solid',      color: '#86efac', desc: 'Upper quartile — clean setup, R:R typically ≥ 2.75',                  action: 'Take it; honor stop' },
+  { range: '37–44', label: 'Medium',     color: '#fbbf24', desc: 'Near median — workable but mixed context or thin volume confirmation', action: 'Smaller size; tighter stop' },
+  { range: '30–36', label: 'Speculative',color: '#fb923c', desc: 'Below-median — setup weak or R:R at gate minimum',                  action: 'Skip unless strong off-screener thesis' },
+  { range: '< 30',  label: 'Skip',       color: '#f87171', desc: 'Bottom quartile — minimal R:R or setup fails on multiple signals',   action: 'Skip' },
 ]
 
 const SETUP_GUIDE = [
@@ -186,16 +190,16 @@ const SCORE_BREAKDOWN: ScoreFactor[] = [
   {
     factor: 'Extended (CHASING) multiplier',
     weight: 0,
-    detail: 'current price > 3% past structural trigger → 0.70, else 1.00',
+    detail: 'current price > 3% past structural trigger → 0.85, else 1.00',
     definition: ': Per-setup structural triggers (breakout=base_high, momentum=EMA8, retest=reclaim_level, reversion=current_price). When current price is more than 3% past the trigger, the setup is "extended" — a chase entry, not a proper one.',
-    why: ': R:R is computed off the *trigger*, not the current close, so a chase doesn\'t hurt R:R points. The extended multiplier penalises the chase directly so the screener doesn\'t reward "looks great if you got in two days ago" setups.',
-    formula: 'trigger = build_trigger(setup, features)\nextended = current_price > trigger * 1.03\nextended_factor = 0.7 if extended else 1.0',
+    why: ': R:R is computed off the *trigger*, not the current close, so a chase doesn\'t hurt R:R points. The extended multiplier penalises the chase directly. v2.4.0 raised from 0.70 → 0.85 after backtest analysis showed the 0.70 haircut had negative IC (ρ≈−0.23 on extended trades).',
+    formula: 'trigger = build_trigger(setup, features)\nextended = current_price > trigger * 1.03\nextended_factor = 0.85 if extended else 1.0  # v2.4.0',
   },
 ]
 
 const PLAYBOOK = [
   { n: 1, q: 'What\'s the current regime?',          a: 'Check the banner above the table. risk_on → trade actively; neutral → be selective; risk_off → take only the best, and reversion is auto-blocked.' },
-  { n: 2, q: 'Score ≥ 65?', a: 'Yes → proceed. No → skip unless you have an off-screener reason. Score is post-multiplier, so a low number could be raw weakness OR an environmental haircut — check the breakdown.' },
+  { n: 2, q: 'Score ≥ 52?', a: 'Yes → top-tier ("high" confidence). ≥37 → medium; <37 → speculative. Score is post-multiplier and ranges 10–67 in practice. A low score can reflect raw weakness OR a regime haircut — always check the breakdown. R:R is the most predictive component.' },
   { n: 3, q: 'Do I agree with the setup_type?',     a: 'Read the drivers in the expanded row. Disagree → skip; the geometry only works if the thesis matches.' },
   { n: 4, q: 'Is the stop tolerable in real $?',    a: '1.5 × ATR or recent swing low. If the dollar risk exceeds your per-trade budget, halve size or skip.' },
   { n: 5, q: 'Earnings nearby? CHASING?',           a: 'Earnings ≤ 14d → expect a haircut multiplier (visible in expanded breakdown). CHASING flag → entry is more than 3% past the structural trigger; either wait for a pullback or size down.' },
