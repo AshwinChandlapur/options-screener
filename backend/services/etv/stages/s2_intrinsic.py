@@ -1,0 +1,100 @@
+"""S2 — strict intrinsic valuation (bear / base / bull, fundamental only).
+
+Inputs: a *fundamental subset* of grounding + S1's archetype decision.
+Outputs: ``economic_value`` block matching the monolithic schema, with the
+four overlay components zeroed and a ``derivation[]`` per scenario.
+
+The numeric guard runs against the S2 output to flag any number that did
+not come from grounding, an explicit assumption, or a derivation line.
+"""
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import asdict
+from typing import Any
+
+from ..grounding import EtvGrounding
+from ..llm import call_json
+from ..numeric_guard import format_report_for_prompt, guard
+from ..prompts import S2_SYSTEM
+from ..schemas import S2_INTRINSIC_SCHEMA
+from ._base import StageResult
+
+# Grounding fields relevant to fundamental valuation.  Trimming the payload
+# keeps S2's context tight and stops the model from anchoring on regime /
+# behavioral fields it has no business using here.
+_FUNDAMENTAL_FIELDS: tuple[str, ...] = (
+    "ticker", "company_name", "sector", "industry", "business_summary",
+    "current_price", "market_cap", "enterprise_value", "shares_out",
+    "trailing_pe", "forward_pe", "ev_ebitda", "ev_revenue",
+    "price_to_fcf", "price_to_book",
+    "revenue_ttm", "revenue_growth_yoy", "gross_margin",
+    "ebitda", "ebitda_margin", "operating_income", "operating_margin",
+    "net_income", "eps_ttm", "free_cash_flow",
+    "total_debt", "net_debt", "cash", "capex", "roic",
+    "forward_revenue", "forward_eps", "long_term_growth",
+    "analyst_count", "analyst_target_mean",
+    "analyst_target_high", "analyst_target_low",
+    "as_of",
+)
+
+
+def _fundamental_payload(g: EtvGrounding) -> dict[str, Any]:
+    full = asdict(g)
+    return {k: full.get(k) for k in _FUNDAMENTAL_FIELDS}
+
+
+def _build_user(g: EtvGrounding, s1_output: dict,
+                critic_feedback: str | None = None) -> str:
+    payload: dict[str, Any] = {
+        "grounding_fundamentals": _fundamental_payload(g),
+        "s1_audit": {
+            "model_archetype": s1_output.get("model_archetype"),
+            "archetype_rationale": s1_output.get("archetype_rationale"),
+            "primary_model": s1_output.get("primary_model"),
+            "model_rationale": s1_output.get("model_rationale"),
+            "required_inputs": s1_output.get("required_inputs", []),
+            "carry_assumptions": s1_output.get("missing_inputs", []),
+        },
+    }
+    if critic_feedback:
+        payload["critic_feedback"] = critic_feedback
+    return json.dumps(payload, default=str)
+
+
+def run(g: EtvGrounding, s1_output: dict,
+        critic_feedback: str | None = None) -> StageResult:
+    """Run the S2 intrinsic stage (optionally as a critic-driven retry)."""
+    t0 = time.perf_counter()
+    output = call_json(
+        system=S2_SYSTEM,
+        user=_build_user(g, s1_output, critic_feedback),
+        schema=S2_INTRINSIC_SCHEMA,
+        temperature=0.2,
+    )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+
+    # Numeric guard against fundamental grounding only.  current_price is a
+    # passthrough by default; ``central_estimate`` / ``low_range`` /
+    # ``high_range`` are derived from scenario prices so we exempt them too.
+    guard_report = guard(
+        output,
+        g,
+        extra_passthroughs={
+            "central_estimate", "low_range", "high_range",
+            "price", "fundamental",
+        },
+    )
+    return StageResult(
+        stage="S2_intrinsic",
+        output=output,
+        guard=guard_report,
+        latency_ms=latency_ms,
+        extra={
+            "guard_summary": format_report_for_prompt(guard_report),
+        } if not guard_report.passed else {},
+    )
+
+
+__all__ = ["run"]

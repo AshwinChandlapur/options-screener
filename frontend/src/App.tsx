@@ -12,6 +12,7 @@ import { EmRankInput } from './components/EmRankInput'
 import { EmRankTable } from './components/EmRankTable'
 import { SupplyChainView } from './components/SupplyChainView'
 import { DcfView } from './components/DcfView'
+import { EtvView } from './components/EtvView'
 import { SwingInput } from './components/SwingInput'
 import { SwingFilterPanel } from './components/SwingFilterPanel'
 import { SwingTable } from './components/SwingTable'
@@ -144,7 +145,7 @@ function _formatPrecomputedAge(isoTimestamp: string): { label: string; className
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'csp' | 'cc' | 'ditm' | 'swing' | 'em-rank' | 'supply' | 'dcf' | 'narrative'>('csp')
+  const [activeTab, setActiveTab] = useState<'csp' | 'cc' | 'ditm' | 'swing' | 'em-rank' | 'supply' | 'dcf' | 'etv' | 'narrative'>('csp')
 
   // CSP state
   const { results: cspResults, errors: cspErrors, loading: cspLoading, symbolCount: cspSymbolCount, isScanMode: cspIsScanMode, errorMessage: cspErrorMessage, cachedAt: cspCachedAt, lastUpdatedAt: cspLastUpdatedAt, vixLevel: cspVixLevel, vixPercentile: cspVixPercentile, volRegime: cspVolRegime, run: runCsp, scan: scanCsp } = useCsp()
@@ -218,14 +219,18 @@ export default function App() {
               Narrative
             </button>
           )}
-          {/* DCF tab hidden — verdict calibration in progress.
           <button
             className={`tab-btn${activeTab === 'dcf' ? ' tab-btn-active' : ''}`}
             onClick={() => setActiveTab('dcf')}
           >
             DCF Valuation
           </button>
-          */}
+          <button
+            className={`tab-btn${activeTab === 'etv' ? ' tab-btn-active' : ''}`}
+            onClick={() => setActiveTab('etv')}
+          >
+            ETV — Expected Tradable Value
+          </button>
         </div>
       </header>
 
@@ -438,6 +443,7 @@ export default function App() {
 
         {activeTab === 'supply' && <SupplyChainView />}
         {activeTab === 'dcf' && <DcfView />}
+        {activeTab === 'etv' && <EtvView />}
         {activeTab === 'narrative' && NARRATIVE_ENABLED && <NarrativeView />}
 
         {activeTab === 'swing' && (
