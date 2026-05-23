@@ -3,7 +3,6 @@ import type { RegimeState, SwingResponse, SwingResult, SwingScorerVersion } from
 import { loadResultCache, saveResultCache, clearResultCache } from '../utils/resultCache'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
-const SCORER_VERSION_KEY = 'swing.scorerVersion'
 
 interface UseSwingReturn {
   results: SwingResult[]
@@ -33,20 +32,10 @@ export function useSwing(): UseSwingReturn {
   const [scoringVersion, setScoringVersion] = useState<string | null>(null)
   const [scoringVersionV3, setScoringVersionV3] = useState<string | null>(null)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
-  const [scorerVersion, setScorerVersionState] = useState<SwingScorerVersion>(() => {
-    try {
-      const stored = localStorage.getItem(SCORER_VERSION_KEY)
-      return stored === 'v2' || stored === 'v3' ? stored : 'v3'
-    } catch {
-      return 'v3'
-    }
-  })
+  const scorerVersion: SwingScorerVersion = 'v3'
 
-  function setScorerVersion(v: SwingScorerVersion): void {
-    setScorerVersionState(v)
-    try {
-      localStorage.setItem(SCORER_VERSION_KEY, v)
-    } catch { /* ignore */ }
+  function setScorerVersion(_: SwingScorerVersion): void {
+    // v2 is intentionally deprecated in the UI; keep signature stable for callers.
   }
 
   useEffect(() => {

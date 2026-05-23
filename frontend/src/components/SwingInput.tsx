@@ -1,14 +1,10 @@
 import { useState } from 'react'
 import type { KeyboardEvent } from 'react'
-import type { SwingScorerVersion } from '../types/swing'
 
 interface Props {
   onScan: (topN: number, universe: string) => void
   onCustom: (symbols: string[], bypassGates: boolean) => void
   loading: boolean
-  scorerVersion: SwingScorerVersion
-  onScorerVersionChange: (v: SwingScorerVersion) => void
-  scoringVersion: string | null
   scoringVersionV3: string | null
 }
 
@@ -206,7 +202,7 @@ const PLAYBOOK = [
   { n: 6, q: 'Plan the exit before entry',          a: 'Stop hit → out, no negotiation. Target hit → out OR trail with 1× ATR. Max hold = upper hold-day band; trimmed automatically if it would span earnings.' },
 ]
 
-export function SwingInput({ onScan, onCustom, loading, scorerVersion, onScorerVersionChange, scoringVersion, scoringVersionV3 }: Props) {
+export function SwingInput({ onScan, onCustom, loading, scoringVersionV3 }: Props) {
   const [mode, setMode] = useState<'scan' | 'custom'>('scan')
   const [topN, setTopN] = useState<number>(20)
   const [symbolsText, setSymbolsText] = useState<string>('')
@@ -265,7 +261,7 @@ export function SwingInput({ onScan, onCustom, loading, scorerVersion, onScorerV
               Scans <strong>{UNIVERSE_LABEL}</strong> — {UNIVERSE_HINT}
             </span>
             <span className="app-subtitle">
-              Ranked by composite score (R:R 40 + setup 30 + context 20 + institutional 10).
+              Ranked by calibrated probability P(target hit before stop).
               Hard gates: R:R ≥ 2.5, setup score ≥ 40. Top 3 receive AI commentary.
             </span>
           </div>
@@ -368,32 +364,15 @@ export function SwingInput({ onScan, onCustom, loading, scorerVersion, onScorerV
           <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4 }}>
             Scorer
           </span>
-          <div className="momentum-mode-toggle" style={{ marginBottom: 0 }}>
-            <button
-              type="button"
-              className={`mode-btn${scorerVersion === 'v3' ? ' mode-btn-active' : ''}`}
-              onClick={() => onScorerVersionChange('v3')}
-              disabled={loading}
-              title="Lasso-regularized logistic regression + isotonic calibration. Returns a true P(target hit) probability instead of an additive bucket score."
-              style={{ padding: '6px 12px', fontSize: 12 }}
-            >
-              Calibrated v3 · P(target)
-            </button>
-            <button
-              type="button"
-              className={`mode-btn${scorerVersion === 'v2' ? ' mode-btn-active' : ''}`}
-              onClick={() => onScorerVersionChange('v2')}
-              disabled={loading}
-              title="Classic additive bucket scorer: R:R 40 + Setup 30 + Context 20 + Institutional 10."
-              style={{ padding: '6px 12px', fontSize: 12 }}
-            >
-              Classic v2.3 · Buckets
-            </button>
-          </div>
+          <span
+            className="mode-btn mode-btn-active"
+            style={{ padding: '6px 12px', fontSize: 12, cursor: 'default' }}
+            title="Lasso-regularized logistic regression + isotonic calibration. Returns a calibrated probability of target-before-stop."
+          >
+            Calibrated v3 · P(target)
+          </span>
           <span style={{ fontSize: 10, color: '#64748b' }}>
-            {scorerVersion === 'v3'
-              ? `v3 model: ${scoringVersionV3 ?? '3.0.0-lasso'}`
-              : `v2 model: ${scoringVersion ?? '2.3.0'}`}
+            {`v3 model: ${scoringVersionV3 ?? '3.0.0-lasso'}`}
           </span>
         </div>
         <button
@@ -417,7 +396,7 @@ export function SwingInput({ onScan, onCustom, loading, scorerVersion, onScorerV
         <div className="score-legend">
           <div className="score-legend-factors" style={{ borderLeft: '3px solid #4338ca', paddingLeft: 10 }}>
             <div className="score-legend-header" style={{ color: '#a5b4fc' }}>
-              Calibrated v3 (Lasso) — what the toggle does
+              Calibrated v3 (Lasso)
             </div>
             <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.55, marginBottom: 8 }}>
               <strong style={{ color: '#e2e8f0' }}>v3</strong> replaces the additive
@@ -451,11 +430,9 @@ export function SwingInput({ onScan, onCustom, loading, scorerVersion, onScorerV
               model rewards, negative = the opposite.
             </div>
             <div style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>
-              Both v2 and v3 are computed every scan. Use the toggle to switch
-              the display without re-scanning. v2&apos;s bucket breakdown is the
-              right tool when you want to understand <em>why</em> a setup looks
-              good qualitatively; v3 is the right tool when you want a
-              risk-calibrated probability to size against.
+              v2 and v3 are both still computed during scans for internal
+              monitoring, but the UI is intentionally locked to v3 so trading
+              decisions are made on calibrated probabilities.
             </div>
           </div>
 

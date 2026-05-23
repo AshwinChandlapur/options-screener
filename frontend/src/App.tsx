@@ -452,9 +452,6 @@ export default function App() {
               onScan={(topN, universe) => scanSwing(topN, universe)}
               onCustom={(symbols, bypassGates) => runSwing(symbols, bypassGates)}
               loading={swingLoading}
-              scorerVersion={swingScorerVersion}
-              onScorerVersionChange={setSwingScorerVersion}
-              scoringVersion={swingScoringVersion}
               scoringVersionV3={swingScoringVersionV3}
             />
             {swingResults.length > 0 && (
