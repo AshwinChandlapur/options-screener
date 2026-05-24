@@ -17,7 +17,7 @@ from typing import Any
 from ..grounding import EtvGrounding
 from ..llm import call_json
 from ..numeric_guard import format_report_for_prompt, guard
-from ..prompts import S2_SYSTEM
+from ..prompts import build_s2_system
 from ..schemas import S2_INTRINSIC_SCHEMA
 from ._base import StageResult
 
@@ -65,10 +65,17 @@ def _build_user(g: EtvGrounding, s1_output: dict,
 
 def run(g: EtvGrounding, s1_output: dict,
         critic_feedback: str | None = None) -> StageResult:
-    """Run the S2 intrinsic stage (optionally as a critic-driven retry)."""
+    """Run the S2 intrinsic stage (optionally as a critic-driven retry).
+
+    The system prompt is composed dynamically from
+    :func:`prompts.build_s2_system` so that S1's chosen ``primary_model``
+    drives which per-model recipe (DCF, EV/EBITDA, DDM, rNPV, ...) is
+    appended to the shared global rules.  Unknown models fall back to a
+    generic recipe.
+    """
     t0 = time.perf_counter()
     output = call_json(
-        system=S2_SYSTEM,
+        system=build_s2_system(s1_output.get("primary_model")),
         user=_build_user(g, s1_output, critic_feedback),
         schema=S2_INTRINSIC_SCHEMA,
     )

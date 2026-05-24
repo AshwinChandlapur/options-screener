@@ -1087,3 +1087,152 @@ class TestOrchestratorSplicingWithS0:
         assert ms["supporting_models"] == ["DDM"]
         assert ms["excluded_models"] == ["Asset-based"]
         assert ms["excluded_reason"] == "preexisting"
+
+# ============================================================ S2 PROMPT BUILDER ===
+
+
+class TestNormaliseModelName:
+    def test_returns_none_for_empty_or_non_string(self):
+        from services.etv.prompts import normalise_model_name
+        assert normalise_model_name(None) is None
+        assert normalise_model_name("") is None
+        assert normalise_model_name("   ") is None
+        assert normalise_model_name(123) is None  # type: ignore[arg-type]
+
+    def test_canonical_names_round_trip(self):
+        from services.etv.prompts import _MODEL_INSTRUCTIONS, normalise_model_name
+        for canonical in _MODEL_INSTRUCTIONS:
+            assert normalise_model_name(canonical) == canonical
+            assert normalise_model_name(canonical.lower()) == canonical
+            assert normalise_model_name(f"  {canonical.upper()}  ") == canonical
+
+    def test_common_synonyms(self):
+        from services.etv.prompts import normalise_model_name
+        cases = {
+            "DCF": "DCF",
+            "dcf": "DCF",
+            "Discounted Cash Flow": "DCF",
+            "two-stage dcf": "DCF",
+            "EV/EBITDA": "EV/EBITDA multiple",
+            "ev / ebitda": "EV/EBITDA multiple",
+            "EBITDA Multiple": "EV/EBITDA multiple",
+            "EV/Sales": "EV/Sales (margin-conditioned)",
+            "ev/revenue": "EV/Sales (margin-conditioned)",
+            "P/E": "P/E x earnings power",
+            "Earnings power x terminal multiple": "P/E x earnings power",
+            "SOTP": "Sum-of-the-parts",
+            "sum of the parts": "Sum-of-the-parts",
+            "DDM": "Dividend discount model",
+            "Gordon Growth": "Dividend discount model",
+            "NAV": "Asset-based / NAV",
+            "asset-based": "Asset-based / NAV",
+            "rNPV": "Risk-adjusted NPV (rNPV)",
+            "real-options": "Risk-adjusted NPV (rNPV)",
+            "probability-weighted": "Risk-adjusted NPV (rNPV)",
+        }
+        for raw, expected in cases.items():
+            assert normalise_model_name(raw) == expected, (
+                f"{raw!r} -> {normalise_model_name(raw)!r}, expected {expected!r}"
+            )
+
+    def test_unknown_returns_none(self):
+        from services.etv.prompts import normalise_model_name
+        assert normalise_model_name("Bizarre Made-Up Model 9000") is None
+        assert normalise_model_name("Reverse DCF on TAM") is None
+
+
+class TestBuildS2System:
+    def test_known_model_appends_global_rules_and_recipe(self):
+        from services.etv.prompts import (
+            S2_SYSTEM, _MODEL_INSTRUCTIONS, _S2_GLOBAL_RULES,
+            build_s2_system,
+        )
+        out = build_s2_system("DCF")
+        assert out.startswith(S2_SYSTEM)
+        assert _S2_GLOBAL_RULES in out
+        assert _MODEL_INSTRUCTIONS["DCF"] in out
+        assert "primary_model = DCF" in out
+
+    def test_synonym_resolves_to_canonical_recipe(self):
+        from services.etv.prompts import (
+            _MODEL_INSTRUCTIONS, build_s2_system,
+        )
+        out = build_s2_system("discounted cash flow")
+        assert _MODEL_INSTRUCTIONS["DCF"] in out
+        assert "primary_model = DCF" in out
+
+    def test_unknown_model_falls_back_to_default(self):
+        from services.etv.prompts import (
+            _DEFAULT_MODEL_INSTRUCTION, _MODEL_INSTRUCTIONS,
+            _S2_GLOBAL_RULES, build_s2_system,
+        )
+        out = build_s2_system("Bizarre Made-Up Model 9000")
+        assert _S2_GLOBAL_RULES in out
+        assert _DEFAULT_MODEL_INSTRUCTION in out
+        # None of the registered recipes were leaked in.
+        for recipe in _MODEL_INSTRUCTIONS.values():
+            assert recipe not in out
+        assert "primary_model = Bizarre Made-Up Model 9000" in out
+
+    def test_none_model_falls_back_to_default(self):
+        from services.etv.prompts import (
+            _DEFAULT_MODEL_INSTRUCTION, build_s2_system,
+        )
+        out = build_s2_system(None)
+        assert _DEFAULT_MODEL_INSTRUCTION in out
+        assert "primary_model = unknown" in out
+
+    def test_all_registered_recipes_render(self):
+        from services.etv.prompts import _MODEL_INSTRUCTIONS, build_s2_system
+        for canonical, recipe in _MODEL_INSTRUCTIONS.items():
+            out = build_s2_system(canonical)
+            assert recipe in out, f"recipe for {canonical} not embedded"
+            assert f"primary_model = {canonical}" in out
+
+    def test_global_rules_include_key_clauses(self):
+        from services.etv.prompts import _S2_GLOBAL_RULES
+        # Spot-check the v3-final preamble is intact.
+        for needle in (
+            "net_debt = total_debt",
+            "equity_value = enterprise_value",
+            "Do NOT add SBC back",
+            'sbc_treatment = "subtracted_from_fcf"',
+            "shares_out_diluted = basic_shares + tsm_dilution",
+            "WACC by", "DDM:", "Multiples", "rNPV:",
+            "Inapplicability",
+            "[from grounding]", "[ASSUMED]", "[derived]",
+        ):
+            assert needle in _S2_GLOBAL_RULES, f"missing clause: {needle!r}"
+
+
+class TestS2IntrinsicWiringToBuilder:
+    def test_s2_run_uses_dynamic_system_prompt(self, monkeypatch, g):
+        from services.etv.prompts import _MODEL_INSTRUCTIONS
+        captured: dict = {}
+
+        def fake_call(**kw):
+            captured["system"] = kw["system"]
+            return _good_s2_output()
+
+        monkeypatch.setattr(s2_intrinsic, "call_json", fake_call)
+        s1_out = {
+            "model_archetype": "Mature cash flow",
+            "primary_model": "DDM",
+            "required_inputs": [],
+            "missing_inputs": [],
+        }
+        s2_intrinsic.run(g, s1_out)
+        assert _MODEL_INSTRUCTIONS["Dividend discount model"] in captured["system"]
+
+    def test_s2_run_falls_back_to_default_for_unknown_model(self, monkeypatch, g):
+        from services.etv.prompts import _DEFAULT_MODEL_INSTRUCTION
+        captured: dict = {}
+
+        def fake_call(**kw):
+            captured["system"] = kw["system"]
+            return _good_s2_output()
+
+        monkeypatch.setattr(s2_intrinsic, "call_json", fake_call)
+        s2_intrinsic.run(g, {"model_archetype": "Special situation",
+                              "primary_model": "Reverse DCF on TAM"})
+        assert _DEFAULT_MODEL_INSTRUCTION in captured["system"]
