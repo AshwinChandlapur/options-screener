@@ -236,3 +236,225 @@ class TestExtraPassthroughs:
             out, grounding, extra_passthroughs={"selection_confidence_pct"}
         )
         assert report.passed
+
+
+# ================================ Phase 2: tag-aware + structural checks ===
+
+
+class TestProvenanceTagInDerivation:
+    """v3-final RULE A: derivations may carry an optional `[tag]` after the
+    final number. The trailing-number regex must still match."""
+
+    def test_tagged_derived_number_matches_leaf(self, grounding: _Grounding) -> None:
+        out = {
+            "economic_value": {
+                "base": {
+                    "fundamental": 480.5,
+                    "derivation": [
+                        "fair_value = 245000 * 1.5 / 7400 = 480.5 [derived]",
+                    ],
+                }
+            }
+        }
+        report = guard(out, grounding)
+        # `fundamental` is in extra_passthroughs in s2_intrinsic, but here
+        # we call guard() directly so the leaf still classifies as derived.
+        assert report.passed, report.unjustified
+
+    def test_untagged_derived_number_still_matches(self, grounding: _Grounding) -> None:
+        out = {
+            "economic_value": {
+                "base": {
+                    "fundamental": 480.5,
+                    "derivation": [
+                        "fair_value = 245000 * 1.5 / 7400 = 480.5",
+                    ],
+                }
+            }
+        }
+        report = guard(out, grounding)
+        assert report.passed, report.unjustified
+
+
+class TestAssumedTagCounter:
+    def test_zero_when_no_tags(self, grounding: _Grounding) -> None:
+        out = {"x": {"derivation": ["a = 1 + 2 = 3"]}}
+        report = guard(out, grounding)
+        assert report.assumed_tag_count == 0
+        assert report.assumption_heavy is False
+
+    def test_counts_case_insensitive(self, grounding: _Grounding) -> None:
+        out = {
+            "x": {
+                "derivation": [
+                    "a = 1 [ASSUMED] + 2 [from grounding] = 3 [derived]",
+                    "b = 4 [assumed] + 5 [Assumed] = 9 [derived]",
+                ]
+            }
+        }
+        report = guard(out, grounding)
+        assert report.assumed_tag_count == 3
+        assert report.assumption_heavy is False  # threshold is > 3
+
+    def test_assumption_heavy_above_threshold(self, grounding: _Grounding) -> None:
+        out = {
+            "x": {
+                "derivation": [
+                    "a = 1 [ASSUMED] + 2 [ASSUMED] + 3 [ASSUMED] = 6 [derived]",
+                    "b = 4 [ASSUMED] + 5 [ASSUMED] = 9 [derived]",
+                ]
+            }
+        }
+        report = guard(out, grounding)
+        assert report.assumed_tag_count == 5
+        assert report.assumption_heavy is True
+
+
+class TestS2StructuralValidator:
+    """Exercise `validate_s2_structure` via `guard(..., validate_structure=True)`."""
+
+    def _ev_recipe_output(self) -> dict:
+        return {
+            "economic_value": {
+                "base": {
+                    "fundamental": 480.0,
+                    "derivation": [
+                        'sbc_treatment = "subtracted_from_fcf"',
+                        "shares_out_diluted = basic_shares + tsm_dilution = 7500",
+                        "enterprise_value = sum_pv_explicit + pv_terminal = 3600000",
+                        "net_debt = 55000 [from grounding] + 0 [from grounding] - 75000 [from grounding] - 0 [from grounding] = -20000",
+                        "equity_value = 3600000 [derived] - -20000 [derived] - 0 [from grounding] - 0 [from grounding] - 0 [ASSUMED] = 3620000",
+                        "fundamental = equity_value / shares_out_diluted = 482.7",
+                    ],
+                }
+            }
+        }
+
+    def test_ev_recipe_clean_has_no_warnings(self, grounding: _Grounding) -> None:
+        out = self._ev_recipe_output()
+        report = guard(out, grounding, validate_structure=True)
+        assert report.structure_warnings == [], report.structure_warnings
+
+    def test_ev_recipe_missing_net_debt_warns(self, grounding: _Grounding) -> None:
+        out = self._ev_recipe_output()
+        # Remove the net_debt line.
+        deriv = out["economic_value"]["base"]["derivation"]
+        out["economic_value"]["base"]["derivation"] = [
+            ln for ln in deriv if not ln.lower().startswith("net_debt")
+        ]
+        report = guard(out, grounding, validate_structure=True)
+        joined = "\n".join(report.structure_warnings)
+        assert "net_debt" in joined and "RULE A" in joined
+
+    def test_ev_recipe_short_net_debt_warns(self, grounding: _Grounding) -> None:
+        out = self._ev_recipe_output()
+        deriv = out["economic_value"]["base"]["derivation"]
+        out["economic_value"]["base"]["derivation"] = [
+            "net_debt = 55000 - 75000 = -20000" if ln.lower().startswith("net_debt") else ln
+            for ln in deriv
+        ]
+        report = guard(out, grounding, validate_structure=True)
+        joined = "\n".join(report.structure_warnings)
+        assert "net_debt bridge has < 4 RHS terms" in joined
+
+    def test_missing_sbc_treatment_warns(self, grounding: _Grounding) -> None:
+        out = self._ev_recipe_output()
+        deriv = out["economic_value"]["base"]["derivation"]
+        out["economic_value"]["base"]["derivation"] = [
+            ln for ln in deriv if "sbc_treatment" not in ln
+        ]
+        report = guard(out, grounding, validate_structure=True)
+        joined = "\n".join(report.structure_warnings)
+        assert "sbc_treatment" in joined and "RULE C" in joined
+
+    def test_bare_number_fundamental_warns(self, grounding: _Grounding) -> None:
+        out = self._ev_recipe_output()
+        deriv = out["economic_value"]["base"]["derivation"]
+        out["economic_value"]["base"]["derivation"] = [
+            "fundamental = 482.7" if ln.lower().startswith("fundamental") else ln
+            for ln in deriv
+        ]
+        report = guard(out, grounding, validate_structure=True)
+        joined = "\n".join(report.structure_warnings)
+        assert "RULE H" in joined
+
+    def test_equity_only_model_skips_ev_bridge_checks(self, grounding: _Grounding) -> None:
+        # P/E or DDM recipe: no enterprise_value mention -> RULE A is skipped.
+        out = {
+            "economic_value": {
+                "base": {
+                    "fundamental": 480.0,
+                    "derivation": [
+                        'sbc_treatment = "kept_in_earnings_with_dilution"',
+                        "normalised_eps = 12 [from grounding] = 12",
+                        "fundamental = normalised_eps * chosen_pe = 480",
+                    ],
+                }
+            }
+        }
+        report = guard(out, grounding, validate_structure=True)
+        # Should NOT complain about missing net_debt / equity_value.
+        joined = "\n".join(report.structure_warnings)
+        assert "net_debt" not in joined
+        assert "equity_value" not in joined
+
+    def test_structure_warnings_do_not_flip_passed(self, grounding: _Grounding) -> None:
+        # Output with structure issues but no unjustified numbers.
+        out = {
+            "missing_inputs": [],
+            "economic_value": {
+                "base": {
+                    "fundamental": 420.0,  # grounded == current_price
+                    "derivation": [
+                        # Missing sbc_treatment + missing bridge lines.
+                        "fundamental = 420",
+                    ],
+                }
+            }
+        }
+        report = guard(out, grounding, validate_structure=True)
+        assert report.passed is True
+        assert report.structure_warnings  # but warnings are present
+
+
+class TestGuardReportToDict:
+    def test_includes_phase2_fields(self, grounding: _Grounding) -> None:
+        out = {
+            "x": {
+                "derivation": [
+                    "a = 1 [ASSUMED] + 2 [ASSUMED] + 3 [ASSUMED] + 4 [ASSUMED] = 10 [derived]",
+                ]
+            }
+        }
+        report = guard(out, grounding, validate_structure=True)
+        d = report.to_dict()
+        assert "assumed_tag_count" in d and d["assumed_tag_count"] == 4
+        assert "assumption_heavy" in d and d["assumption_heavy"] is True
+        assert "structure_warnings" in d and isinstance(d["structure_warnings"], list)
+
+
+class TestFormatReportForPromptPhase2:
+    def test_includes_structure_warnings_section(self, grounding: _Grounding) -> None:
+        out = {
+            "economic_value": {
+                "base": {
+                    "fundamental": 420.0,
+                    "derivation": ["fundamental = 420"],
+                }
+            }
+        }
+        report = guard(out, grounding, validate_structure=True)
+        text = format_report_for_prompt(report)
+        assert "STRUCTURE WARNINGS" in text
+
+    def test_includes_assumption_heavy_section(self, grounding: _Grounding) -> None:
+        out = {
+            "x": {
+                "derivation": [
+                    "a = 1 [ASSUMED] + 2 [ASSUMED] + 3 [ASSUMED] + 4 [ASSUMED] = 10 [derived]",
+                ]
+            }
+        }
+        report = guard(out, grounding)
+        text = format_report_for_prompt(report)
+        assert "ASSUMPTION-HEAVY OUTPUT" in text

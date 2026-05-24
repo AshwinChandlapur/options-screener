@@ -84,6 +84,11 @@ def run(g: EtvGrounding, s1_output: dict,
     # Numeric guard against fundamental grounding only.  current_price is a
     # passthrough by default; ``central_estimate`` / ``low_range`` /
     # ``high_range`` are derived from scenario prices so we exempt them too.
+    # ``validate_structure=True`` enables the v3-final advisory checks
+    # (canonical net_debt + equity bridge for EV-based recipes, explicit
+    # ``sbc_treatment`` line, final-line discipline, ``[ASSUMED]``-tag
+    # counting).  Warnings surface in ``guard_report.structure_warnings``
+    # and ``assumption_heavy``; they do not flip ``passed``.
     guard_report = guard(
         output,
         g,
@@ -91,15 +96,22 @@ def run(g: EtvGrounding, s1_output: dict,
             "central_estimate", "low_range", "high_range",
             "price", "fundamental",
         },
+        validate_structure=True,
     )
+    # Surface the advisory summary alongside failures so the critic and the
+    # stage log always see structure warnings / assumption-heavy flags even
+    # when the strict numeric guard passes.
+    extra: dict[str, Any] = {}
+    if (not guard_report.passed
+            or guard_report.structure_warnings
+            or guard_report.assumption_heavy):
+        extra["guard_summary"] = format_report_for_prompt(guard_report)
     return StageResult(
         stage="S2_intrinsic",
         output=output,
         guard=guard_report,
         latency_ms=latency_ms,
-        extra={
-            "guard_summary": format_report_for_prompt(guard_report),
-        } if not guard_report.passed else {},
+        extra=extra,
     )
 
 
