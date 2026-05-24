@@ -357,9 +357,20 @@ def s2_intrinsic_schema() -> dict:
             "additionalProperties": False,
             "required": [
                 "missing_inputs", "economic_value",
+                "model_inapplicable", "inapplicability_reason",
             ],
             "properties": {
                 "missing_inputs": arr_s,
+                # Phase 3: when the S1-chosen ``primary_model`` cannot be
+                # applied (e.g. EV/EBITDA on negative EBITDA, DDM on
+                # g >= cost_of_equity, NAV on asset-light software), the
+                # LLM sets ``model_inapplicable=true`` + provides a one-
+                # sentence reason.  The orchestrator then reroutes to the
+                # next entry in ``supporting_models`` and re-runs S2 once.
+                # Required by strict mode but nullable; emit ``null`` for
+                # the reason when the model IS applicable.
+                "model_inapplicable": {"type": ["boolean", "null"]},
+                "inapplicability_reason": {"type": ["string", "null"]},
                 "economic_value": {
                     "type": "object",
                     "additionalProperties": False,

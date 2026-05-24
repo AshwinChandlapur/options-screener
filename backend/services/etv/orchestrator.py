@@ -38,6 +38,41 @@ def _staged_enabled() -> bool:
     return os.getenv("ETV_PIPELINE_STAGED", "1").lower() in {"1", "true", "yes", "on"}
 
 
+def _resolve_s2_reroute(
+    s2_output: dict,
+    s1_output: dict,
+) -> str | None:
+    """Return the next ``primary_model`` to retry S2 with, or ``None``.
+
+    Phase 3 of the staged ETV S2 rebuild.  When S2 sets
+    ``model_inapplicable=true`` (per v3-final RULE G), the orchestrator
+    walks ``s1_output['supporting_models']`` in order and picks the first
+    candidate that is *not* the current ``primary_model``.  Returns
+    ``None`` when:
+
+    * S2 did not declare the model inapplicable, OR
+    * ``supporting_models`` is empty / only contains the current
+      primary model.
+
+    Pure function; no mutation, no logging.  The caller is responsible
+    for updating ``s1_output['primary_model']``, appending a reroute
+    event to ``pipeline_log``, and re-running S2.  Reroute budget is
+    capped at one by the call-site (we do not recurse here).
+    """
+    if not isinstance(s2_output, dict):
+        return None
+    if s2_output.get("model_inapplicable") is not True:
+        return None
+    supporting = s1_output.get("supporting_models") or []
+    if not isinstance(supporting, list):
+        return None
+    current = s1_output.get("primary_model")
+    for candidate in supporting:
+        if isinstance(candidate, str) and candidate and candidate != current:
+            return candidate
+    return None
+
+
 def _splice_staged(report: dict, s1: dict, s2: dict,
                    s3: dict | None = None,
                    s4: dict | None = None,
@@ -163,6 +198,22 @@ def get_etv(
             pipeline_log.append(s1_res.to_log())
             s2_res = run_s2(g, s1_res.output)
             pipeline_log.append(s2_res.to_log())
+
+            # ----- Phase 3: at most one S2 reroute on model_inapplicable --
+            fallback_model = _resolve_s2_reroute(s2_res.output, s1_res.output)
+            if fallback_model is not None:
+                original_model = s1_res.output.get("primary_model")
+                pipeline_log.append({
+                    "stage": "S2_reroute",
+                    "from_model": original_model,
+                    "to_model": fallback_model,
+                    "reason": s2_res.output.get("inapplicability_reason"),
+                })
+                s1_res.output["primary_model"] = fallback_model
+                s2_res = run_s2(g, s1_res.output)
+                s2_res.retries = (s2_res.retries or 0) + 1
+                pipeline_log.append(s2_res.to_log())
+
             s3_res = run_s3(g, s1_res.output, s2_res.output,
                             horizon, risk_tolerance)
             pipeline_log.append(s3_res.to_log())

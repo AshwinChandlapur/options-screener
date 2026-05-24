@@ -251,10 +251,17 @@ F. Low / high range construction (model-specific).
 G. Inapplicability.
    If a model's preconditions fail (e.g. EV/EBITDA on negative EBITDA,
    DDM on g >= cost_of_equity, P/E on negative EPS, NAV on asset-light
-   software), DO NOT force a number.  Note the failure in missing_inputs
-   as "model_inapplicable: <one sentence reason>" and use your best
-   judgement for the per-scenario values (the orchestrator will route
-   to the next-best model from supporting_models in a future revision).
+   software), DO NOT force a number.  Set the top-level JSON fields:
+       model_inapplicable     = true
+       inapplicability_reason = "<one sentence: which precondition failed>"
+   The orchestrator will reroute to the next entry in
+   supporting_models and re-run S2 once with that model.  For the
+   *current* response you still MUST emit complete per-scenario blocks
+   (zero out value_decomposition slots where you cannot defend a
+   number, set price = fundamental = 0, and write a brief rationale
+   noting the inapplicability).  When the model IS applicable, emit:
+       model_inapplicable     = false
+       inapplicability_reason = null
 
 H. Final-line discipline.
    The last derivation line MUST be of the form:
