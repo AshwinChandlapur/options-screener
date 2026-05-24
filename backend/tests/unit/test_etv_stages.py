@@ -14,6 +14,7 @@ import pytest
 
 from services.etv import orchestrator
 from services.etv.schemas import (
+    S0_SCAFFOLD_SCHEMA,
     S1_AUDIT_SCHEMA,
     S2_INTRINSIC_SCHEMA,
     S3_OVERLAYS_SCHEMA,
@@ -21,7 +22,7 @@ from services.etv.schemas import (
     S5_CRITIC_SCHEMA,
 )
 from services.etv.stages import (
-    s1_audit, s2_intrinsic, s3_overlays, s4_decision, s5_critic,
+    s0_scaffold, s1_audit, s2_intrinsic, s3_overlays, s4_decision, s5_critic,
 )
 from services.etv.stages._base import StageResult
 
@@ -969,3 +970,120 @@ class TestStageRetryPlumbing:
         s2_intrinsic.run(g, {"model_archetype": "Growth",
                               "primary_model": "DCF"})
         assert "critic_feedback" not in captured["user"]
+
+
+
+
+# =========================================================== S0 tests ===
+
+
+def _good_s0_output() -> dict:
+    return {
+        "company_summary": "Microsoft is a diversified enterprise software and "
+                           "cloud company with material AI-platform optionality.",
+        "candidate_archetypes": ["Growth", "Mature cash flow"],
+        "supporting_models": ["DCF", "EV/EBITDA multiple",
+                              "Earnings power x terminal multiple"],
+        "excluded_models": ["Asset-based", "DDM"],
+        "excluded_reason": "Asset-based undervalues IP/cloud; DDM understates "
+                           "reinvestment-driven compounding.",
+    }
+
+
+class TestS0Scaffold:
+    def test_returns_stage_result_with_no_guard(self, monkeypatch, g):
+        def fake_call(**kw):
+            assert kw["schema"] is S0_SCAFFOLD_SCHEMA
+            payload = json.loads(kw["user"])
+            assert payload["grounding"]["ticker"] == "MSFT"
+            return _good_s0_output()
+
+        monkeypatch.setattr(s0_scaffold, "call_json", fake_call)
+        res = s0_scaffold.run(g)
+        assert isinstance(res, StageResult)
+        assert res.stage == "S0_scaffold"
+        assert res.guard is None
+        assert res.output["company_summary"].startswith("Microsoft")
+
+    def test_log_record_shape(self, monkeypatch, g):
+        monkeypatch.setattr(s0_scaffold, "call_json",
+                            lambda **kw: _good_s0_output())
+        res = s0_scaffold.run(g)
+        log = res.to_log()
+        assert log["stage"] == "S0_scaffold"
+        assert "latency_ms" in log
+        assert log["retries"] == 0
+        assert "guard" not in log
+
+
+# ---------------------------------------- orchestrator splice w/ S0 ===
+
+
+class TestOrchestratorSplicingWithS0:
+    def test_s0_seeds_company_summary_and_alt_archetypes(self):
+        s0 = _good_s0_output()
+        s1 = {"model_archetype": "Growth", "primary_model": "DCF",
+              "model_rationale": "FCF compounder", "selection_confidence": "High",
+              "missing_inputs": []}
+        s2 = {"economic_value": {"central_estimate": 470.0},
+              "missing_inputs": []}
+
+        spliced = orchestrator._splice_staged({}, s1, s2, s0=s0)
+        assert spliced["company_summary"].startswith("Microsoft")
+
+        ms = spliced["model_selection"]
+        assert ms["primary_archetype"] == "Growth"
+        assert ms["primary_model"] == "DCF"
+        # S0 candidate matching S1 primary is dropped; the rest survive.
+        assert "Growth" not in ms["secondary_archetypes"]
+        assert "Mature cash flow" in ms["secondary_archetypes"]
+        assert ms["supporting_models"] == s0["supporting_models"]
+        assert ms["excluded_models"] == s0["excluded_models"]
+        assert ms["excluded_reason"] == s0["excluded_reason"]
+
+    def test_splice_without_s0_uses_existing_report_metadata(self):
+        # Backward-compatible: when no s0 is supplied the splicer behaves
+        # exactly as before, inheriting scaffold fields from `report`.
+        report = {
+            "company_summary": "kept",
+            "model_selection": {
+                "primary_archetype": "Cyclical",
+                "secondary_archetypes": ["Special situation"],
+                "primary_model": "EV/EBITDA",
+                "primary_model_rationale": "cyclical-rationale",
+                "supporting_models": ["DDM"],
+                "excluded_models": [],
+                "excluded_reason": "",
+                "selection_confidence": "Low",
+            },
+            "economic_value": {},
+            "missing_inputs": [],
+        }
+        s1 = {"model_archetype": "Growth", "primary_model": "DCF",
+              "model_rationale": "x", "selection_confidence": "High",
+              "missing_inputs": []}
+        spliced = orchestrator._splice_staged(report, s1, {})
+        assert spliced["company_summary"] == "kept"
+        assert spliced["model_selection"]["supporting_models"] == ["DDM"]
+        # Primary archetype now drops from secondary list even without S0.
+        assert "Growth" not in spliced["model_selection"]["secondary_archetypes"]
+
+    def test_s0_does_not_overwrite_existing_company_summary_keys(self):
+        # When the report already has model_selection metadata, S0's
+        # candidates do NOT clobber it (S0 uses setdefault).
+        report = {
+            "model_selection": {
+                "supporting_models": ["DDM"],
+                "excluded_models": ["Asset-based"],
+                "excluded_reason": "preexisting",
+            },
+        }
+        s0 = _good_s0_output()
+        s1 = {"model_archetype": "Growth", "primary_model": "DCF",
+              "model_rationale": "x", "selection_confidence": "High"}
+        spliced = orchestrator._splice_staged(report, s1, {}, s0=s0)
+        ms = spliced["model_selection"]
+        # Existing values win.
+        assert ms["supporting_models"] == ["DDM"]
+        assert ms["excluded_models"] == ["Asset-based"]
+        assert ms["excluded_reason"] == "preexisting"

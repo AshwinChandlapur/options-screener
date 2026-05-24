@@ -1,10 +1,10 @@
 """Public entry-point for the ETV service.
 
-Default path is the monolithic single-call (Step 1 behavior).  When the
-environment flag ``ETV_PIPELINE_STAGED=1`` is set, S1 (audit) and S2
-(intrinsic) replace the corresponding sections of the monolithic report.
-Remaining sections (overlays, decision, sizing) still come from the
-monolithic call until stages S3 / S4 land.
+Default path is the staged pipeline (S0 scaffold + S1 audit + S2 intrinsic
++ S3 overlays + S4 decision + S5 critic, with at most one critic-driven
+retry).  Set ``ETV_PIPELINE_STAGED=0`` to fall back to the original
+single-shot monolithic call; the monolithic call is also used as a safety
+fallback when any staged step raises.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from .grounding import fetch_grounding
 from .llm import AZURE_OPENAI_DEPLOYMENT, Horizon, RiskTolerance, call_monolithic
 from .stages import (
     critic_feedback,
+    run_s0,
     run_s1,
     run_s2,
     run_s3,
@@ -39,26 +40,56 @@ def _staged_enabled() -> bool:
 
 def _splice_staged(report: dict, s1: dict, s2: dict,
                    s3: dict | None = None,
-                   s4: dict | None = None) -> dict:
-    """Overlay S1 + S2 (+ optional S3 / S4) outputs onto a monolithic report.
+                   s4: dict | None = None,
+                   *,
+                   s0: dict | None = None) -> dict:
+    """Overlay staged outputs onto a (possibly empty) report dict.
 
-    * ``model_selection`` is rebuilt from S1's archetype / model picks.
-    * ``economic_value`` is replaced by S2's intrinsic block.
-    * When ``s3`` is supplied, ``regime`` / ``optionality`` /
-      ``market_implied`` / ``market_behavior`` / ``etv`` are replaced too.
-    * When ``s4`` is supplied, ``risk`` / ``asymmetry`` / ``decision`` /
-      ``sizing`` / ``catalysts`` / ``failure_conditions`` / ``core_thesis`` /
-      ``advisor_challenges`` are replaced too.
-    * ``missing_inputs`` is the union (de-duplicated,
-      S1 → S2 → S3 → S4 → existing).
+    Field ownership:
+      * **S0** owns ``company_summary`` and the non-primary
+        ``model_selection`` metadata (``secondary_archetypes``,
+        ``supporting_models``, ``excluded_models``, ``excluded_reason``).
+      * **S1** owns ``model_selection.primary_archetype`` /
+        ``primary_model`` / ``primary_model_rationale`` /
+        ``selection_confidence``.
+      * **S2** owns ``economic_value``.
+      * **S3** (optional) owns ``regime`` / ``optionality`` /
+        ``market_implied`` / ``market_behavior`` / ``etv``.
+      * **S4** (optional) owns ``risk`` / ``asymmetry`` / ``decision`` /
+        ``sizing`` / ``catalysts`` / ``failure_conditions`` /
+        ``core_thesis`` / ``advisor_challenges``.
+      * ``missing_inputs`` is the union (de-duplicated,
+        S1 → S2 → S3 → S4 → existing).
     """
+    # ----- S0 first: populate scaffold so S1 inherits the metadata ------
+    if s0:
+        if "company_summary" in s0:
+            report["company_summary"] = s0["company_summary"]
+        existing_ms = report.get("model_selection") or {}
+        primary_arch = existing_ms.get("primary_archetype", "")
+        # Drop the primary from candidate list if present — S1 will set it.
+        candidates = [a for a in (s0.get("candidate_archetypes") or [])
+                      if a and a != primary_arch]
+        existing_ms.setdefault("secondary_archetypes", candidates)
+        existing_ms.setdefault("supporting_models",
+                               list(s0.get("supporting_models") or []))
+        existing_ms.setdefault("excluded_models",
+                               list(s0.get("excluded_models") or []))
+        existing_ms.setdefault("excluded_reason",
+                               s0.get("excluded_reason", ""))
+        report["model_selection"] = existing_ms
+
     archetype = s1.get("model_archetype")
     model = s1.get("primary_model")
 
     existing_ms = report.get("model_selection") or {}
+    # If S0 ran, drop the primary archetype from `secondary_archetypes` now
+    # that S1 has chosen one.
+    secondary = [a for a in existing_ms.get("secondary_archetypes", [])
+                 if a and a != archetype]
     report["model_selection"] = {
         "primary_archetype": archetype or existing_ms.get("primary_archetype", ""),
-        "secondary_archetypes": existing_ms.get("secondary_archetypes", []),
+        "secondary_archetypes": secondary,
         "primary_model": model or existing_ms.get("primary_model", ""),
         "primary_model_rationale": s1.get("model_rationale")
             or existing_ms.get("primary_model_rationale", ""),
@@ -126,6 +157,8 @@ def get_etv(
 
     if staged:
         try:
+            s0_res = run_s0(g)
+            pipeline_log.append(s0_res.to_log())
             s1_res = run_s1(g)
             pipeline_log.append(s1_res.to_log())
             s2_res = run_s2(g, s1_res.output)
@@ -170,9 +203,12 @@ def get_etv(
                     s4_res = retry
                 pipeline_log.append(retry.to_log())
 
-            report = call_monolithic(g, horizon, risk_tolerance)
-            report = _splice_staged(report, s1_res.output, s2_res.output,
-                                    s3_res.output, s4_res.output)
+            # Build the report from scratch — no monolithic call needed.
+            # S0 + S1..S4 jointly cover every field the validator and the
+            # frontend consume.
+            report = _splice_staged({}, s1_res.output, s2_res.output,
+                                    s3_res.output, s4_res.output,
+                                    s0=s0_res.output)
         except Exception as exc:
             logger.warning(
                 "staged pipeline failed (%s); falling back to monolithic", exc

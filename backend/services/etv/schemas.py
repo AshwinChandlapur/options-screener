@@ -215,7 +215,7 @@ def monolithic_schema() -> dict:
 MONOLITHIC_RESPONSE_SCHEMA = monolithic_schema()
 
 
-# ============================================================== S1 ===
+# ============================================================== S0 ===
 _ARCHETYPES = (
     "Growth",
     "Mature cash flow",
@@ -226,6 +226,47 @@ _ARCHETYPES = (
     "Commodity",
     "Special situation",
 )
+
+
+def s0_scaffold_schema() -> dict:
+    """Narrative-only scaffold: company summary + alternative archetypes/models.
+
+    Owns the report fields the staged numeric pipeline (S1-S4) does NOT
+    produce.  No prices, no overlays — see :data:`prompts.S0_SYSTEM`.
+    """
+    s = {"type": "string"}
+    arr_s = {"type": "array", "items": {"type": "string"},
+             "minItems": 1, "maxItems": 6}
+    return {
+        "name": "etv_s0_scaffold",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "company_summary", "candidate_archetypes",
+                "supporting_models", "excluded_models", "excluded_reason",
+            ],
+            "properties": {
+                "company_summary": s,
+                "candidate_archetypes": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(_ARCHETYPES)},
+                    "minItems": 2,
+                    "maxItems": 4,
+                },
+                "supporting_models": arr_s,
+                "excluded_models": arr_s,
+                "excluded_reason": s,
+            },
+        },
+    }
+
+
+S0_SCAFFOLD_SCHEMA = s0_scaffold_schema()
+
+
+# ============================================================== S1 ===
 
 
 def s1_audit_schema() -> dict:

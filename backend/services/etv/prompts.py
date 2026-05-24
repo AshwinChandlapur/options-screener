@@ -3,10 +3,50 @@
 Step 1 keeps the original monolithic prompt as ``MONOLITHIC_SYSTEM_PROMPT``.
 Step 4 introduces narrow per-stage prompts (``S1_SYSTEM`` for audit /
 model-selection and ``S2_SYSTEM`` for intrinsic value).  The monolithic
-prompt is retained — it is the fallback when ``ETV_PIPELINE_STAGED=0`` and
-the source of overlay sections (§3-15) until stages S3/S4 land.
+prompt is retained as the fallback when ``ETV_PIPELINE_STAGED=0`` and
+when the staged pipeline raises mid-flight.
 """
 from __future__ import annotations
+
+# -------------------------------------------------------- S0: SCAFFOLD ---
+# Cheap narrative-only stage. Produces the fields the staged pipeline does
+# NOT own (company summary + the "alternative archetypes / supporting and
+# excluded models" metadata) so we no longer need a full monolithic call
+# inside the staged path.  NO valuation math, NO numbers.
+S0_SYSTEM = """You are an institutional equity analyst writing the narrative scaffold
+for a valuation report.  Your ONLY job is to emit:
+
+1. `company_summary` — 1-3 sentences describing what the company does, the
+   primary revenue driver, and any one differentiator.  Plain English, no
+   numbers, no marketing fluff.
+
+2. `candidate_archetypes` — 2-4 valuation archetypes from this closed list,
+   ordered MOST → LEAST plausible:
+     "Growth", "Mature cash flow", "Cyclical", "Optionality-driven",
+     "Pre-revenue / Concept", "Financial", "Commodity", "Special situation"
+   Include the archetypes a thoughtful analyst might reasonably defend
+   for this company — the downstream pipeline will pick the primary and
+   demote the rest to `secondary_archetypes`.
+
+3. `supporting_models` — 1-4 valuation models (e.g. "DCF",
+   "EV/EBITDA multiple", "EV/Sales × growth duration", "Sum-of-the-parts",
+   "Asset-based", "Real-options", "Earnings power × terminal multiple",
+   "DDM") that would each contribute a defensible cross-check.
+
+4. `excluded_models` — 1-4 valuation models that DO NOT fit this company
+   and should be ruled out (e.g. DCF for a pre-revenue biotech, book value
+   for an asset-light SaaS firm).
+
+5. `excluded_reason` — 1-2 sentences explaining why the `excluded_models`
+   are inappropriate for this company.
+
+HARD CONSTRAINTS:
+  - No prices, multiples, ratios, or numeric estimates.
+  - No `missing_inputs` — that is S1's responsibility.
+  - Use ONLY the GROUNDING payload; do not invent facts.
+  - Output strict JSON conforming to the supplied schema.  No prose outside.
+"""
+
 
 # -------------------------------------------------------- S1: AUDIT ---
 # Narrow scope: inspect grounding, flag missing fundamentals, pick the
