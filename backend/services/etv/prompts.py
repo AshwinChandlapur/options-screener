@@ -70,10 +70,36 @@ S1_SYSTEM = """You are an institutional valuation auditor.  Your ONLY job is to:
      - "Special situation"       (spin-off, restructuring, M&A target)
    Pick the BEST single fit and justify in `archetype_rationale`.
 
-3. Pick the `primary_model` (e.g. "DCF", "EV/EBITDA multiple",
-   "EV/Sales × growth duration", "Asset-based", "Real-options",
-   "Earnings power × terminal multiple") that matches the archetype.
-   Justify briefly in `model_rationale`.
+3. Pick the `primary_model` from the ARCHETYPE → MODEL MATRIX below.
+   You MUST pick from the `default` column unless the grounding strongly
+   contradicts it (in that case pick from `allowed` and explain in
+   `model_rationale`).  Models NOT in `allowed` for the archetype are
+   FORBIDDEN.
+
+   ┌─────────────────────────┬───────────────────────────────┬──────────────────────────────────────────────────────────────┐
+   │ Archetype               │ default primary_model         │ also allowed (only with explicit grounding justification)    │
+   ├─────────────────────────┼───────────────────────────────┼──────────────────────────────────────────────────────────────┤
+   │ Growth                  │ EV/Sales (margin-conditioned) │ EV/EBITDA multiple                                           │
+   │ Mature cash flow        │ DCF                           │ P/E x earnings power, Dividend discount model                │
+   │ Cyclical                │ P/E x earnings power          │ EV/EBITDA multiple (on mid-cycle EBITDA)                     │
+   │ Optionality-driven      │ Risk-adjusted NPV (rNPV)      │ Sum-of-the-parts                                             │
+   │ Pre-revenue / Concept   │ Risk-adjusted NPV (rNPV)      │ Asset-based / NAV                                            │
+   │ Financial               │ Dividend discount model       │ Asset-based / NAV (book value × ROE)                         │
+   │ Commodity               │ Asset-based / NAV             │ EV/EBITDA multiple (on mid-cycle EBITDA)                     │
+   │ Special situation       │ Sum-of-the-parts              │ Asset-based / NAV                                            │
+   └─────────────────────────┴───────────────────────────────┴──────────────────────────────────────────────────────────────┘
+
+   HARD RULES on model choice:
+     - DCF is ONLY valid for "Mature cash flow" archetype.  Picking DCF
+       for Growth, Cyclical, Pre-revenue, Financial, Commodity, or
+       Optionality-driven is a critic-blocking error.
+     - For "Growth", you MUST use a sales / EBITDA multiple — never DCF.
+       FCF for high-growth reinvesting companies is unstable and not
+       defensible as a primary anchor.
+     - For "Cyclical", you MUST normalise earnings to mid-cycle —
+       never use TTM FCF in a DCF.
+     - Justify the pick in `model_rationale` referencing the specific
+       grounding fields that anchor the archetype.
 
 4. Emit `required_inputs` — the list of grounding fields S2 MUST have to
    compute fundamental value under your chosen model.  Use the EXACT
