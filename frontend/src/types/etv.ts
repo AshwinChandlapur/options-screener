@@ -238,7 +238,28 @@ export interface EtvReport {
     warnings: string[]
     corrections: string[]
     passed: boolean
+    probability_check?: EtvProbabilityCheck
   }
+}
+
+export interface EtvProbabilityCheck {
+  method: 'iv_posterior' | 'llm_only'
+  iv_annual: number | null
+  horizon_days: number | null
+  lr_provided: boolean
+  prior_pct: { bear: number; base: number; bull: number } | null
+  lr_llm: { bear: number; base: number; bull: number } | null
+  lr_clamped: { bear: number; base: number; bull: number } | null
+  posterior_pct: { bear: number; base: number; bull: number } | null
+  llm_pct: { bear: number; base: number; bull: number } | null
+  ratio_llm: number | null
+  ratio_prior: number | null
+  ratio_posterior: number | null
+  decision_under_prior: 'TRADE' | 'NO TRADE' | null
+  decision_under_posterior: 'TRADE' | 'NO TRADE' | null
+  decision_relies_on_llm_view: boolean
+  ratio_gap_llm_vs_posterior: number | null
+  decision_fragile: boolean
 }
 
 export interface EtvGuardReport {

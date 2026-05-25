@@ -1031,6 +1031,187 @@ function AsymmetrySection({ r }: { r: EtvReport }) {
   )
 }
 
+function ProbabilityCheckSection({ r }: { r: EtvReport }) {
+  const pc = r.validation?.probability_check
+  if (!pc) return null
+
+  const fmt1 = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(1))
+  const fmtPctOne = (v: number | null | undefined) =>
+    v == null ? '—' : `${v.toFixed(1)}%`
+
+  const fallback = pc.method === 'llm_only'
+
+  const rows: Array<{
+    label: string
+    bear: number | null | undefined
+    base: number | null | undefined
+    bull: number | null | undefined
+    ratio: number | null
+    note?: string
+    color?: string
+  }> = [
+    {
+      label: 'LLM (raw)',
+      bear: pc.llm_pct?.bear,
+      base: pc.llm_pct?.base,
+      bull: pc.llm_pct?.bull,
+      ratio: pc.ratio_llm,
+      note: 'LLM scenario probabilities',
+      color: '#94a3b8',
+    },
+    {
+      label: 'IV prior',
+      bear: pc.prior_pct?.bear,
+      base: pc.prior_pct?.base,
+      bull: pc.prior_pct?.bull,
+      ratio: pc.ratio_prior,
+      note: fallback
+        ? 'Not computed (iv30 missing)'
+        : `Lognormal cone, σ=${fmt1((pc.iv_annual ?? 0) * 100)}%, T=${pc.horizon_days ?? '?'}d`,
+      color: '#60a5fa',
+    },
+    {
+      label: 'Posterior (used)',
+      bear: pc.posterior_pct?.bear,
+      base: pc.posterior_pct?.base,
+      bull: pc.posterior_pct?.bull,
+      ratio: pc.ratio_posterior,
+      note: fallback
+        ? 'Falling back to LLM probabilities'
+        : pc.lr_provided
+        ? 'Prior × clamped LR, renormalised'
+        : 'Pure IV prior (no LR supplied)',
+      color: '#4ade80',
+    },
+  ]
+
+  const lrClampedRow =
+    !fallback && pc.lr_clamped
+      ? `${fmt1(pc.lr_clamped.bear)} / ${fmt1(pc.lr_clamped.base)} / ${fmt1(pc.lr_clamped.bull)}`
+      : '—'
+  const lrRawRow =
+    !fallback && pc.lr_llm
+      ? `${fmt1(pc.lr_llm.bear)} / ${fmt1(pc.lr_llm.base)} / ${fmt1(pc.lr_llm.bull)}`
+      : '—'
+
+  return (
+    <Card step="§10b" title="Probability calibration (IV prior + LR)">
+      {fallback && (
+        <div style={{ fontSize: 12, color: '#fbbf24', marginBottom: 8 }}>
+          ⚠ iv30 missing from grounding — gate uses LLM probabilities only.
+        </div>
+      )}
+
+      <div style={{ overflowX: 'auto' }}>
+        <table
+          style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}
+        >
+          <thead>
+            <tr style={{ color: '#94a3b8', textAlign: 'right' }}>
+              <th style={{ textAlign: 'left', padding: '6px 8px' }}>Source</th>
+              <th style={{ padding: '6px 8px', color: SCENARIO_COLORS.bear }}>Bear</th>
+              <th style={{ padding: '6px 8px', color: SCENARIO_COLORS.base }}>Base</th>
+              <th style={{ padding: '6px 8px', color: SCENARIO_COLORS.bull }}>Bull</th>
+              <th style={{ padding: '6px 8px' }}>Ratio</th>
+              <th style={{ padding: '6px 8px', textAlign: 'left' }}>Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.label} style={{ borderTop: '1px solid #1f2937' }}>
+                <td style={{ padding: '6px 8px', color: row.color, fontWeight: 600 }}>
+                  {row.label}
+                </td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                  {fmtPctOne(row.bear)}
+                </td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                  {fmtPctOne(row.base)}
+                </td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                  {fmtPctOne(row.bull)}
+                </td>
+                <td
+                  style={{
+                    padding: '6px 8px',
+                    textAlign: 'right',
+                    fontWeight: 600,
+                    color:
+                      row.ratio == null
+                        ? '#94a3b8'
+                        : row.ratio >= 2
+                        ? '#4ade80'
+                        : '#fbbf24',
+                  }}
+                >
+                  {row.ratio == null ? '—' : `${row.ratio.toFixed(2)}:1`}
+                </td>
+                <td style={{ padding: '6px 8px', color: '#94a3b8' }}>{row.note}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {!fallback && (
+        <div
+          style={{
+            marginTop: 10,
+            fontSize: 12,
+            color: '#cbd5e1',
+            display: 'grid',
+            gap: 4,
+          }}
+        >
+          <div>
+            <span style={{ color: '#94a3b8' }}>LR (LLM raw / clamped to [0.25, 4]):</span>{' '}
+            {lrRawRow} → {lrClampedRow}
+          </div>
+          <div>
+            <span style={{ color: '#94a3b8' }}>Decision under prior:</span>{' '}
+            <span
+              style={{
+                color:
+                  pc.decision_under_prior === 'TRADE' ? '#4ade80' : '#f87171',
+              }}
+            >
+              {pc.decision_under_prior ?? '—'}
+            </span>
+            <span style={{ color: '#94a3b8', margin: '0 8px' }}>·</span>
+            <span style={{ color: '#94a3b8' }}>under posterior:</span>{' '}
+            <span
+              style={{
+                color:
+                  pc.decision_under_posterior === 'TRADE' ? '#4ade80' : '#f87171',
+              }}
+            >
+              {pc.decision_under_posterior ?? '—'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {pc.decision_relies_on_llm_view && (
+          <Tag
+            text="TRADE rests on LR — IV prior alone says NO TRADE"
+            color="#92400e"
+          />
+        )}
+        {pc.decision_fragile && (
+          <Tag
+            text={`Fragile: LLM↔posterior ratio gap ${pc.ratio_gap_llm_vs_posterior?.toFixed(2) ?? '?'} (−15 confidence)`}
+            color="#7f1d1d"
+          />
+        )}
+        {!pc.decision_relies_on_llm_view && !pc.decision_fragile && !fallback && (
+          <Tag text="Posterior and LLM agree" color="#14532d" />
+        )}
+      </div>
+    </Card>
+  )
+}
+
 function DecisionSection({ r }: { r: EtvReport }) {
   const d = r.decision
   return (
@@ -1445,6 +1626,7 @@ export function EtvView() {
           <EtvSection r={data.report} />
           <RiskSection r={data.report} />
           <AsymmetrySection r={data.report} />
+          <ProbabilityCheckSection r={data.report} />
           <DecisionSection r={data.report} />
           <SizingSection r={data.report} />
           <CatalystsSection r={data.report} />
