@@ -145,12 +145,12 @@ def main() -> None:
                 continue
 
             embeddings = [doc["embedding"] for doc in signals]
-            result: ClusterResult = cluster(
-                embeddings,
-                min_cluster_size=config.min_cluster_size,
-                merge_threshold=config.merge_threshold,
-                min_intra_cluster_similarity=config.min_intra_cluster_similarity,
-            )
+            # cluster() was refactored to a similarity-graph approach (ADR);
+            # the legacy HDBSCAN kwargs (min_cluster_size, merge_threshold,
+            # min_intra_cluster_similarity) are no longer accepted. The
+            # similarity floor is read from CLUSTER_SIMILARITY_FLOOR in
+            # detector.py; config knobs remain for the smoothing layer.
+            result: ClusterResult = cluster(embeddings)
 
             timeline = cosmos.fetch_timeline_doc(ticker, today) or {}
 
