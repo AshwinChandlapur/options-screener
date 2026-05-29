@@ -169,6 +169,24 @@ def _fetch_all_scored() -> list[dict]:
     )
 
 
+def get_scoreboard_computed_at() -> str | None:
+    """Return the ISO timestamp at which the scoreboard cache was computed.
+
+    Surfaced by the router as the ``X-Scoreboard-Computed-At`` response
+    header so the frontend can render "as of N min ago" against the
+    *data*'s age rather than the network request's age. Returns ``None``
+    on cold start (cache doc absent) so the router can omit the header.
+
+    Uses the same cache helper as the query functions; staleness is not
+    a fallback trigger (see _read_scoreboard).
+    """
+    sb = _read_scoreboard()
+    if sb is None:
+        return None
+    computed_at = sb.get("computed_at")
+    return str(computed_at) if computed_at else None
+
+
 def query_top_acs(limit: int) -> list[dict]:
     """Return up to limit ticker_timeline docs ordered by acs descending.
 

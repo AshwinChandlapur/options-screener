@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from limiter import limiter
@@ -290,12 +290,16 @@ async def get_ticker_detail(
 @limiter.limit("30/minute")
 async def get_top(
     request: Request,
+    response: Response,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
 ) -> list[AcsScoreOut]:
     try:
         rows = await read_service.get_top_tickers(limit=limit)
+        computed_at = await read_service.get_scoreboard_age_iso()
     except Exception as exc:
         raise _map_service_error(exc) from exc
+    if computed_at:
+        response.headers["X-Scoreboard-Computed-At"] = computed_at
     return [_acs_to_out(r) for r in rows]
 
 
@@ -303,12 +307,16 @@ async def get_top(
 @limiter.limit("30/minute")
 async def get_emerging(
     request: Request,
+    response: Response,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[AcsScoreOut]:
     try:
         rows = await read_service.get_emerging_tickers(limit=limit)
+        computed_at = await read_service.get_scoreboard_age_iso()
     except Exception as exc:
         raise _map_service_error(exc) from exc
+    if computed_at:
+        response.headers["X-Scoreboard-Computed-At"] = computed_at
     return [_acs_to_out(r) for r in rows]
 
 

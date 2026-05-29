@@ -11,11 +11,17 @@ interface UseNarrativeReturn {
   loading: boolean
   error: NarrativeError | null
   lastUpdatedAt: Date | null
+  /** When the backend's scoreboard cache was last computed by the scorer
+   *  job. Reflects *data* freshness, not network freshness. Read from the
+   *  `X-Scoreboard-Computed-At` response header; null on cold start. */
+  scoreboardAsOf: Date | null
   refresh: () => Promise<void>
   fetchDetail: (ticker: string) => Promise<{ data: TickerDetail | null; error: NarrativeError | null }>
 }
 
-async function safeFetch<T>(url: string): Promise<{ data: T | null; error: NarrativeError | null }> {
+async function safeFetch<T>(
+  url: string,
+): Promise<{ data: T | null; error: NarrativeError | null; headers: Headers | null }> {
   try {
     const response = await fetch(url, { method: 'GET' })
     if (response.status === 503) {
@@ -24,16 +30,20 @@ async function safeFetch<T>(url: string): Promise<{ data: T | null; error: Narra
         const body = await response.json()
         if (typeof body?.detail === 'string') detail = body.detail
       } catch { /* ignore */ }
-      return { data: null, error: { detail, unavailable: true } }
+      return { data: null, error: { detail, unavailable: true }, headers: null }
     }
     if (!response.ok) {
-      return { data: null, error: { detail: `Server error ${response.status}`, unavailable: false } }
+      return {
+        data: null,
+        error: { detail: `Server error ${response.status}`, unavailable: false },
+        headers: null,
+      }
     }
     const data = await response.json() as T
-    return { data, error: null }
+    return { data, error: null, headers: response.headers }
   } catch (err: unknown) {
     const detail = err instanceof Error ? err.message : 'Network error — is the backend running?'
-    return { data: null, error: { detail, unavailable: false } }
+    return { data: null, error: { detail, unavailable: false }, headers: null }
   }
 }
 
@@ -45,6 +55,7 @@ export function useNarrative(): UseNarrativeReturn {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<NarrativeError | null>(null)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
+  const [scoreboardAsOf, setScoreboardAsOf] = useState<Date | null>(null)
   const intervalRef = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
@@ -66,6 +77,16 @@ export function useNarrative(): UseNarrativeReturn {
     if (emergingRes.data !== null) setEmerging(emergingRes.data)
     if (alertsRes.data !== null) setAlerts(alertsRes.data)
     if (!dataError) setLastUpdatedAt(new Date())
+    // Prefer the X-Scoreboard-Computed-At header from whichever endpoint
+    // succeeded — both should agree (single shared cache doc).
+    const computedHeader =
+      emergingRes.headers?.get('X-Scoreboard-Computed-At') ??
+      topRes.headers?.get('X-Scoreboard-Computed-At') ??
+      null
+    if (computedHeader) {
+      const parsed = new Date(computedHeader)
+      if (!Number.isNaN(parsed.getTime())) setScoreboardAsOf(parsed)
+    }
     setLoading(false)
   }, [])
 
@@ -87,5 +108,5 @@ export function useNarrative(): UseNarrativeReturn {
     }
   }, [refresh])
 
-  return { top, emerging, alerts, loading, error, lastUpdatedAt, refresh, fetchDetail }
+  return { top, emerging, alerts, loading, error, lastUpdatedAt, scoreboardAsOf, refresh, fetchDetail }
 }

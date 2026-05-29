@@ -59,6 +59,9 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["Content-Type"],
+    # Custom response headers the frontend reads explicitly. CORS hides any
+    # response header not in the CORS-safelisted set unless listed here.
+    expose_headers=["X-Scoreboard-Computed-At"],
 )
 
 app.include_router(csp_router)

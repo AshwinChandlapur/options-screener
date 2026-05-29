@@ -15,7 +15,13 @@ import math
 from datetime import datetime, timezone
 from uuid import UUID
 
-from .cosmos_client import query_alerts, query_emerging, query_ticker, query_top_acs
+from .cosmos_client import (
+    get_scoreboard_computed_at,
+    query_alerts,
+    query_emerging,
+    query_ticker,
+    query_top_acs,
+)
 from .errors import NarrativeUnavailable, NarrativeNotFound, TickerNotTracked
 from .types import (
     AcsComponents,
@@ -162,6 +168,22 @@ async def get_emerging_tickers(limit: int = 50) -> list[AcsScore]:
     except Exception as exc:
         raise NarrativeUnavailable(f"Cosmos unavailable: {exc}") from exc
     return [_doc_to_acs(d) for d in docs]
+
+
+async def get_scoreboard_age_iso() -> str | None:
+    """ISO timestamp at which the scoreboard cache was computed.
+
+    Surfaced by the router as the ``X-Scoreboard-Computed-At`` header so
+    the UI's "as of N min ago" badge reflects data freshness (the scorer
+    run) rather than network freshness (when the browser made the call).
+    Returns ``None`` on cold start — the router omits the header in that
+    case.
+    """
+    try:
+        return get_scoreboard_computed_at()
+    except Exception:
+        logger.warning("scoreboard meta read failed — omitting age header")
+        return None
 
 
 async def get_narrative(narrative_id: UUID) -> NarrativeCluster:

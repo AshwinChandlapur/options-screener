@@ -22,7 +22,7 @@ function formatRelative(date: Date): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
-const STALE_THRESHOLD_MS = 10 * 60 * 1000  // 10 min
+const STALE_THRESHOLD_MS = 30 * 60 * 1000  // 30 min — covers a missed scorer cycle
 
 export function NarrativeView() {
   const {
@@ -31,6 +31,7 @@ export function NarrativeView() {
     loading,
     error,
     lastUpdatedAt,
+    scoreboardAsOf,
     refresh,
     fetchDetail,
   } = useNarrative()
@@ -68,8 +69,14 @@ export function NarrativeView() {
     setDetailError(null)
   }
 
+  // Prefer the backend's scoreboard-computed-at timestamp (X-Scoreboard-Computed-At
+  // header) so the badge reflects *data* freshness — i.e. when the scorer job
+  // last wrote the cache — rather than network freshness (when this browser
+  // last fetched). Falls back to lastUpdatedAt on cold start before the header
+  // is available.
+  const asOf = scoreboardAsOf ?? lastUpdatedAt
   const isStale =
-    lastUpdatedAt != null && Date.now() - lastUpdatedAt.getTime() > STALE_THRESHOLD_MS
+    asOf != null && Date.now() - asOf.getTime() > STALE_THRESHOLD_MS
 
   return (
     <section className="narrative-view">
@@ -84,12 +91,12 @@ export function NarrativeView() {
         <div className="narrative-header-controls">
           <TickerSearch onSearch={(t) => void loadDetail(t)} disabled={loading} />
           <div className="narrative-refresh-block">
-            {lastUpdatedAt && (
+            {asOf && (
               <span
                 className={isStale ? 'muted stale' : 'muted'}
-                title={lastUpdatedAt.toISOString()}
+                title={`Scoreboard computed at ${asOf.toISOString()}`}
               >
-                Updated {formatRelative(lastUpdatedAt)}
+                As of {formatRelative(asOf)}
                 {isStale ? ' · stale' : ''}
               </span>
             )}
