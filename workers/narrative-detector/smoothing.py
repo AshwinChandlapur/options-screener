@@ -41,6 +41,14 @@ STAGE2_MAX: float = 0.35   # between → early conviction; above → expanding
 # stage transition is committed.  Higher = more stable, slower to react.
 DEFAULT_CONFIRM_RUNS: int = 2
 
+# Number of consecutive runs with n_embedded >= N_MIN_EMBEDDED required before
+# we commit a non-zero stage from a cold start (prev_stage == 0). This
+# eliminates the 0 ↔ 3 oscillation observed for tickers hovering at the
+# volume floor (Quant audit CRITICAL #2): one signal dropping in or out of
+# the 72h window no longer flips the displayed stage. Detector cadence is
+# hourly so two confirm runs == ~2h of sustained volume before promotion.
+COLD_START_CONFIRM_RUNS: int = 2
+
 # Volatile inputs subject to EMA smoothing.  Listed here so the smoothing
 # layer never accidentally smooths a metric that should pass through.
 SMOOTHED_KEYS: tuple[str, ...] = (
@@ -70,6 +78,13 @@ class LifecycleState:
     smoothed_inputs: dict[str, float] = field(default_factory=dict)
     pending_stage: int = 0       # 0 = no pending move
     pending_streak: int = 0      # consecutive runs target == pending_stage
+    # Consecutive runs with n_embedded >= N_MIN_EMBEDDED *while prev_stage was 0*.
+    # Used to gate cold-start commit so a ticker hovering at the volume floor
+    # (e.g. 4–6 signals / 72h) does not flip 0 → 3 → 0 → 3 every run when one
+    # signal drops in or out (Quant audit CRITICAL #2). Requires
+    # COLD_START_CONFIRM_RUNS consecutive non-zero observations before the
+    # detector commits a non-zero target.
+    cold_volume_streak: int = 0
 
     @classmethod
     def from_doc(cls, doc: dict[str, Any] | None) -> "LifecycleState":
@@ -80,6 +95,7 @@ class LifecycleState:
             smoothed_inputs=dict(raw.get("smoothed_inputs") or {}),
             pending_stage=int(raw.get("pending_stage") or 0),
             pending_streak=int(raw.get("pending_streak") or 0),
+            cold_volume_streak=int(raw.get("cold_volume_streak") or 0),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -87,6 +103,7 @@ class LifecycleState:
             "smoothed_inputs": self.smoothed_inputs,
             "pending_stage": self.pending_stage,
             "pending_streak": self.pending_streak,
+            "cold_volume_streak": self.cold_volume_streak,
         }
 
 
@@ -214,19 +231,32 @@ def apply_hysteresis(
           target.  This means a 1 → 3 jump takes a minimum of 4 detector runs
           (2 to confirm 1→2, then 2 to confirm 2→3).
 
+    Stage 4 is *skipped* on commit: a +1 step that would land on 4 snaps
+    up to 5, and a −1 step from 5 snaps down to 3. The stage chain that
+    the detector actually targets is {1, 2, 3, 5, 6}; Stage 4 has no
+    deterministic target rule (Quant audit MEDIUM #8). Allowing it as a
+    transient was producing a ~2h artefact during 3 → 5 transitions where
+    the scorer's `_STAGE_MAP[4] = 10` halved Component C and the UI
+    mislabelled it as a stable 'Maturing' state. Snapping over 4 keeps the
+    chain monotone and the badge meaningful.
+
     Returns:
         (committed_stage, new_state).  ``smoothed_inputs`` on ``new_state`` is
         copied verbatim from ``state`` — callers are expected to update it
         separately before persisting.
     """
     if prev_stage == 0:
-        return target, LifecycleState(smoothed_inputs=state.smoothed_inputs)
+        return target, LifecycleState(
+            smoothed_inputs=state.smoothed_inputs,
+            cold_volume_streak=state.cold_volume_streak,
+        )
 
     if target == prev_stage:
         return prev_stage, LifecycleState(
             smoothed_inputs=state.smoothed_inputs,
             pending_stage=0,
             pending_streak=0,
+            cold_volume_streak=state.cold_volume_streak,
         )
 
     new_streak = state.pending_streak + 1 if state.pending_stage == target else 1
@@ -234,16 +264,22 @@ def apply_hysteresis(
     if new_streak >= confirm_runs:
         direction = 1 if target > prev_stage else -1
         committed = prev_stage + direction
+        # Skip Stage 4: it has no detector target and the scorer down-weights
+        # it. Snap to the next real stage in the chain in the same direction.
+        if committed == 4:
+            committed = 5 if direction > 0 else 3
         return committed, LifecycleState(
             smoothed_inputs=state.smoothed_inputs,
             pending_stage=0,
             pending_streak=0,
+            cold_volume_streak=state.cold_volume_streak,
         )
 
     return prev_stage, LifecycleState(
         smoothed_inputs=state.smoothed_inputs,
         pending_stage=target,
         pending_streak=new_streak,
+        cold_volume_streak=state.cold_volume_streak,
     )
 
 

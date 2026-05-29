@@ -177,6 +177,7 @@ def cluster(
 # ---------------------------------------------------------------------------
 
 from smoothing import (  # noqa: E402
+    COLD_START_CONFIRM_RUNS,
     LifecycleState,
     apply_hysteresis,
     breadth_score,
@@ -254,8 +255,42 @@ def assign_stage(
 
     # Stage 0 — insufficient data.  Genuine "not enough signal to classify".
     # Polysemic tickers (n_embedded high but n_clusters == 0) fall through.
+    #
+    # IMPORTANT: when we emit Stage 0 we *reset* cold_volume_streak so the
+    # next non-zero observation must be confirmed across COLD_START_CONFIRM_RUNS
+    # consecutive detector runs before we commit a non-zero target. This
+    # eliminates the 0 ↔ 3 oscillation that previously fired every hour for
+    # tickers hovering at 4–6 embedded signals (Quant audit CRITICAL #2).
+    # smoothed_inputs and pending_* are preserved so we don't lose context.
     if cluster_result.n_embedded < N_MIN_EMBEDDED:
-        return 0, 0.0, prior_state
+        return 0, 0.0, LifecycleState(
+            smoothed_inputs=prior_state.smoothed_inputs,
+            pending_stage=prior_state.pending_stage,
+            pending_streak=prior_state.pending_streak,
+            cold_volume_streak=0,
+        )
+
+    # Cold-start volume gate. If we previously had no committed stage, require
+    # COLD_START_CONFIRM_RUNS consecutive runs above the volume floor before
+    # promoting to a real stage. Returns Stage 0 with the streak incremented.
+    if prev_stage == 0:
+        new_streak = prior_state.cold_volume_streak + 1
+        if new_streak < COLD_START_CONFIRM_RUNS:
+            return 0, 0.0, LifecycleState(
+                smoothed_inputs=prior_state.smoothed_inputs,
+                pending_stage=prior_state.pending_stage,
+                pending_streak=prior_state.pending_streak,
+                cold_volume_streak=new_streak,
+            )
+        # Streak has met threshold — fall through to normal classification,
+        # but zero the streak on the outgoing state since prev_stage will now
+        # be non-zero on subsequent runs.
+        prior_state = LifecycleState(
+            smoothed_inputs=prior_state.smoothed_inputs,
+            pending_stage=prior_state.pending_stage,
+            pending_streak=prior_state.pending_streak,
+            cold_volume_streak=0,
+        )
 
     # Step 1 — EMA smoothing.
     smoothed = ema_smooth(timeline, prior_state.smoothed_inputs)
@@ -271,7 +306,10 @@ def assign_stage(
     target_stage = target_overlay if target_overlay is not None else target_breadth
 
     # Step 5 — Hysteresis.  The overlay (5/6) and breadth band (1/2/3) are
-    # treated as a single ordered chain: 1 → 2 → 3 → 5 → 6 (4 reserved).
+    # treated as a single ordered chain: 1 → 2 → 3 → 5 → 6. Stage 4 has no
+    # deterministic target rule and is *skipped* by apply_hysteresis on
+    # commit so it never appears as either a target or a transient — see
+    # the Stage 4 section in apply_hysteresis() and Quant audit MEDIUM #8.
     interim_state = LifecycleState(
         smoothed_inputs=smoothed,
         pending_stage=prior_state.pending_stage,

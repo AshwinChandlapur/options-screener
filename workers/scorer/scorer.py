@@ -45,7 +45,13 @@ from datetime import datetime, timezone
 import numpy as np
 
 # stage_map per NARRATIVE_METHODOLOGY.md §5.1 — stages 2 and 3 are target window.
-_STAGE_MAP: dict[int, float] = {1: 10, 2: 18, 3: 20, 4: 10, 5: 5, 6: 2}
+# Stage 4 is intentionally absent: the detector now snaps over 4 in hysteresis
+# (apply_hysteresis skips it on commit) so 4 should never appear in a fresh
+# scoreboard. Any leftover stage==4 from a stale cached timeline doc will fall
+# through the `if stage in _STAGE_MAP` branch below → comp_c = 0, which is
+# the right graceful degradation: the next detector run will move the ticker
+# off Stage 4 within an hour. See Quant audit MEDIUM #8.
+_STAGE_MAP: dict[int, float] = {1: 10, 2: 18, 3: 20, 5: 5, 6: 2}
 # Invariant (§5.1): the peak of stage_map defines the denominator in Component
 # C so that a perfectly-staged, fully-confident narrative scores exactly C_max.
 # If this is ever broken (e.g. stage_map is rescaled), Component C silently
@@ -185,6 +191,14 @@ def compute_acs(doc: dict, weights: dict[str, float]) -> AcsResult:
     # segment cold-start vs. established cohorts independently.
     if stage == 0 and _s_br_raw is None and _s_Br_raw is None:
         flags.append("cold_start")
+
+    # Separate flag for the more-common case (Quant audit MEDIUM #11): a
+    # ticker with stage > 0 but no classifier conviction data yet. Component D
+    # is silently 0 for these, making them indistinguishable from genuinely
+    # weak-thesis names. The flag lets the UI mark them as "thesis data not
+    # yet computed" rather than "weak thesis."
+    if _s_br_raw is None and _s_Br_raw is None and stage != 0:
+        flags.append("no_thesis_data")
 
     acs = min(100.0, max(0.0, acs_raw * multiplier))
 

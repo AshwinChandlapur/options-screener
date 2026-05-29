@@ -60,14 +60,13 @@ def _required(name: str) -> str:
 #           on specific AI-layer, space, or macro plays.
 SUBREDDIT_TIERS: dict[str, list[str]] = {
     "tier1": [
-        # Broad investing / analysis
+        # Broad investing / analysis — reserved for DD-mandated, analyst-grade communities
+        # where the modal post is a full thesis. Anything that primarily traffics in
+        # setups, premium, or macro chatter belongs in tier 2 or tier 3, because
+        # breadth_score weights tier1_pct at 0.5 and an over-inclusive tier 1 auto-
+        # promotes any mega-cap mentioned in those subs to Stage 3 (Quant audit
+        # CRITICAL #1).
         "investing", "stocks", "SecurityAnalysis", "ValueInvesting", "Bogleheads",
-        # Options premium sellers — CSP/CC/wheel setups with explicit ticker + strike thesis
-        "thetagang",
-        # Systematic / quant traders — cite specific tickers and setups
-        "algotrading",
-        # Macro context that drives sector rotations
-        "Economics",
     ],
     "tier2": [
         # Retail momentum
@@ -93,6 +92,15 @@ SUBREDDIT_TIERS: dict[str, list[str]] = {
         "MachineLearning",
         # AI Applications layer — SaaS companies benefiting from AI integration
         "SaaS",
+        # Options premium sellers — CSP/CC/wheel setups dominated by AAPL/MSFT/NVDA.
+        # Demoted from tier 1 (Quant audit CRITICAL #1): not analyst-grade,
+        # and tier-1 weight was auto-promoting these mega-caps to Stage 3.
+        "thetagang",
+        # Systematic / quant traders — demoted from tier 1 for the same reason.
+        "algotrading",
+        # Macro context that drives sector rotations — demoted from tier 1 (chatter,
+        # not security-level DD).
+        "Economics",
     ],
 }
 

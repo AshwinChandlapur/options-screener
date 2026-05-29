@@ -92,6 +92,19 @@ def _cluster(
     )
 
 
+def _warm() -> LifecycleState:
+    """Prior state with the cold-volume gate already satisfied.
+
+    Most tests in TestAssignStage exercise stage-mapping / confidence
+    behaviour orthogonal to the Quant audit CRITICAL #2 cold-volume gate.
+    They previously implicitly relied on the cold-start branch firing on
+    the first observation; after the fix, that branch only fires once
+    cold_volume_streak >= COLD_START_CONFIRM_RUNS. Seeding the prior here
+    keeps those tests focused on the behaviour they actually exercise.
+    """
+    return LifecycleState(cold_volume_streak=2)
+
+
 class TestAssignStage:
     """Tests for ADR-0029 stable lifecycle stage assignment.
 
@@ -104,8 +117,14 @@ class TestAssignStage:
     """
 
     def test_below_n_min_embedded_returns_stage_zero_preserves_state(self) -> None:
-        """n_embedded below the floor → stage 0 (genuine insufficient data)."""
-        prior = LifecycleState(smoothed_inputs={"tier1_pct": 0.5}, pending_stage=2, pending_streak=1)
+        """n_embedded below the floor → stage 0; smoothed/pending preserved,
+        cold_volume_streak reset so the next ramp-up re-confirms volume."""
+        prior = LifecycleState(
+            smoothed_inputs={"tier1_pct": 0.5},
+            pending_stage=2,
+            pending_streak=1,
+            cold_volume_streak=1,
+        )
         stage, conf, new_state = assign_stage(
             {"tier1_pct": 0.30},
             _cluster(n_clusters=0, n_embedded=2),  # well below N_MIN_EMBEDDED=5
@@ -113,8 +132,14 @@ class TestAssignStage:
         )
         assert stage == 0
         assert conf == 0.0
-        # Prior state must carry over unchanged.
-        assert new_state is prior
+        # Context preserved: smoothed inputs and pending hysteresis state survive
+        # a brief volume dip so an established ticker doesn't lose its history.
+        assert new_state.smoothed_inputs == prior.smoothed_inputs
+        assert new_state.pending_stage == prior.pending_stage
+        assert new_state.pending_streak == prior.pending_streak
+        # Cold-volume streak resets so the next non-zero observation must
+        # re-confirm before promotion (Quant audit CRITICAL #2).
+        assert new_state.cold_volume_streak == 0
 
     def test_polysemic_ticker_still_classifies(self) -> None:
         """n_clusters == 0 but n_embedded >= floor → GOOGL fix: still assign a stage.
@@ -125,15 +150,22 @@ class TestAssignStage:
         similarity floor demotes its low-coherence clusters to noise.  The
         old gate sent it to stage 0; the new gate honours the underlying
         breadth metrics and classifies normally — at lower confidence.
+
+        Note: cold-start volume gate (Quant audit CRITICAL #2) requires
+        cold_volume_streak to have already accumulated, so we seed it on the
+        prior state to simulate a ticker that has been above the volume
+        floor for the required confirm runs.
         """
         timeline = {
             "tier1_pct": 0.30,
             "contributor_count_growth_7d": 0.50,
             "dd_post_ratio": 0.20,
         }
+        prior = LifecycleState(cold_volume_streak=2)
         stage, conf, _ = assign_stage(
             timeline,
             _cluster(dominant_fraction=0.0, n_clusters=0, n_embedded=15),
+            prior_state=prior,
         )
         # Cold start + high breadth → stage 3 committed immediately.
         assert stage == 3
@@ -141,10 +173,12 @@ class TestAssignStage:
         assert conf > 0.0
 
     def test_cold_start_accepts_target_immediately(self) -> None:
-        """prev_stage=0 → no hysteresis, target stage is committed at once."""
+        """prev_stage=0 → no hysteresis, target stage is committed at once —
+        once the volume gate has been satisfied (cold_volume_streak >= 2)."""
         timeline = {"tier1_pct": 0.05, "financial_term_density": 0.20,
                     "dd_post_ratio": 0.0, "contributor_count_growth_7d": 0.0}
-        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0))
+        prior = LifecycleState(cold_volume_streak=2)
+        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0), prior_state=prior)
         # Low tier1, low growth, low dd → breadth score < 0.15 → stage 1.
         assert stage == 1
 
@@ -155,8 +189,48 @@ class TestAssignStage:
             "contributor_count_growth_7d": 0.50,
             "dd_post_ratio": 0.30,
         }
-        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0))
+        prior = LifecycleState(cold_volume_streak=2)
+        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0), prior_state=prior)
         assert stage == 3
+
+    def test_cold_volume_gate_holds_stage_zero_on_first_high_run(self) -> None:
+        """prev_stage=0 + n_embedded above floor for the first time → still 0.
+
+        Regression for Quant audit CRITICAL #2: borderline-volume tickers
+        (4–6 signals / 72h) used to flip 0 → 3 → 0 every hour because the
+        Stage-0 early return bypassed hysteresis and the next run's
+        cold-start branch accepted the target immediately. After the fix,
+        a single high-volume observation only advances cold_volume_streak;
+        the stage stays 0 until the streak reaches COLD_START_CONFIRM_RUNS.
+        """
+        timeline = {"tier1_pct": 0.60, "contributor_count_growth_7d": 0.50,
+                    "dd_post_ratio": 0.30}
+        stage, conf, new_state = assign_stage(
+            timeline,
+            _cluster(dominant_fraction=1.0, n_embedded=10),
+            # prior_state=None → brand-new ticker, cold_volume_streak=0.
+            prev_stage=0,
+        )
+        assert stage == 0
+        assert conf == 0.0
+        assert new_state.cold_volume_streak == 1  # advanced, not committed yet.
+
+    def test_cold_volume_gate_commits_after_two_consecutive_runs(self) -> None:
+        """Two consecutive runs above the volume floor satisfy the gate and
+        the third (well, second) advances to the breadth-derived stage."""
+        timeline = {"tier1_pct": 0.60, "contributor_count_growth_7d": 0.50,
+                    "dd_post_ratio": 0.30}
+        # First run: streak goes 0 → 1, stage stays 0.
+        prior = LifecycleState(cold_volume_streak=1)
+        stage, _, new_state = assign_stage(
+            timeline,
+            _cluster(dominant_fraction=1.0, n_embedded=10),
+            prior_state=prior, prev_stage=0,
+        )
+        # Streak now satisfies the gate → cold-start commit fires → stage 3.
+        assert stage == 3
+        # Streak zeroed on the outgoing state because prev_stage will now be > 0.
+        assert new_state.cold_volume_streak == 0
 
     def test_held_stage_resets_pending(self) -> None:
         """Target == prev_stage → return prev_stage, clear pending counters."""
@@ -222,7 +296,7 @@ class TestAssignStage:
             "conviction_researched_share": 0.30,
             "gini_14d": 0.20,
         }
-        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0))
+        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0), prior_state=_warm())
         assert stage == 5
 
     def test_overlay_stage_6_saturation(self) -> None:
@@ -232,13 +306,13 @@ class TestAssignStage:
             "conviction_researched_share": 0.20,
             "gini_14d": 0.60,
         }
-        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0))
+        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0), prior_state=_warm())
         assert stage == 6
 
     def test_overlay_skipped_when_axis_data_absent(self) -> None:
         """No axis data → overlay returns None → stage falls back to breadth band."""
         timeline = {"tier1_pct": 0.05, "financial_term_density": 0.20, "gini_14d": 0.20}
-        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0))
+        stage, _, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0), prior_state=_warm())
         assert stage not in (5, 6)
 
     def test_smoothed_inputs_persisted_on_new_state(self) -> None:
@@ -260,8 +334,8 @@ class TestAssignStage:
         contribution.
         """
         timeline = {"tier1_pct": 0.05, "financial_term_density": 0.20}
-        _, conf_high, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0))
-        _, conf_mid, _ = assign_stage(timeline, _cluster(dominant_fraction=0.5))
+        _, conf_high, _ = assign_stage(timeline, _cluster(dominant_fraction=1.0), prior_state=_warm())
+        _, conf_mid, _ = assign_stage(timeline, _cluster(dominant_fraction=0.5), prior_state=_warm())
         assert conf_mid < conf_high
         assert conf_mid > 0.0
 
@@ -275,8 +349,8 @@ class TestAssignStage:
         the "never disappears" property while restoring discrimination.
         """
         timeline = {"tier1_pct": 0.05, "financial_term_density": 0.20}
-        _, conf_zero, _ = assign_stage(timeline, _cluster(dominant_fraction=0.0))
-        _, conf_partial, _ = assign_stage(timeline, _cluster(dominant_fraction=0.3))
+        _, conf_zero, _ = assign_stage(timeline, _cluster(dominant_fraction=0.0), prior_state=_warm())
+        _, conf_partial, _ = assign_stage(timeline, _cluster(dominant_fraction=0.3), prior_state=_warm())
         assert conf_zero > 0.0
         assert conf_zero < conf_partial
 
@@ -290,13 +364,13 @@ class TestAssignStage:
         """
         timeline = {"tier1_pct": 0.05, "financial_term_density": 0.20}
         _, conf_thin, _ = assign_stage(
-            timeline, _cluster(dominant_fraction=1.0, n_embedded=5),
+            timeline, _cluster(dominant_fraction=1.0, n_embedded=5), prior_state=_warm(),
         )
         _, conf_full, _ = assign_stage(
-            timeline, _cluster(dominant_fraction=1.0, n_embedded=10),
+            timeline, _cluster(dominant_fraction=1.0, n_embedded=10), prior_state=_warm(),
         )
         _, conf_large, _ = assign_stage(
-            timeline, _cluster(dominant_fraction=1.0, n_embedded=30),
+            timeline, _cluster(dominant_fraction=1.0, n_embedded=30), prior_state=_warm(),
         )
         assert conf_thin < conf_full < conf_large
 
@@ -305,10 +379,10 @@ class TestAssignStage:
         value as n_embedded grows large."""
         timeline = {"tier1_pct": 0.05, "financial_term_density": 0.20}
         _, conf_100, _ = assign_stage(
-            timeline, _cluster(dominant_fraction=1.0, n_embedded=100),
+            timeline, _cluster(dominant_fraction=1.0, n_embedded=100), prior_state=_warm(),
         )
         _, conf_1000, _ = assign_stage(
-            timeline, _cluster(dominant_fraction=1.0, n_embedded=1000),
+            timeline, _cluster(dominant_fraction=1.0, n_embedded=1000), prior_state=_warm(),
         )
         # Both should be very close to the asymptote (1 - e^{-10} ≈ 0.99995
         # at n=100), and 1000 must be at least as high as 100.

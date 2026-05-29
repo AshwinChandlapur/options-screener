@@ -81,14 +81,11 @@ _DD_TERMS: frozenset[str] = frozenset({
 # get dropped from both numerator and denominator of tier1_pct, which
 # directly miscomputes stage assignment.
 _TIER1_SUBS: frozenset[str] = frozenset({
-    # Broad investing / analysis
+    # Broad investing / analysis — reserved for DD-mandated, analyst-grade communities.
+    # See Quant audit CRITICAL #1: an over-inclusive tier 1 (thetagang/algotrading/
+    # Economics) auto-promotes mega-caps to Stage 3 via breadth_score's 0.5 weight
+    # on tier1_pct. Those three subs now live in tier 3.
     "investing", "stocks", "securityanalysis", "valueinvesting", "bogleheads",
-    # Options premium sellers — CSP/CC/wheel setups with explicit ticker + strike thesis
-    "thetagang",
-    # Systematic / quant traders — cite specific tickers and setups
-    "algotrading",
-    # Macro context that drives sector rotations
-    "economics",
 })
 _TIER2_SUBS: frozenset[str] = frozenset({
     # Retail momentum
@@ -114,6 +111,8 @@ _TIER3_SUBS: frozenset[str] = frozenset({
     "machinelearning",
     # AI Applications layer — SaaS companies benefiting from AI integration
     "saas",
+    # Options/quant/macro chatter — demoted from tier 1 (Quant audit CRITICAL #1).
+    "thetagang", "algotrading", "economics",
 })
 
 

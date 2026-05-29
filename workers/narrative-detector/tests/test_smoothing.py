@@ -189,6 +189,31 @@ class TestHysteresis:
         committed, state = apply_hysteresis(target=3, prev_stage=1, state=state, confirm_runs=3)
         assert committed == 2
 
+    def test_upward_commit_snaps_over_stage_four(self) -> None:
+        """A +1 step from prev=3 toward target=5 must commit 5, not 4.
+
+        Stage 4 is intentionally not in the deterministic stage chain.
+        Letting it appear as a transient produced a ~2h artefact where the
+        scorer halved Component C and the UI mislabelled it as a stable
+        'Maturing' state. Regression test for Quant audit MEDIUM #8.
+        """
+        prior = LifecycleState(pending_stage=5, pending_streak=1)
+        committed, new_state = apply_hysteresis(target=5, prev_stage=3, state=prior)
+        assert committed == 5
+        assert new_state.pending_stage == 0
+
+    def test_upward_commit_to_six_also_snaps_over_four(self) -> None:
+        """target=6 from prev=3 also snaps the +1 step to 5 (then 6 next run)."""
+        prior = LifecycleState(pending_stage=6, pending_streak=1)
+        committed, _ = apply_hysteresis(target=6, prev_stage=3, state=prior)
+        assert committed == 5
+
+    def test_downward_commit_snaps_over_stage_four(self) -> None:
+        """A -1 step from prev=5 toward target=3 (or lower) must commit 3, not 4."""
+        prior = LifecycleState(pending_stage=3, pending_streak=1)
+        committed, _ = apply_hysteresis(target=3, prev_stage=5, state=prior)
+        assert committed == 3
+
 
 # ---------------------------------------------------------------------------
 # compute_confidence
