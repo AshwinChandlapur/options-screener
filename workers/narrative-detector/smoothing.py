@@ -257,26 +257,50 @@ def compute_confidence(
     committed_stage: int,
     dominant_fraction: float,
 ) -> float:
-    """Confidence = dominant_fraction × certainty × band-center proximity.
+    """Confidence = dominant_fraction × certainty × band-proximity.
 
     * dominant_fraction comes from the cluster() result.
     * certainty drops to 0.5 when committed stage trails target (mid-transition).
-    * proximity peaks at the band centre, falls toward 0 at boundaries —
-      values right on a threshold get lower confidence to signal uncertainty.
+    * proximity discounts scores sitting on a true stage boundary so that
+      near-flip cases come out less confident than scores well inside a band.
+
+    Proximity geometry per stage (FIX: previous symmetric-distance-to-center
+    treated stages 1 and 3 as if they had two boundaries, which silently
+    zeroed confidence for the most-confidently-niche tickers (score → 0)
+    and for the strongest mainstream stories (score >> 0.5). Stage 5/6
+    overlay already handles the upper end of stage 3, so penalising high
+    breadth here was double jeopardy):
+
+        Stage 1 (niche):     [0, STAGE1_MAX)        — only upper edge is real.
+                             Ramp DOWN from 1.0 at score=0 to 0.0 at the
+                             STAGE1→2 boundary (over `_BAND_RAMP` width).
+
+        Stage 2 (early):     [STAGE1_MAX, STAGE2_MAX) — both edges real.
+                             Symmetric tent: peak 1.0 at band centre, 0.0
+                             at either threshold.
+
+        Stage 3 (expanding): [STAGE2_MAX, ∞)        — only lower edge is real.
+                             Ramp UP from 0.0 at the STAGE2→3 boundary to
+                             1.0 once score is `_BAND_RAMP` above it; stays
+                             at 1.0 thereafter (saturation handled by overlay).
     """
     certainty = 1.0 if committed_stage == target_stage else 0.5
 
+    # Width over which proximity climbs from 0 → 1 next to an open-ended
+    # stage edge. Matches the historical "half_width" for stage 3 so the
+    # transition region (score in [0.35, 0.50]) is unchanged.
+    _BAND_RAMP = 0.15
+
     if score < STAGE1_MAX:
-        center = STAGE1_MAX / 2.0
-        half_width = STAGE1_MAX / 2.0
+        # One-sided band with the only boundary on the right.
+        proximity = max(0.0, min(1.0, (STAGE1_MAX - score) / max(_BAND_RAMP, 1e-6)))
     elif score < STAGE2_MAX:
         center = (STAGE1_MAX + STAGE2_MAX) / 2.0
         half_width = (STAGE2_MAX - STAGE1_MAX) / 2.0
+        proximity = max(0.0, 1.0 - abs(score - center) / max(half_width, 1e-6))
     else:
-        # Stage 3 band has no upper bound; use 0.15 half-width above STAGE2_MAX.
-        center = STAGE2_MAX + 0.15
-        half_width = 0.15
+        # One-sided band with the only boundary on the left.
+        proximity = max(0.0, min(1.0, (score - STAGE2_MAX) / max(_BAND_RAMP, 1e-6)))
 
-    proximity = max(0.0, 1.0 - abs(score - center) / max(half_width, 1e-6))
     raw = dominant_fraction * certainty * proximity
     return round(max(0.0, min(1.0, raw)), 4)

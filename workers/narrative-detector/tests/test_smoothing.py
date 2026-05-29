@@ -212,6 +212,46 @@ class TestConfidence:
         # Score sits exactly on the lower boundary of stage 2 → proximity = 0.
         assert c == pytest.approx(0.0, abs=1e-3)
 
+    def test_stage3_high_breadth_does_not_collapse_to_zero(self) -> None:
+        """Regression: AMZN/HBM-class tickers (high tier1 + growth) had
+        breadth_score ≈ 0.65–0.78, which under the symmetric-proximity
+        model fell outside a tiny [0.35, 0.65] window around an arbitrary
+        "center" of 0.50 and zeroed confidence → Component C = 0 → empty
+        Emerging tab. Stage 3 is upper-unbounded; confidence must NOT
+        decrease as breadth grows."""
+        c_mid = compute_confidence(score=0.50, target_stage=3, committed_stage=3, dominant_fraction=1.0)
+        c_high = compute_confidence(score=0.80, target_stage=3, committed_stage=3, dominant_fraction=1.0)
+        assert c_high >= c_mid > 0.0
+        assert c_high == pytest.approx(1.0)
+
+    def test_stage3_just_above_boundary_ramps_up(self) -> None:
+        """Right on the 2→3 boundary proximity = 0; one ramp width above
+        (STAGE2_MAX + 0.15) it saturates at 1.0."""
+        c_edge = compute_confidence(score=STAGE2_MAX, target_stage=3, committed_stage=3, dominant_fraction=1.0)
+        c_saturated = compute_confidence(score=STAGE2_MAX + 0.15, target_stage=3, committed_stage=3, dominant_fraction=1.0)
+        assert c_edge == pytest.approx(0.0, abs=1e-3)
+        assert c_saturated == pytest.approx(1.0)
+
+    def test_stage1_most_niche_does_not_collapse_to_zero(self) -> None:
+        """Mirror of the stage-3 fix: a score of 0 means "no mainstream
+        attention at all" — that is the most-confidently-niche state and
+        must yield max proximity, not zero."""
+        c_zero = compute_confidence(score=0.0, target_stage=1, committed_stage=1, dominant_fraction=1.0)
+        c_edge = compute_confidence(score=STAGE1_MAX, target_stage=1, committed_stage=1, dominant_fraction=1.0)
+        assert c_zero == pytest.approx(1.0)
+        # Right on the 1→2 boundary should drop toward 0.
+        assert c_edge == pytest.approx(0.0, abs=1e-3)
+
+    def test_stage3_monotonic_in_breadth(self) -> None:
+        """Property test: in stage 3, confidence is non-decreasing in score."""
+        scores = [STAGE2_MAX + 0.01 * i for i in range(0, 50)]
+        confs = [
+            compute_confidence(s, target_stage=3, committed_stage=3, dominant_fraction=1.0)
+            for s in scores
+        ]
+        for prev, nxt in zip(confs, confs[1:]):
+            assert nxt + 1e-6 >= prev, f"non-monotonic: {prev} → {nxt}"
+
 
 # ---------------------------------------------------------------------------
 # LifecycleState round-trip
